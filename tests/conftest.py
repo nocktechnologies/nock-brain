@@ -29,3 +29,8 @@ def budget_recall():
 @pytest.fixture(scope="session")
 def extract_facts():
     return _load("extract-facts")
+
+
+@pytest.fixture(scope="session")
+def synthesize():
+    return _load("synthesize")

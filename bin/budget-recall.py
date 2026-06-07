@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
+DEFAULT_INSIGHTS = Path.home() / ".nock-brain" / "insights.json"
 CHARS_PER_TOKEN = 4
 DEFAULT_BUDGET = 1000
 MAX_BUDGET = 1500
@@ -51,16 +52,25 @@ def format_fact(f: dict) -> str:
     return f"{header}\n{content}"
 
 
+def _load(path: Path) -> list[dict]:
+    if path and path.exists():
+        data = json.loads(path.read_text())
+        if data:
+            return data
+    return []
+
+
 def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
-                  include_superseded: bool = False) -> str:
-    if not facts_file.exists():
-        return ""
+                  include_superseded: bool = False, insights_file: Path | None = None) -> str:
+    fact_results = search(_load(facts_file), query, include_superseded) if facts_file else []
+    insight_results = search(_load(insights_file), query, include_superseded) if insights_file else []
 
-    facts = json.loads(facts_file.read_text())
-    if not facts:
-        return ""
+    # Consolidated insights lead; drop the raw facts an insight already covers so
+    # recall shows the synthesis, not the synthesis plus its own sources.
+    covered = {sid for ins in insight_results for sid in ins.get("source_ids", [])}
+    fact_results = [f for f in fact_results if f.get("id") not in covered]
 
-    results = search(facts, query, include_superseded)
+    results = insight_results + fact_results
     if not results:
         return ""
 
@@ -80,7 +90,7 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
         tokens_used += fact_tokens
         included += 1
 
-    output_lines.append(f"[{included} facts, ~{tokens_used} tokens]")
+    output_lines.append(f"[{included} item(s), ~{tokens_used} tokens]")
     return "\n\n".join(output_lines)
 
 
@@ -89,12 +99,15 @@ def main():
     parser.add_argument("query", nargs="+")
     parser.add_argument("--budget", type=int, default=DEFAULT_BUDGET)
     parser.add_argument("--facts", type=Path, default=DEFAULT_FACTS)
+    parser.add_argument("--insights", type=Path, default=DEFAULT_INSIGHTS,
+                        help="Synthesized-insight store (surfaced first); optional")
     parser.add_argument("--include-superseded", action="store_true")
     args = parser.parse_args()
 
     budget = min(args.budget, MAX_BUDGET)
     query_str = " ".join(args.query)
-    result = budget_recall(query_str, args.facts, budget, args.include_superseded)
+    result = budget_recall(query_str, args.facts, budget, args.include_superseded,
+                           insights_file=args.insights)
 
     if result:
         print(result)
