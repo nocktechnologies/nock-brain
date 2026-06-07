@@ -11,7 +11,10 @@ Usage:
 """
 import argparse
 import json
+import math
+import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
@@ -21,21 +24,58 @@ DEFAULT_BUDGET = 1000
 MAX_BUDGET = 1500
 MIN_CONFIDENCE = 0.7
 
+# BM25 parameters (Okapi defaults). k1 controls term-frequency saturation; b
+# controls how strongly document length is normalized.
+BM25_K1 = 1.5
+BM25_B = 0.75
+
 
 def estimate_tokens(text: str) -> int:
     return len(text) // CHARS_PER_TOKEN
 
 
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
 def search(facts: list[dict], query: str, include_superseded: bool = False) -> list[dict]:
-    results = []
+    """Rank facts against the query with Okapi BM25 — proper token matching with
+    IDF (rarer query terms count for more) and document-length normalization.
+    This replaces a naive substring-overlap count, which both over-matched
+    (e.g. "cat" inside "category") and treated every term as equally important."""
     if not include_superseded:
         facts = [f for f in facts if f.get("status", "current") != "superseded"]
     facts = [f for f in facts if f.get("confidence", 0) >= MIN_CONFIDENCE]
+    if not facts:
+        return []
 
-    terms = query.lower().split()
-    for f in facts:
-        content_lower = f["content"].lower()
-        score = sum(1 for t in terms if t in content_lower)
+    query_terms = set(_tokenize(query))
+    if not query_terms:
+        return []
+
+    # Corpus statistics for BM25, computed over the candidate set.
+    docs = [_tokenize(f.get("content", "")) for f in facts]
+    n_docs = len(docs)
+    avgdl = sum(len(d) for d in docs) / n_docs if n_docs else 0.0
+    doc_freq: Counter = Counter()
+    for d in docs:
+        for term in set(d):
+            doc_freq[term] += 1
+
+    results = []
+    for f, doc in zip(facts, docs):
+        tf = Counter(doc)
+        dl = len(doc)
+        score = 0.0
+        for term in query_terms:
+            df = doc_freq.get(term, 0)
+            if df == 0:
+                continue
+            idf = math.log(1 + (n_docs - df + 0.5) / (df + 0.5))
+            freq = tf[term]
+            denom = freq + BM25_K1 * (1 - BM25_B + BM25_B * (dl / avgdl if avgdl else 0))
+            if denom > 0:
+                score += idf * (freq * (BM25_K1 + 1)) / denom
         if score > 0:
             results.append((score, f))
 
