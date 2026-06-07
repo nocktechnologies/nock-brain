@@ -26,6 +26,46 @@ def test_search_ranks_by_term_overlap(budget_recall):
     assert all("weather" not in r["content"] for r in results)
 
 
+def test_bm25_weights_rarer_terms_higher(budget_recall):
+    # "pricing" is common across the corpus; "seatbelt" is rare. A doc matching
+    # the rare term should outrank docs matching only the common one.
+    facts = [
+        fact("a seatbelt decision we made once"),
+        fact("pricing note one"),
+        fact("pricing note two"),
+        fact("pricing note three"),
+    ]
+    results = budget_recall.search(facts, "pricing seatbelt")
+    assert results, "expected matches"
+    assert "seatbelt" in results[0]["content"], (
+        f"rare-term doc should rank first under BM25, got: {results[0]['content']!r}"
+    )
+
+
+def test_bm25_normalizes_for_document_length(budget_recall):
+    # Same term frequency (1x "kubernetes"), but the longer doc is penalized.
+    facts = [
+        fact("kubernetes"),
+        fact("kubernetes " + " ".join(f"filler{i}" for i in range(40))),
+    ]
+    results = budget_recall.search(facts, "kubernetes")
+    assert results[0]["content"] == "kubernetes", (
+        f"shorter doc should rank first under length normalization, got: {results[0]['content']!r}"
+    )
+
+
+def test_bm25_matches_tokens_not_substrings(budget_recall):
+    # "cat" must NOT match the substring inside "category" — the old naive search
+    # over-matched; BM25 tokenizes.
+    facts = [
+        fact("category management and taxonomy notes"),
+        fact("the cat sat on the mat"),
+    ]
+    results = budget_recall.search(facts, "cat")
+    assert len(results) == 1, f"expected only the token match, got {len(results)}: {results}"
+    assert "cat sat" in results[0]["content"]
+
+
 def test_search_excludes_low_confidence(budget_recall):
     facts = [fact("pricing locked", confidence=0.5)]  # below MIN_CONFIDENCE (0.7)
     assert budget_recall.search(facts, "pricing") == []

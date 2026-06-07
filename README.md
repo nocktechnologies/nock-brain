@@ -11,7 +11,7 @@ Most Claude Code sessions start from zero. nock-brain fixes that.
 1. **Extract** — Parses session transcripts into structured facts: decisions, directives, corrections, architecture changes, merges, bug fixes.
 2. **Synthesize** — Periodically reviews the fact store, clusters recurring same-kind facts, and writes consolidated *insights* ("you've corrected this 3 times") to a higher tier. This is the consolidation layer that keeps the store from becoming a giant unreadable log. Heuristic and dependency-free by default; structured so an LLM-backed synthesizer can drop in.
 3. **Classify** — Determines if a prompt needs past-session context. "What did we decide about X?" triggers recall. "merge PR 223" doesn't.
-4. **Recall** — Retrieves the most relevant items within a configurable token budget — **synthesized insights first**, then raw facts — so memory enhances without overwhelming the context window.
+4. **Recall** — Ranks with **BM25** (IDF-weighted token matching with length normalization) and retrieves the most relevant items within a configurable token budget — **synthesized insights first**, then raw facts — so memory enhances without overwhelming the context window.
 5. **Inject** — A Claude Code hook that chains the steps transparently. Relevant context appears as system messages when needed.
 
 ## Install
