@@ -1,0 +1,59 @@
+"""Tests for budget-aware recall — ranking, the confidence/superseded filters,
+and the token-budget truncation that keeps recall from flooding the context."""
+import json
+
+
+def fact(content, confidence=0.9, status="current", kind="decision", source_date="2026-06-01"):
+    return {
+        "content": content,
+        "confidence": confidence,
+        "status": status,
+        "kind": kind,
+        "source_date": source_date,
+    }
+
+
+def test_search_ranks_by_term_overlap(budget_recall):
+    facts = [
+        fact("pricing was set to 49 dollars for the command tier"),
+        fact("the pricing plan and pricing tiers were locked"),
+        fact("an unrelated note about the weather"),
+    ]
+    results = budget_recall.search(facts, "pricing plan")
+    assert results, "expected matches"
+    # The fact containing both 'pricing' and 'plan' outranks the single-term one.
+    assert results[0]["content"].startswith("the pricing plan")
+    assert all("weather" not in r["content"] for r in results)
+
+
+def test_search_excludes_low_confidence(budget_recall):
+    facts = [fact("pricing locked", confidence=0.5)]  # below MIN_CONFIDENCE (0.7)
+    assert budget_recall.search(facts, "pricing") == []
+
+
+def test_search_superseded_filtered_by_default(budget_recall):
+    facts = [fact("pricing locked", status="superseded")]
+    assert budget_recall.search(facts, "pricing") == []
+    assert len(budget_recall.search(facts, "pricing", include_superseded=True)) == 1
+
+
+def test_estimate_tokens(budget_recall):
+    assert budget_recall.estimate_tokens("a" * 40) == 10  # 4 chars/token
+
+
+def test_budget_recall_truncates_to_budget(budget_recall, tmp_path):
+    facts = [fact("pricing decision number with extra words to add length " * 3) for _ in range(20)]
+    fp = tmp_path / "facts.json"
+    fp.write_text(json.dumps(facts))
+    out = budget_recall.budget_recall("pricing", fp, budget=80)
+    assert "truncated by budget" in out
+
+
+def test_budget_recall_empty_on_no_match(budget_recall, tmp_path):
+    fp = tmp_path / "facts.json"
+    fp.write_text(json.dumps([fact("pricing locked")]))
+    assert budget_recall.budget_recall("nonexistentterm", fp) == ""
+
+
+def test_budget_recall_missing_file_is_empty(budget_recall, tmp_path):
+    assert budget_recall.budget_recall("anything", tmp_path / "nope.json") == ""
