@@ -13,6 +13,10 @@ RECALL_CASES = [
     ("status of the demo", True),
     ("last time we deployed what broke", True),
     ("why did we choose Seatbelt over LD_PRELOAD", True),
+    # User-context queries (previously a documented gap, now matched).
+    ("what does the founder want for the launch", True),
+    ("what did kevin want us to prioritize", True),
+    ("what was their direction on pricing", True),
 ]
 
 SKIP_CASES = [
@@ -54,12 +58,16 @@ def test_embedded_self_test_still_passes(classifier):
     assert classifier.run_tests() is True
 
 
-@pytest.mark.xfail(
-    reason="Known gap: the regex USER_PATTERNS require specific verb forms "
-    "(e.g. 'wants', 'said'), so natural user-context queries like this are missed. "
-    "Tracked for the functional-improvement phase (broaden user-context matching).",
-    strict=True,
-)
-def test_user_context_natural_phrasing_gap(classifier):
-    recall, _reason, _cats = classifier.classify("what does the founder want for the launch")
+def test_user_context_natural_phrasing(classifier):
+    # Previously a documented gap (the regex required specific verb forms);
+    # now natural user-context questions are matched.
+    recall, reason, _cats = classifier.classify("what does the founder want for the launch")
     assert recall is True
+    assert "user_context" in reason
+
+
+def test_broadened_user_context_does_not_overfire_on_operational(classifier):
+    # Broadening user-context matching must NOT start firing on operational prompts.
+    for prompt in ("merge PR 5", "dispatch the agent", "write a function", "run the tests"):
+        recall, _reason, _ = classifier.classify(prompt)
+        assert recall is False, f"{prompt!r} should not trigger recall"
