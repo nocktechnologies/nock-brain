@@ -9,9 +9,10 @@ Built by [Nock Technologies](https://nocktechnologies.com) from patterns running
 Most Claude Code sessions start from zero. nock-brain fixes that.
 
 1. **Extract** — Parses session transcripts into structured facts: decisions, directives, corrections, architecture changes, merges, bug fixes.
-2. **Classify** — Determines if a prompt needs past-session context. "What did we decide about X?" triggers recall. "merge PR 223" doesn't.
-3. **Recall** — Retrieves the most relevant facts within a configurable token budget. Memory enhances without overwhelming the context window.
-4. **Inject** — A Claude Code hook that chains all three steps transparently. Relevant facts appear as system messages when needed.
+2. **Synthesize** — Periodically reviews the fact store, clusters recurring same-kind facts, and writes consolidated *insights* ("you've corrected this 3 times") to a higher tier. This is the consolidation layer that keeps the store from becoming a giant unreadable log. Heuristic and dependency-free by default; structured so an LLM-backed synthesizer can drop in.
+3. **Classify** — Determines if a prompt needs past-session context. "What did we decide about X?" triggers recall. "merge PR 223" doesn't.
+4. **Recall** — Retrieves the most relevant items within a configurable token budget — **synthesized insights first**, then raw facts — so memory enhances without overwhelming the context window.
+5. **Inject** — A Claude Code hook that chains the steps transparently. Relevant context appears as system messages when needed.
 
 ## Install
 
@@ -130,8 +131,9 @@ Example:
 nock-brain/
   bin/
     extract-facts.py      # Parse transcripts into structured facts
+    synthesize.py          # Consolidate recurring facts into insights
     query-facts.py         # Search and filter facts
-    budget-recall.py       # Token-budgeted retrieval
+    budget-recall.py       # Token-budgeted retrieval (insights first)
     recall-classifier.py   # Classify prompts for recall need
     supersede-fact.py      # Mark outdated facts
   hooks/
