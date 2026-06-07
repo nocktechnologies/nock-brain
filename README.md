@@ -136,11 +136,24 @@ nock-brain/
     supersede-fact.py      # Mark outdated facts
   hooks/
     memory-inject.sh       # Claude Code auto-injection hook
+  tests/                   # pytest suite for the extraction + recall pipeline
   install.sh               # One-command setup
   SKILL.md                 # Claude Code skill reference
   README.md
   LICENSE
 ```
+
+## Development
+
+The bin/ scripts are dependency-free (Python 3.11+ stdlib only). Run the tests:
+
+```bash
+pip install pytest
+pytest -q
+python3 bin/recall-classifier.py --test   # classifier smoke test
+```
+
+CI runs the suite on every push and pull request (`.github/workflows/ci.yml`).
 
 ## Configuration
 
