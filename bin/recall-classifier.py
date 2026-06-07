@@ -32,8 +32,12 @@ ENTITY_PATTERNS = [
 ]
 
 USER_PATTERNS = [
-    r"(?:user|owner|founder|boss)\b.{0,20}\b(?:said|asked|told|wants|directed|mentioned|brought up)\b",
-    r"\b(?:what does (?:the user|he|she)|(?:his|her|their) (?:take|read|direction|preference))\b",
+    r"(?:user|owner|founder|boss|kevin)\b.{0,20}\b(?:said|asked|told|wants?|needs?|prefers?|thinks?|expects?|directed|mentioned|brought up|decided)\b",
+    r"\b(?:his|her|their) (?:take|read|direction|preference|call|view)\b",
+    # Question-form user-context query, e.g. "what does the founder want for X".
+    # The subject alone is the signal; no specific verb is required, so natural
+    # phrasing isn't missed (the gap the regex previously had).
+    r"\bwhat (?:does|do|did) (?:the )?(?:user|owner|founder|boss|kevin|he|she|they)\b",
 ]
 
 THREAD_PATTERNS = [
