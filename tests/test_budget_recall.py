@@ -57,3 +57,39 @@ def test_budget_recall_empty_on_no_match(budget_recall, tmp_path):
 
 def test_budget_recall_missing_file_is_empty(budget_recall, tmp_path):
     assert budget_recall.budget_recall("anything", tmp_path / "nope.json") == ""
+
+
+def test_insights_surface_first_and_dedup_their_sources(budget_recall, tmp_path):
+    f1 = fact("pricing tier correction one")
+    f2 = fact("pricing tier correction two")
+    f1["id"], f2["id"] = "f1", "f2"
+    insight = {
+        "id": "ins1",
+        "kind": "insight",
+        "content": "Recurring correction (seen 2x): pricing tier",
+        "confidence": 0.9,
+        "status": "current",
+        "source_date": "2026-06-05",
+        "source_ids": ["f1", "f2"],
+    }
+    ff = tmp_path / "facts.json"
+    ff.write_text(json.dumps([f1, f2]))
+    inf = tmp_path / "insights.json"
+    inf.write_text(json.dumps([insight]))
+
+    out = budget_recall.budget_recall("pricing", ff, budget=1000, insights_file=inf)
+    assert "Recurring correction" in out  # the synthesized insight is surfaced
+    # its source facts are deduped out (we show the synthesis, not its raw sources)
+    assert "correction one" not in out
+    assert "correction two" not in out
+
+
+def test_recall_works_with_insights_but_no_facts(budget_recall, tmp_path):
+    insight = {
+        "id": "ins1", "kind": "insight", "content": "Recurring decision: use Postgres",
+        "confidence": 0.9, "status": "current", "source_date": "2026-06-05", "source_ids": [],
+    }
+    inf = tmp_path / "insights.json"
+    inf.write_text(json.dumps([insight]))
+    out = budget_recall.budget_recall("postgres", tmp_path / "nofacts.json", insights_file=inf)
+    assert "Recurring decision" in out
