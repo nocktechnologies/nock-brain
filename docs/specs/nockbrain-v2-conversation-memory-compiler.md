@@ -57,7 +57,7 @@ python3 bin/refine-sessions.py --events ~/.nock-brain/events.jsonl --facts ~/.no
 python3 bin/review-promotions.py --facts ~/.nock-brain/facts.json --output ~/.nock-brain/review
 python3 bin/export-obsidian.py --facts ~/.nock-brain/facts.json --sessions ~/.nock-brain/sessions --review ~/.nock-brain/review --vault ~/.nock-brain/vault
 python3 bin/export-graph.py --facts ~/.nock-brain/facts.json --output ~/.nock-brain/graph.json
-python3 bin/nockbrain-health.py --events ~/.nock-brain/events.jsonl --facts ~/.nock-brain/facts.json --notes-dir ~/.nock-brain/sessions
+python3 bin/nockbrain-health.py --events ~/.nock-brain/events.jsonl --facts ~/.nock-brain/facts.json --notes-dir ~/.nock-brain/sessions --env-file /path/to/.env --scan-root ~/.nock-brain
 ```
 
 Future proposed v2 commands:
@@ -195,6 +195,7 @@ These fences solve different problems and all three are required. Path denial pr
 The extraction path must reject or redact:
 
 - API keys, bot tokens, bearer tokens, session cookies, private keys, and webhook secrets.
+- Values in `KEY=value` env dumps when the key ends in `_API_KEY`, `_TOKEN`, `_SECRET`, or `_PASSWORD`, regardless of token shape.
 - Telegram bot tokens and chat credentials.
 - `.env` contents unless explicitly transformed into non-secret configuration facts.
 - File contents from denied paths.
@@ -227,6 +228,10 @@ nockcc_private_*
 Tool/endpoint denial applies to `tool_use.input`, API payloads, MCP arguments, curl bodies, and other structured action payloads. Denied payload content must be dropped or reduced to aggregate counts at ingest. This matters because the v2 parser intentionally treats tool inputs as first-class evidence; without tool-level denial, private diary or register content can leak through faithfully extracted tool calls even when no denied file path is involved.
 
 When a `tool_use` is denied, the paired `tool_result` identified by `tool_use_id` must also be denied, even if that result arrives on a later JSONL line. Tool results also receive defense-in-depth path and endpoint denial scans before persistence. Health output reports paired-result denials separately.
+
+Health checks may additionally receive local `--env-file` and `--scan-root` paths. This live-value scan compares sensitive `.env` values against derived artifacts and reports only key names plus file/line locations, never the values themselves.
+
+Refinement caps oversized fact content at 1,500 characters and preserves `session_anchor` for drill-back. This keeps raw tool output blobs from being promoted wholesale into facts, review queues, Obsidian vaults, or graph exports.
 
 Secret scrubbing covers common bare token families seen in tool output, not only `key=value` shapes: GitHub `ghp_`/`gho_`/`ghs_`/`github_pat_`, OpenAI/Anthropic `sk-`/`sk-ant-`, AWS `AKIA`, and Slack `xoxb-`/`xoxp-` style tokens.
 

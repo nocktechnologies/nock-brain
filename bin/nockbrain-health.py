@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 REQUIRED_FACT_FIELDS = {"id", "kind", "status", "confidence", "content", "source_date", "evidence"}
+SENSITIVE_ENV_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
+SENSITIVE_ENV_NAMES = {"API_KEY", "TOKEN", "SECRET", "PASSWORD"}
 
 
 def load_json(path: Path | None, default: Any) -> Any:
@@ -45,16 +47,77 @@ def note_count(notes_dir: Path | None) -> int:
     return len(list(notes_dir.glob("*.md")))
 
 
+def is_sensitive_env_key(key: str) -> bool:
+    normalized = key.strip().upper()
+    return normalized in SENSITIVE_ENV_NAMES or normalized.endswith(SENSITIVE_ENV_SUFFIXES)
+
+
+def clean_env_value(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+    return value
+
+
+def load_env_secret_values(env_paths: list[Path] | None) -> dict[str, str]:
+    secrets: dict[str, str] = {}
+    for env_path in env_paths or []:
+        if not env_path.exists():
+            continue
+        with env_path.open(encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, value = stripped.split("=", 1)
+                key = key.strip()
+                value = clean_env_value(value)
+                if is_sensitive_env_key(key) and len(value) >= 8:
+                    secrets[key] = value
+    return secrets
+
+
+def iter_scan_files(scan_roots: list[Path] | None) -> list[Path]:
+    files: list[Path] = []
+    for root in scan_roots or []:
+        if root.is_file():
+            files.append(root)
+        elif root.is_dir():
+            files.extend(path for path in sorted(root.rglob("*")) if path.is_file())
+    return files
+
+
+def scan_live_secret_values(env_paths: list[Path] | None, scan_roots: list[Path] | None) -> list[dict[str, Any]]:
+    secrets = load_env_secret_values(env_paths)
+    if not secrets:
+        return []
+
+    findings: list[dict[str, Any]] = []
+    for path in iter_scan_files(scan_roots):
+        try:
+            with path.open(encoding="utf-8", errors="ignore") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    for key, value in secrets.items():
+                        if value in line:
+                            findings.append({"path": str(path), "line": line_number, "key": key})
+        except OSError:
+            continue
+    return findings
+
+
 def build_report(
     events_path: Path | None = None,
     facts_path: Path | None = None,
     notes_dir: Path | None = None,
     stats_path: Path | None = None,
+    env_paths: list[Path] | None = None,
+    scan_roots: list[Path] | None = None,
 ) -> dict[str, Any]:
     events, malformed_event_lines = load_events(events_path)
     facts = load_json(facts_path, [])
     stats = load_json(stats_path, {}) if stats_path else {}
     bad_facts = malformed_facts(facts)
+    live_secret_locations = scan_live_secret_values(env_paths, scan_roots)
 
     scrubbed_events = [event for event in events if event.get("privacy", {}).get("scrubbed")]
     excluded_events = [event for event in events if event.get("privacy", {}).get("excluded")]
@@ -86,6 +149,8 @@ def build_report(
             "denied_result_paths": int(stats.get("denied_result_paths", 0)),
             "denied_result_endpoints": int(stats.get("denied_result_endpoints", 0)),
             "secrets_redacted": int(stats.get("secrets_redacted", 0)),
+            "live_secret_findings": len(live_secret_locations),
+            "live_secret_locations": live_secret_locations,
         },
         "recall_ready": bool(facts) and not bad_facts,
     }
@@ -104,7 +169,8 @@ def render_text(report: dict[str, Any]) -> str:
             f"{report['privacy']['denied_paths']} denied paths, "
             f"{report['privacy']['denied_tools']} denied tools, "
             f"{report['privacy']['denied_endpoints']} denied endpoints, "
-            f"{report['privacy']['denied_results']} denied results"
+            f"{report['privacy']['denied_results']} denied results, "
+            f"{report['privacy']['live_secret_findings']} live secret findings"
         ),
         f"- Recall ready: {str(report['recall_ready']).lower()}",
     ]
@@ -117,10 +183,12 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--facts", type=Path, default=Path.home() / ".nock-brain" / "facts.json")
     parser.add_argument("--notes-dir", type=Path, default=Path.home() / ".nock-brain" / "sessions")
     parser.add_argument("--stats", type=Path, default=None)
+    parser.add_argument("--env-file", action="append", type=Path, default=[])
+    parser.add_argument("--scan-root", action="append", type=Path, default=[])
     parser.add_argument("--json", action="store_true", help="Print JSON instead of text")
     args = parser.parse_args(argv)
 
-    report = build_report(args.events, args.facts, args.notes_dir, args.stats)
+    report = build_report(args.events, args.facts, args.notes_dir, args.stats, args.env_file, args.scan_root)
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:

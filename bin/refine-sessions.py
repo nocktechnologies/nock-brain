@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 BIN_DIR = Path(__file__).resolve().parent
+MAX_FACT_CONTENT_CHARS = 1500
 
 
 def load_extract_facts():
@@ -62,11 +63,21 @@ def event_evidence(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def cap_fact_content(content: str, max_chars: int = MAX_FACT_CONTENT_CHARS) -> tuple[str, bool]:
+    if len(content) <= max_chars:
+        return content, False
+    suffix = f"\n[TRUNCATED: original {len(content)} chars; see session_anchor]"
+    keep = max(0, max_chars - len(suffix))
+    return content[:keep].rstrip() + suffix, True
+
+
 def fact_from_event(event: dict[str, Any], extract_facts=None) -> dict[str, Any] | None:
     extract_facts = extract_facts or load_extract_facts()
-    content = str(event.get("content", "")).strip()
-    if not content:
+    raw_content = str(event.get("content", ""))
+    original_content = raw_content.strip()
+    if not original_content:
         return None
+    content, truncated = cap_fact_content(original_content)
 
     result = extract_facts.classify_bullet(content)
     if not result:
@@ -93,6 +104,9 @@ def fact_from_event(event: dict[str, Any], extract_facts=None) -> dict[str, Any]
         "evidence": [event_evidence(event)],
         **metadata,
     }
+    if truncated:
+        fact["evidence_truncated"] = True
+        fact["evidence_original_chars"] = len(raw_content)
     return fact
 
 

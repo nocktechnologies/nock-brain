@@ -64,6 +64,30 @@ def test_user_pasted_secret_is_scrubbed_without_path_or_tool_match(ingest_jsonl,
     assert result["stats"]["secrets_redacted"] == 1
 
 
+def test_telegram_bot_token_embedded_in_url_is_scrubbed(ingest_jsonl, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    token = "8913101123:" + "AAExampleTelegramBotTokenSecret"
+    write_jsonl(transcript, [
+        {
+            "type": "user",
+            "sessionId": "s1",
+            "timestamp": "2026-06-11T01:00:00Z",
+            "message": {
+                "role": "user",
+                "content": f"https://api.telegram.org/bot{token}/getUpdates?offset=1",
+            },
+        }
+    ])
+
+    result = ingest_jsonl.ingest_file(transcript)
+    dumped = json.dumps(result["events"])
+
+    assert token not in dumped
+    assert f"bot{token}" not in dumped
+    assert "[REDACTED_SECRET]" in result["events"][0]["content"]
+    assert result["stats"]["secrets_redacted"] == 1
+
+
 def test_private_tool_payload_never_persists(ingest_jsonl, tmp_path):
     transcript = tmp_path / "session.jsonl"
     write_jsonl(transcript, [
@@ -321,6 +345,57 @@ def test_bare_common_secret_prefixes_are_scrubbed(ingest_jsonl, tmp_path):
         "sk-ant-api03-" + "abcdefghijklmnopqrstuvwxyz1234567890",
         "AKIA" + "ABCDEFGHIJKLMNOP",
         "xoxb-" + "123456789012-123456789012-abcdefghijklmnopqrstuvwx",
+    ]
+    write_jsonl(transcript, [
+        {
+            "type": "user",
+            "sessionId": "s1",
+            "timestamp": "2026-06-11T01:00:00Z",
+            "message": {"role": "user", "content": " ".join(secrets)},
+        }
+    ])
+
+    result = ingest_jsonl.ingest_file(transcript)
+    dumped = json.dumps(result["events"])
+
+    for secret in secrets:
+        assert secret not in dumped
+    assert result["stats"]["secrets_redacted"] == len(secrets)
+
+
+def test_sensitive_env_assignment_values_are_scrubbed_by_key_name(ingest_jsonl, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    secrets = {
+        "NOCKCC_API_KEY": "nockcc-value-without-token-shape",
+        "ELEVENLABS_API_KEY": "sk_" + "a" * 48,
+        "DEEPGRAM_TOKEN": "baretokenvaluewithnoshapebutlongenough",
+        "DATABASE_PASSWORD": "short-ok",
+    }
+    env_dump = "\n".join(f"{key}={value}" for key, value in secrets.items())
+    write_jsonl(transcript, [
+        {
+            "type": "user",
+            "sessionId": "s1",
+            "timestamp": "2026-06-11T01:00:00Z",
+            "message": {"role": "user", "content": env_dump},
+        }
+    ])
+
+    result = ingest_jsonl.ingest_file(transcript)
+    content = result["events"][0]["content"]
+
+    for key, value in secrets.items():
+        assert key in content
+        assert value not in content
+    assert content.count("[REDACTED_SECRET]") == len(secrets)
+    assert result["stats"]["secrets_redacted"] == len(secrets)
+
+
+def test_sk_underscore_and_bare_hex_secrets_are_scrubbed(ingest_jsonl, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    secrets = [
+        "sk_" + "0123456789abcdef" * 3,
+        "abcdef0123456789" * 2,
     ]
     write_jsonl(transcript, [
         {

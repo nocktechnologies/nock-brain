@@ -122,3 +122,21 @@ def test_health_report_counts_privacy_and_readiness(nockbrain_health, tmp_path):
     assert report["facts"]["count"] == 1
     assert report["notes"]["count"] == 1
     assert report["recall_ready"] is True
+
+
+def test_health_live_value_scan_reports_secret_hits_without_values(nockbrain_health, tmp_path):
+    env_file = tmp_path / ".env"
+    live_value = "live-secret-value-that-should-not-appear-in-report"
+    env_file.write_text(f"NOCKCC_API_KEY={live_value}\nPUBLIC_FLAG=true\n")
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "events.jsonl").write_text(f"tool output leaked {live_value}\n")
+
+    report = nockbrain_health.build_report(env_paths=[env_file], scan_roots=[artifacts])
+    dumped = json.dumps(report)
+
+    assert report["privacy"]["live_secret_findings"] == 1
+    assert report["privacy"]["live_secret_locations"] == [
+        {"path": str(artifacts / "events.jsonl"), "line": 1, "key": "NOCKCC_API_KEY"}
+    ]
+    assert live_value not in dumped
