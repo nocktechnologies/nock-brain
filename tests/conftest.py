@@ -34,3 +34,33 @@ def extract_facts():
 @pytest.fixture(scope="session")
 def synthesize():
     return _load("synthesize")
+
+
+@pytest.fixture(scope="session")
+def ingest_jsonl():
+    return _load("ingest-jsonl")
+
+
+@pytest.fixture(scope="session")
+def refine_sessions():
+    return _load("refine-sessions")
+
+
+@pytest.fixture(scope="session")
+def review_promotions():
+    return _load("review-promotions")
+
+
+@pytest.fixture(scope="session")
+def export_obsidian():
+    return _load("export-obsidian")
+
+
+@pytest.fixture(scope="session")
+def export_graph():
+    return _load("export-graph")
+
+
+@pytest.fixture(scope="session")
+def nockbrain_health():
+    return _load("nockbrain-health")

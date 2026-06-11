@@ -8,11 +8,14 @@ Built by [Nock Technologies](https://nocktechnologies.com) from patterns running
 
 Most Claude Code sessions start from zero. nock-brain fixes that.
 
-1. **Extract** — Parses session transcripts into structured facts: decisions, directives, corrections, architecture changes, merges, bug fixes.
-2. **Synthesize** — Periodically reviews the fact store, clusters recurring same-kind facts, and writes consolidated *insights* ("you've corrected this 3 times") to a higher tier. This is the consolidation layer that keeps the store from becoming a giant unreadable log. Heuristic and dependency-free by default; structured so an LLM-backed synthesizer can drop in.
-3. **Classify** — Determines if a prompt needs past-session context. "What did we decide about X?" triggers recall. "merge PR 223" doesn't.
-4. **Recall** — Ranks with **BM25** (IDF-weighted token matching with length normalization) and retrieves the most relevant items within a configurable token budget — **synthesized insights first**, then raw facts — so memory enhances without overwhelming the context window.
-5. **Inject** — A Claude Code hook that chains the steps transparently. Relevant context appears as system messages when needed.
+1. **Ingest** — Converts raw Claude Code JSONL into sanitized evidence events, including `tool_use.input` payloads, with source anchors.
+2. **Extract** — Parses markdown transcripts or sanitized events into structured facts: decisions, directives, corrections, architecture changes, merges, bug fixes.
+3. **Synthesize** — Periodically reviews the fact store, clusters recurring same-kind facts, and writes consolidated *insights* ("you've corrected this 3 times") to a higher tier. This is the consolidation layer that keeps the store from becoming a giant unreadable log. Heuristic and dependency-free by default; structured so an LLM-backed synthesizer can drop in.
+4. **Review** — Suggests promotion candidates for durable rules or skills, but never rewrites agent behavior without human approval.
+5. **Export** — Writes derived Obsidian vault and Graphify-compatible graph views for audit and exploration.
+6. **Classify** — Determines if a prompt needs past-session context. "What did we decide about X?" triggers recall. "merge PR 223" doesn't.
+7. **Recall** — Ranks with **BM25** (IDF-weighted token matching with length normalization) and retrieves the most relevant items within a configurable token budget — **synthesized insights first**, then raw facts — so memory enhances without overwhelming the context window.
+8. **Inject** — A Claude Code hook that chains the steps transparently. Relevant context appears as system messages when needed.
 
 ## Install
 
@@ -34,6 +37,7 @@ Restart Claude Code after install.
 - Python 3.10+
 - Claude Code (for the auto-injection hook)
 - Session transcripts in markdown format (from [memsearch](https://github.com/zilliztech/memsearch) or your own)
+- Optional raw Claude Code JSONL transcripts from `~/.claude/projects/**/*.jsonl`
 
 ## Usage
 
@@ -51,6 +55,22 @@ Operational prompts ("merge PR 223", "yes", "dispatch the agent") are filtered o
 ### Manual tools
 
 ```bash
+# Ingest raw Claude Code JSONL into sanitized evidence events
+python3 bin/ingest-jsonl.py --output ~/.nock-brain/events.jsonl ~/.claude/projects/.../session.jsonl
+
+# Refine sanitized events into facts and auditable session notes
+python3 bin/refine-sessions.py --events ~/.nock-brain/events.jsonl --facts ~/.nock-brain/facts.json --notes-dir ~/.nock-brain/sessions
+
+# Generate human-gated promotion candidates
+python3 bin/review-promotions.py --facts ~/.nock-brain/facts.json --output ~/.nock-brain/review
+
+# Export audit views
+python3 bin/export-obsidian.py --facts ~/.nock-brain/facts.json --sessions ~/.nock-brain/sessions --review ~/.nock-brain/review --vault ~/.nock-brain/vault
+python3 bin/export-graph.py --facts ~/.nock-brain/facts.json --output ~/.nock-brain/graph.json
+
+# Health report
+python3 bin/nockbrain-health.py --events ~/.nock-brain/events.jsonl --facts ~/.nock-brain/facts.json --notes-dir ~/.nock-brain/sessions
+
 # Extract facts from transcripts
 python3 bin/extract-facts.py
 python3 bin/extract-facts.py --dir ./my-transcripts --since 2026-05-18
@@ -72,6 +92,28 @@ python3 bin/supersede-fact.py --search "old pricing" --mark-superseded
 ```
 
 ## How it works
+
+### Raw JSONL ingest
+
+`ingest-jsonl.py` reads Claude Code JSONL sessions and normalizes messages, tool calls, tool results, compaction metadata, and PR provenance into evidence events. It preserves source file, line, session id, timestamp, surface, kind, actor, and sanitized content.
+
+The ingest path has three privacy fences:
+
+1. Denied source paths never persist content.
+2. Private tool or endpoint payloads, such as diary/private NockCC calls, are dropped before event persistence.
+3. Secret-looking strings in surviving content are replaced with `[REDACTED_SECRET]`.
+
+### Session refinement
+
+`refine-sessions.py` consumes sanitized event JSONL, reuses the same classification rules as markdown extraction, writes v1-compatible `facts.json`, and emits markdown session notes with evidence anchors. The output can be used immediately by `budget-recall.py`.
+
+### Review and exports
+
+`review-promotions.py` writes a human-gated review queue. Entries include proposed target, proposed text, confidence, risk, actions, and evidence. The command never modifies project rules, agent identity, hooks, or skills.
+
+`export-obsidian.py` creates a derived markdown vault with index, facts, sessions, and review notes. `export-graph.py` creates a Graphify-compatible JSON graph with fact, session, source, and concept nodes.
+
+`nockbrain-health.py` summarizes event/fact/note counts, malformed records, privacy redactions, denied payload counts when stats are provided, and recall readiness.
 
 ### Fact extraction
 
@@ -115,6 +157,7 @@ nock-brain reads markdown files with bullet-point summaries. Compatible with:
 - **memsearch plugin** transcripts (`~/.memsearch/memory/*.md`)
 - **Claude Code session summaries** (any markdown with `- ` bullet points)
 - **Custom transcripts** — any markdown where each `- ` line is a session event
+- **Claude Code JSONL** via `ingest-jsonl.py` followed by `refine-sessions.py`
 
 Example:
 ```markdown
@@ -130,6 +173,12 @@ Example:
 ```
 nock-brain/
   bin/
+    ingest-jsonl.py       # Normalize raw Claude Code JSONL into sanitized evidence events
+    refine-sessions.py    # Convert sanitized events into facts and session notes
+    review-promotions.py  # Generate human-gated promotion candidates
+    export-obsidian.py    # Write a derived markdown vault
+    export-graph.py       # Write a Graphify-compatible memory graph
+    nockbrain-health.py   # Report local store health
     extract-facts.py      # Parse transcripts into structured facts
     synthesize.py          # Consolidate recurring facts into insights
     query-facts.py         # Search and filter facts
@@ -165,6 +214,13 @@ Transcript sources are auto-detected:
 1. `~/.memsearch/memory/` (memsearch plugin)
 2. `~/.nock-brain/transcripts/` (manual placement)
 3. Custom path via `--dir`
+
+Raw Claude Code JSONL is intentionally explicit for now:
+
+```bash
+python3 bin/ingest-jsonl.py --output ~/.nock-brain/events.jsonl ~/.claude/projects/.../session.jsonl
+python3 bin/refine-sessions.py --events ~/.nock-brain/events.jsonl --facts ~/.nock-brain/facts.json --notes-dir ~/.nock-brain/sessions
+```
 
 ## Background
 
