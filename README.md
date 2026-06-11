@@ -69,7 +69,7 @@ python3 bin/export-obsidian.py --facts ~/.nock-brain/facts.json --sessions ~/.no
 python3 bin/export-graph.py --facts ~/.nock-brain/facts.json --output ~/.nock-brain/graph.json
 
 # Health report
-python3 bin/nockbrain-health.py --events ~/.nock-brain/events.jsonl --facts ~/.nock-brain/facts.json --notes-dir ~/.nock-brain/sessions
+python3 bin/nockbrain-health.py --events ~/.nock-brain/events.jsonl --facts ~/.nock-brain/facts.json --notes-dir ~/.nock-brain/sessions --env-file /path/to/.env --scan-root ~/.nock-brain
 
 # Extract facts from transcripts
 python3 bin/extract-facts.py
@@ -101,11 +101,11 @@ The ingest path has three privacy fences:
 
 1. Denied source paths never persist content.
 2. Private tool or endpoint payloads, such as diary/private NockCC calls, are dropped before event persistence.
-3. Secret-looking strings in surviving content are replaced with `[REDACTED_SECRET]`.
+3. Secret-looking strings in surviving content are replaced with `[REDACTED_SECRET]`. This includes value-shape matches and `KEY=value` env dumps where the key ends in `_API_KEY`, `_TOKEN`, `_SECRET`, or `_PASSWORD`.
 
 ### Session refinement
 
-`refine-sessions.py` consumes sanitized event JSONL, reuses the same classification rules as markdown extraction, writes v1-compatible `facts.json`, and emits markdown session notes with evidence anchors. The output can be used immediately by `budget-recall.py`.
+`refine-sessions.py` consumes sanitized event JSONL, reuses the same classification rules as markdown extraction, writes v1-compatible `facts.json`, and emits markdown session notes with evidence anchors. Oversized fact content is capped at 1,500 characters with a `session_anchor` drill-back pointer so raw tool output cannot be amplified into review or vault artifacts. The output can be used immediately by `budget-recall.py`.
 
 ### Review and exports
 
@@ -113,7 +113,7 @@ The ingest path has three privacy fences:
 
 `export-obsidian.py` creates a derived markdown vault with index, facts, sessions, and review notes. `export-graph.py` creates a Graphify-compatible JSON graph with fact, session, source, and concept nodes.
 
-`nockbrain-health.py` summarizes event/fact/note counts, malformed records, privacy redactions, denied payload counts when stats are provided, and recall readiness.
+`nockbrain-health.py` summarizes event/fact/note counts, malformed records, privacy redactions, denied payload counts when stats are provided, optional live-value scan findings against local `.env` files, and recall readiness.
 
 ### Fact extraction
 

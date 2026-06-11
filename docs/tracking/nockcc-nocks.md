@@ -55,3 +55,15 @@ This file records NockCC items filed for NockBrain v2 so local docs and the boar
   - Remediation: `ingest-jsonl.py` now tracks denied `tool_use_id` values across the file, drops paired results with a `denied_results` stat, scans result content for denied paths/endpoints, expands bare secret-token patterns, and denies credentials/id_rsa/pem paths.
   - Verification: `PYTHONDONTWRITEBYTECODE=1 pytest -q` passes with 77 tests.
   - Result: approved by Mira after independent re-review; proceed to commit, PR, and merge per normal flow.
+- N8024: NockBrain v2: Batch A sanitized dogfood audit
+  - State: `done`
+  - Depends on: N8020
+  - Scope: approved local-only dogfood on Mira subagent transcripts plus Beck builder sessions; review queue stayed pending.
+  - Result: Mira audited artifacts directly and issued `PRIVACY PASS`; fences held on subagent live-fire corpus.
+- N8032: NockBrain v2: Batch B main-seat transcript dogfood audit
+  - State: `in_progress`
+  - Depends on: N8024
+  - Scope: exactly one Mira main-seat transcript, local-only artifacts, review queue pending, no broader ingest.
+  - Audit verdict: register fences passed, but scrub fixes are required before broader ingest.
+  - Required remediation: scrub sensitive `KEY=value` env dumps by key name, extend token-shape coverage for `sk_` and bare 32+ hex values, add local live-value artifact scanning, cap oversized fact content, purge and re-scrub Batch B artifacts for re-verify.
+  - Verification so far: `PYTHONDONTWRITEBYTECODE=1 pytest -q` passes with 81 tests after the remediation tests and implementation.
