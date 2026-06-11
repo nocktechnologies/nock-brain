@@ -1,0 +1,57 @@
+# NockCC Tracking
+
+This file records NockCC items filed for NockBrain v2 so local docs and the board stay aligned.
+
+## 2026-06-11
+
+- N8011: NockBrain v2: review and approve Conversation Memory Compiler spec
+  - State: `done`
+  - Purpose: review gate before implementation phases are planned.
+  - Result: approved by Mira after the tool/endpoint privacy denial amendment; phase planning may proceed.
+- N8012: NockBrain v2: Claude Code JSONL ingest with tool_use evidence
+  - State: `done`
+  - Depends on: N8011
+  - Result: implemented `bin/ingest-jsonl.py`; parses Claude Code JSONL messages, `tool_use.input`, `tool_result.content`, compaction metadata, and PR provenance into source-anchored sanitized events.
+- N8013: NockBrain v2: extraction-time secret scrubber
+  - State: `done`
+  - Depends on: N8011
+  - Result: implemented content scrubber in JSONL ingest; Telegram-shaped tokens, bearer tokens, common key assignments, and private-key blocks are replaced with `[REDACTED_SECRET]` before event writes.
+- N8014: NockBrain v2: ingest-time privacy denylist
+  - State: `done`
+  - Depends on: N8011
+  - Scope includes path denial plus tool/endpoint denial for private payloads such as `nockcc_diary_*`, `nockcc_private_*`, `*/api/brain/diary/*`, and `*/api/brain/private/*`.
+  - Result: implemented path, tool, and endpoint denial before event persistence, with aggregate stats for denied payloads.
+- N8015: NockBrain v2: session refinement to v1-compatible facts
+  - State: `done`
+  - Depends on: N8011
+  - Result: implemented `bin/refine-sessions.py`; sanitized events become v1-compatible facts with evidence anchors and markdown session notes.
+  - Verification: `PYTHONDONTWRITEBYTECODE=1 pytest -q` passes with 66 tests.
+- N8016: NockBrain v2: review queue and promotion candidates
+  - State: `done`
+  - Depends on: N8015
+  - Scope: generate human-reviewable promotion candidates with targets, proposed text, evidence anchors, confidence, risk, and approve/edit/reject/defer actions.
+  - Result: implemented `bin/review-promotions.py`; it writes `promotion-candidates.json` and `.md` without modifying rule, skill, hook, or identity files.
+- N8017: NockBrain v2: Obsidian-compatible vault export
+  - State: `done`
+  - Depends on: N8015
+  - Scope: export sessions, facts, index, and review notes into a derived markdown vault.
+  - Result: implemented `bin/export-obsidian.py`; it writes index, facts, sessions, and optional review notes into a derived vault.
+- N8018: NockBrain v2: Graphify-compatible graph export
+  - State: `done`
+  - Depends on: N8015
+  - Scope: export a conversation-memory graph with stable fact/session/source/concept nodes and evidence edges.
+  - Result: implemented `bin/export-graph.py`; it writes Graphify-compatible JSON with fact, session, source, and concept nodes plus `DERIVED_FROM`, `SUPPORTS`, and `MENTIONS` edges.
+- N8019: NockBrain v2: health report for ingest, privacy, and recall stores
+  - State: `done`
+  - Depends on: N8015
+  - Scope: summarize event/fact/note counts, privacy redactions/denials, malformed records, and recall readiness.
+  - Result: implemented `bin/nockbrain-health.py`; it reports counts, malformed records, privacy redactions/denials, and recall readiness as text or JSON.
+  - Verification: `PYTHONDONTWRITEBYTECODE=1 pytest -q` passes with 72 tests.
+- N8020: NockBrain v2: Mira review and approval for full build
+  - State: `done`
+  - Depends on: N8012, N8013, N8014, N8015, N8016, N8017, N8018, N8019
+  - Scope: Mira review and approval gate before Codex commits, opens a PR, or merges the full build.
+  - Review cycle 1: Mira requested changes for a critical privacy leak where denied `tool_use` inputs could still allow paired `tool_result` content to persist.
+  - Remediation: `ingest-jsonl.py` now tracks denied `tool_use_id` values across the file, drops paired results with a `denied_results` stat, scans result content for denied paths/endpoints, expands bare secret-token patterns, and denies credentials/id_rsa/pem paths.
+  - Verification: `PYTHONDONTWRITEBYTECODE=1 pytest -q` passes with 77 tests.
+  - Result: approved by Mira after independent re-review; proceed to commit, PR, and merge per normal flow.
