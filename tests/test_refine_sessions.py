@@ -75,6 +75,19 @@ def test_events_to_facts_dedupes_same_content(refine_sessions):
     assert facts[0]["evidence"][0]["line"] == 1
 
 
+def test_fact_content_is_capped_to_limit_tool_output_amplification(refine_sessions):
+    oversized = "[DECISION] " + ("tool output " * 400)
+
+    facts = refine_sessions.facts_from_events([event(oversized, kind="tool_result")])
+
+    assert len(facts) == 1
+    fact = facts[0]
+    assert len(fact["content"]) <= refine_sessions.MAX_FACT_CONTENT_CHARS
+    assert fact["evidence_truncated"] is True
+    assert fact["evidence_original_chars"] == len(oversized)
+    assert "see session_anchor" in fact["content"]
+
+
 def test_render_session_note_includes_sections_and_anchors(refine_sessions):
     events = [
         event("[DECISION] Kevin chose nock-brain as the repo", line=3),
