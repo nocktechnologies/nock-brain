@@ -2,7 +2,14 @@
 import json
 
 
-def event(content, kind="message", surface="text", line=7, timestamp="2026-06-11T05:00:00Z"):
+def event(
+    content,
+    kind="message",
+    surface="text",
+    line=7,
+    timestamp="2026-06-11T05:00:00Z",
+    actor="user",
+):
     return {
         "id": f"event-{line}",
         "source": {
@@ -12,7 +19,7 @@ def event(content, kind="message", surface="text", line=7, timestamp="2026-06-11
             "session_id": "s1",
             "timestamp": timestamp,
         },
-        "actor": "user",
+        "actor": actor,
         "surface": surface,
         "kind": kind,
         "content": content,
@@ -46,21 +53,33 @@ def test_events_to_facts_preserves_v1_fields_and_evidence(refine_sessions):
     ]
 
 
-def test_facts_from_tool_events_are_compatible_with_budget_recall(refine_sessions, budget_recall, tmp_path):
+def test_authority_facts_from_tool_events_are_dropped(refine_sessions):
     facts = refine_sessions.facts_from_events([
         event(
             "[DIRECTIVE] Kevin instructed Mira to keep memory recall under 800 tokens",
             kind="tool_call",
             surface="tool_use.input",
+            actor="assistant",
         )
     ])
-    facts_file = tmp_path / "facts.json"
-    facts_file.write_text(json.dumps(facts))
 
-    out = budget_recall.budget_recall("memory recall 800 tokens", facts_file, budget=500)
+    assert facts == []
 
-    assert "Memory recall" in out
-    assert "800 tokens" in out
+
+def test_non_authority_tool_result_facts_are_demoted_not_dropped(refine_sessions):
+    facts = refine_sessions.facts_from_events([
+        event(
+            "[BUG] Found root cause in failing parser output",
+            kind="tool_result",
+            surface="tool_result.content",
+            line=8,
+            actor="tool",
+        )
+    ])
+
+    assert len(facts) == 1
+    assert facts[0]["kind"] == "bug"
+    assert facts[0]["confidence"] < 0.9
 
 
 def test_events_to_facts_dedupes_same_content(refine_sessions):
@@ -76,7 +95,7 @@ def test_events_to_facts_dedupes_same_content(refine_sessions):
 
 
 def test_fact_content_is_capped_to_limit_tool_output_amplification(refine_sessions):
-    oversized = "[DECISION] " + ("tool output " * 400)
+    oversized = "[BUG] " + ("tool output " * 400)
 
     facts = refine_sessions.facts_from_events([event(oversized, kind="tool_result")])
 

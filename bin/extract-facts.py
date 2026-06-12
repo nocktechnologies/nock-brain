@@ -49,6 +49,9 @@ TAGGED_PATTERNS = [
     (r"\[STATUS\]", "status", 0.5),
 ]
 
+AUTHORITY_KINDS = {"decision", "directive", "correction"}
+USER_AUTHORITY_RE = re.compile(r"\b(?:user|kevin|founder|owner)\b", re.IGNORECASE)
+
 INFERRED_PATTERNS = [
     (r"(?:user|kevin|founder|owner)\b.{0,30}\b(?:decided|approved|locked|chose|picked|selected|wants?)\b", "decision", 0.8),
     (r"(?:user|kevin|founder|owner)\b.{0,30}\b(?:directed|told|asked|said|instructed|requested)\b.{5,}", "directive", 0.75),
@@ -104,6 +107,14 @@ def classify_bullet(text: str) -> tuple[str, float] | None:
     return None
 
 
+def authority_fact_allowed(kind: str, text: str, actor: str | None = None) -> bool:
+    if kind not in AUTHORITY_KINDS:
+        return True
+    if actor is not None:
+        return actor == "user"
+    return bool(USER_AUTHORITY_RE.search(text))
+
+
 def extract_metadata(text: str) -> dict:
     meta = {}
     prs = PR_RE.findall(text)
@@ -133,6 +144,8 @@ def parse_file(filepath: Path, since_date: str | None = None) -> list[dict]:
             result = classify_bullet(bullet)
             if result:
                 kind, confidence = result
+                if not authority_fact_allowed(kind, bullet):
+                    continue
                 meta = extract_metadata(bullet)
                 fact = {
                     "id": make_id(bullet, file_date),
