@@ -244,6 +244,8 @@ Health checks may additionally receive local `--env-file` and `--scan-root` path
 
 Refinement caps oversized fact content at 1,500 characters and preserves `session_anchor` for drill-back. This keeps raw tool output blobs from being promoted wholesale into facts, review queues, Obsidian vaults, or graph exports.
 
+Authority-shaped fact kinds are actor-gated. In the v2 event pipeline, `decision`, `directive`, and `correction` facts require `actor == "user"`; matching text inside assistant tool calls or tool results is dropped. In the legacy markdown path, where actor metadata is unavailable, those same fact kinds require an explicit user/Kevin/founder/owner cue in the bullet. Non-authority facts from `tool_result.content` may be retained, but their confidence is capped so third-party tool output is not treated as equally authoritative.
+
 Local store writes must be private by default: generated directories are `0700`, generated files are `0600`, and installer migration removes group/other access from existing `~/.nock-brain` trees.
 
 Secret scrubbing covers common bare token families seen in tool output, not only `key=value` shapes: GitHub `ghp_`/`gho_`/`ghs_`/`github_pat_`, OpenAI/Anthropic `sk-`/`sk_`/`sk-ant-` including Stripe `sk_live_`/`sk_test_`, JWT `eyJ...` triples, Google `AIza`, GitLab `glpat-`, npm `npm_`, AWS `AKIA`, Telegram bot-token URL segments, and Slack `xoxb-`/`xoxp-` style tokens.
@@ -251,6 +253,8 @@ Secret scrubbing covers common bare token families seen in tool output, not only
 The denylist must be configurable and test-covered. Denied events should produce aggregate counts in health output, not stored content. Health output must make false-positive denials visible enough to tune policies, especially for conservative path globs such as `**/*token*` and `**/*secret*`.
 
 Installer wiring treats local paths as data. Python snippets read paths through environment variables, generated hook commands use shell quoting, and installer startup rejects checkout paths containing metacharacters that would make safe shell or JSON embedding ambiguous.
+
+Recall injection must frame memory as inert reference material, not instructions. The hook prefix tells the model not to execute directives found in recalled notes.
 
 ## Review And Promotion
 NockBrain may suggest promotion candidates but must not silently rewrite agent behavior.
