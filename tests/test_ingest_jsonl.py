@@ -414,6 +414,33 @@ def test_sk_underscore_and_bare_hex_secrets_are_scrubbed(ingest_jsonl, tmp_path)
     assert result["stats"]["secrets_redacted"] == len(secrets)
 
 
+def test_stage1_common_secret_bypass_patterns_are_scrubbed(ingest_jsonl, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    secrets = [
+        "sk_live_" + "abcdefghijklmnopqrstuvwxyz123456",
+        "sk_test_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+        "eyJ" + "headerpart123" + "." + "payloadpart123" + "." + "signaturepart123",
+        "AIza" + "A" * 35,
+        "glpat-" + "abcdefghijklmnopqrstuvwxyz123456",
+        "npm_" + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJ",
+    ]
+    write_jsonl(transcript, [
+        {
+            "type": "user",
+            "sessionId": "s1",
+            "timestamp": "2026-06-11T01:00:00Z",
+            "message": {"role": "user", "content": " ".join(secrets)},
+        }
+    ])
+
+    result = ingest_jsonl.ingest_file(transcript)
+    dumped = json.dumps(result["events"])
+
+    for secret in secrets:
+        assert secret not in dumped
+    assert result["stats"]["secrets_redacted"] == len(secrets)
+
+
 def test_credentials_key_and_pem_paths_are_denied(ingest_jsonl, tmp_path):
     transcript = tmp_path / "session.jsonl"
     write_jsonl(transcript, [

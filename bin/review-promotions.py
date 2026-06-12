@@ -9,8 +9,15 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+BIN_DIR = Path(__file__).resolve().parent
+if str(BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(BIN_DIR))
+
+from _store import secure_mkdir, secure_write_text
 
 ACTIONS = ["approve", "edit", "reject", "defer"]
 PROMOTABLE_KINDS = {"decision", "directive", "architecture", "config", "correction"}
@@ -127,12 +134,14 @@ def run(argv: list[str] | None = None) -> int:
         return 1
 
     candidates = candidates_from_facts(load_json(args.facts))
-    args.output.mkdir(parents=True, exist_ok=True)
-    (args.output / "promotion-candidates.json").write_text(
+    secure_mkdir(args.output)
+    secure_write_text(
+        args.output / "promotion-candidates.json",
         json.dumps(candidates, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    (args.output / "promotion-candidates.md").write_text(
+    secure_write_text(
+        args.output / "promotion-candidates.md",
         render_markdown(candidates),
         encoding="utf-8",
     )

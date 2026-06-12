@@ -12,12 +12,18 @@ Usage:
 import argparse
 import importlib.util
 import json
+import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 BIN_DIR = Path(__file__).resolve().parent
+if str(BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(BIN_DIR))
+
+from _store import secure_mkdir, secure_write_text
+
 MAX_FACT_CONTENT_CHARS = 1500
 
 
@@ -187,11 +193,11 @@ def safe_note_name(session_id: str) -> str:
 
 
 def write_session_notes(events: list[dict[str, Any]], notes_dir: Path) -> list[Path]:
-    notes_dir.mkdir(parents=True, exist_ok=True)
+    secure_mkdir(notes_dir)
     written = []
     for session_id, session_events in sorted(group_events_by_session(events).items()):
         note_path = notes_dir / safe_note_name(session_id)
-        note_path.write_text(render_session_note(session_events), encoding="utf-8")
+        secure_write_text(note_path, render_session_note(session_events), encoding="utf-8")
         written.append(note_path)
     return written
 
@@ -206,8 +212,7 @@ def run(argv: list[str] | None = None) -> int:
     events = load_events_jsonl(args.events)
     facts = facts_from_events(events)
 
-    args.facts.parent.mkdir(parents=True, exist_ok=True)
-    args.facts.write_text(json.dumps(facts, indent=2, ensure_ascii=False), encoding="utf-8")
+    secure_write_text(args.facts, json.dumps(facts, indent=2, ensure_ascii=False), encoding="utf-8")
     notes = write_session_notes(events, args.notes_dir)
 
     print(f"Wrote {len(facts)} fact(s) to {args.facts}")
