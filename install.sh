@@ -48,7 +48,7 @@ fi
 
 # Wire hook into settings
 if [[ -f "$SETTINGS_FILE" ]]; then
-    HAS_HOOKS=$(SETTINGS_FILE="$SETTINGS_FILE" python3 <<'PY' 2>/dev/null || echo ""
+    HAS_HOOKS=$(SETTINGS_FILE="$SETTINGS_FILE" python3 <<'PY'
 import json
 import os
 
@@ -71,10 +71,14 @@ PY
 import json
 import os
 import shlex
+import shutil
+import time
 
 settings_file = os.environ["SETTINGS_FILE"]
 brain_dir = os.environ["BRAIN_DIR"]
 hook_path = f"{brain_dir}/hooks/memory-inject.sh"
+backup_file = f"{settings_file}.bak.{int(time.time())}"
+tmp_file = f"{settings_file}.tmp.{os.getpid()}"
 
 with open(settings_file) as f:
     settings = json.load(f)
@@ -89,9 +93,11 @@ ups.append({
     }]
 })
 
-with open(settings_file, 'w') as f:
+shutil.copy2(settings_file, backup_file)
+with open(tmp_file, 'w') as f:
     json.dump(settings, f, indent=2)
     f.write('\n')
+os.replace(tmp_file, settings_file)
 PY
         echo "[4/4] Hook installed in ${SETTINGS_FILE}"
     fi
@@ -129,4 +135,5 @@ echo "  Health report:   python3 ${BRAIN_DIR}/bin/nockbrain-health.py --events $
 echo "  Extract facts:   python3 ${BRAIN_DIR}/bin/extract-facts.py"
 echo "  Query facts:     python3 ${BRAIN_DIR}/bin/query-facts.py 'your query'"
 echo "  Budget recall:   python3 ${BRAIN_DIR}/bin/budget-recall.py 'your query'"
+echo "  Purge fact:      python3 ${BRAIN_DIR}/bin/purge-fact.py <fact_id-or-pattern> --apply"
 echo "  Test classifier: python3 ${BRAIN_DIR}/bin/recall-classifier.py --test"
