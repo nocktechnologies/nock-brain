@@ -8,6 +8,11 @@ BRAIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SETTINGS_FILE="${HOME}/.claude/settings.json"
 FACTS_DIR="${HOME}/.nock-brain"
 
+if [[ "$BRAIN_DIR" == *\"* || "$BRAIN_DIR" == *"'"* || "$BRAIN_DIR" == *'$'* || "$BRAIN_DIR" == *\`* || "$BRAIN_DIR" == *$'\n'* ]]; then
+    echo "Unsafe nock-brain path: ${BRAIN_DIR}" >&2
+    exit 1
+fi
+
 echo "nock-brain installer"
 echo "===================="
 
@@ -43,9 +48,12 @@ fi
 
 # Wire hook into settings
 if [[ -f "$SETTINGS_FILE" ]]; then
-    HAS_HOOKS=$(python3 -c "
+    HAS_HOOKS=$(SETTINGS_FILE="$SETTINGS_FILE" python3 <<'PY' 2>/dev/null || echo ""
 import json
-with open('$SETTINGS_FILE') as f:
+import os
+
+settings_file = os.environ["SETTINGS_FILE"]
+with open(settings_file) as f:
     d = json.load(f)
 hooks = d.get('hooks', {}).get('UserPromptSubmit', [])
 for h in hooks:
@@ -53,15 +61,22 @@ for h in hooks:
         if 'memory-inject' in hh.get('command', ''):
             print('yes')
             break
-" 2>/dev/null || echo "")
+PY
+)
 
     if [[ "$HAS_HOOKS" == "yes" ]]; then
         echo "[4/4] Hook already installed in settings.json"
     else
-        python3 -c "
+        SETTINGS_FILE="$SETTINGS_FILE" BRAIN_DIR="$BRAIN_DIR" python3 <<'PY'
 import json
+import os
+import shlex
 
-with open('$SETTINGS_FILE') as f:
+settings_file = os.environ["SETTINGS_FILE"]
+brain_dir = os.environ["BRAIN_DIR"]
+hook_path = f"{brain_dir}/hooks/memory-inject.sh"
+
+with open(settings_file) as f:
     settings = json.load(f)
 
 hooks = settings.setdefault('hooks', {})
@@ -70,20 +85,35 @@ ups.append({
     'matcher': '',
     'hooks': [{
         'type': 'command',
-        'command': 'bash $BRAIN_DIR/hooks/memory-inject.sh'
+        'command': 'bash ' + shlex.quote(hook_path)
     }]
 })
 
-with open('$SETTINGS_FILE', 'w') as f:
+with open(settings_file, 'w') as f:
     json.dump(settings, f, indent=2)
     f.write('\n')
-"
+PY
         echo "[4/4] Hook installed in ${SETTINGS_FILE}"
     fi
 else
     echo "[4/4] No settings.json found at ${SETTINGS_FILE}"
     echo "      Create it or add the hook manually:"
-    echo '      {"hooks":{"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$BRAIN_DIR"'/hooks/memory-inject.sh"}]}]}}'
+    BRAIN_DIR="$BRAIN_DIR" python3 <<'PY'
+import json
+import os
+import shlex
+
+command = "bash " + shlex.quote(f"{os.environ['BRAIN_DIR']}/hooks/memory-inject.sh")
+payload = {
+    "hooks": {
+        "UserPromptSubmit": [{
+            "matcher": "",
+            "hooks": [{"type": "command", "command": command}],
+        }]
+    }
+}
+print("      " + json.dumps(payload, separators=(",", ":")))
+PY
 fi
 
 echo ""

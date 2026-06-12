@@ -192,6 +192,8 @@ NockBrain v2 has three separate privacy fences:
 
 These fences solve different problems and all three are required. Path denial protects private files. Tool/endpoint denial protects private API and MCP payloads. Content scrubbing protects secrets pasted into ordinary conversation text where no path or tool pattern applies.
 
+The secret scrubber is shared by both extraction paths. JSONL ingest and the v1 markdown extractor must import the same scrub implementation so the default installer path cannot drift behind the v2 path.
+
 The extraction path must reject or redact:
 
 - API keys, bot tokens, bearer tokens, session cookies, private keys, and webhook secrets.
@@ -207,14 +209,23 @@ Default denied patterns for the dogfood corpus:
 ```text
 agents/*/private/**
 **/diary-register*
+.env
+.env.*
 **/.env
 **/.env.*
+*token*
 **/*token*
+*secret*
 **/*secret*
+credentials*
 **/credentials*
+id_rsa*
 **/id_rsa*
+*.pem
 **/*.pem
 ```
+
+Path denylist matching normalizes obvious shell/path variants before comparing: stripped quotes, leading slash removal, leading `./` removal, basename-only comparison, and case-insensitive glob matching. This catches cases such as `cat .env`, `logs/MYTOKEN.txt`, and `client.PEM`.
 
 Default denied tool and endpoint patterns for the dogfood corpus:
 
@@ -238,6 +249,8 @@ Local store writes must be private by default: generated directories are `0700`,
 Secret scrubbing covers common bare token families seen in tool output, not only `key=value` shapes: GitHub `ghp_`/`gho_`/`ghs_`/`github_pat_`, OpenAI/Anthropic `sk-`/`sk_`/`sk-ant-` including Stripe `sk_live_`/`sk_test_`, JWT `eyJ...` triples, Google `AIza`, GitLab `glpat-`, npm `npm_`, AWS `AKIA`, Telegram bot-token URL segments, and Slack `xoxb-`/`xoxp-` style tokens.
 
 The denylist must be configurable and test-covered. Denied events should produce aggregate counts in health output, not stored content. Health output must make false-positive denials visible enough to tune policies, especially for conservative path globs such as `**/*token*` and `**/*secret*`.
+
+Installer wiring treats local paths as data. Python snippets read paths through environment variables, generated hook commands use shell quoting, and installer startup rejects checkout paths containing metacharacters that would make safe shell or JSON embedding ambiguous.
 
 ## Review And Promotion
 NockBrain may suggest promotion candidates but must not silently rewrite agent behavior.

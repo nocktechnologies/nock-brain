@@ -76,5 +76,7 @@ This file records NockCC items filed for NockBrain v2 so local docs and the boar
   - Source report: `docs/audits/2026-06-11-owasp-audit.md`.
   - Stage 1 scope: F1 private local-store permissions, F2 expanded secret scrub patterns, F9 hook robustness for dash-leading prompts.
   - Stage 1 result: added private store helpers, installer chmod migration, scrub coverage for Stripe/JWT/Google/GitLab/npm token classes, and hook `printf`/`--` handling.
-  - Verification so far: `PYTHONDONTWRITEBYTECODE=1 pytest -q` passes with 88 tests.
-  - Remaining stages: F3/F4/F6, then F5, then F7/F8/F10/F11.
+  - Stage 2 scope: F3 shared scrubber for the default v1 markdown path, F4 normalized denylist matching, F6 installer env-var passing and hook-command quoting.
+  - Stage 2 result: extracted `bin/_scrub.py`, wired `extract-facts.py` through the same scrubber as JSONL ingest, normalized path denylist matching across relative paths, basename-only matches, and case variants, and removed shell-variable interpolation from installer Python snippets.
+  - Verification so far: `PYTHONDONTWRITEBYTECODE=1 pytest -q` passes with 92 tests.
+  - Remaining stages: F5, then F7/F8/F10/F11.
