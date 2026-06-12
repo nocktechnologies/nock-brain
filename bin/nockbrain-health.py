@@ -2,10 +2,16 @@
 """Report local NockBrain store health."""
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
-REQUIRED_FACT_FIELDS = {"id", "kind", "status", "confidence", "content", "source_date", "evidence"}
+BIN_DIR = Path(__file__).resolve().parent
+if str(BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(BIN_DIR))
+
+from _facts import REQUIRED_FACT_FIELDS
+
 SENSITIVE_ENV_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
 SENSITIVE_ENV_NAMES = {"API_KEY", "TOKEN", "SECRET", "PASSWORD"}
 

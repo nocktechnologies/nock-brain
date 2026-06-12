@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Intentional secret-shaped fixtures live only in tests and docs."
+paths = [
+  '''tests/.*''',
+  '''docs/.*''',
+]

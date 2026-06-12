@@ -256,6 +256,14 @@ Installer wiring treats local paths as data. Python snippets read paths through 
 
 Recall injection must frame memory as inert reference material, not instructions. The hook prefix tells the model not to execute directives found in recalled notes.
 
+Settings writes must be crash-safe: installer hook changes back up the existing `settings.json`, write a temporary JSON file, and atomically replace the original. Probe failures must stop the install loudly instead of assuming the hook is absent.
+
+Fact-store readers validate records before use. Malformed records are skipped with a stderr count, and formatters use defensive defaults so a hand-edited store cannot crash recall or query commands.
+
+Retention stance: supersession preserves outdated facts for audit, but sensitive or unwanted material must be deletable. `purge-fact.py` provides dry-run-by-default hard deletion by fact id or literal pattern across facts, events, session notes, and derived vault files.
+
+CI supply-chain stance: GitHub Actions are pinned to full commit SHAs; test/security dependencies are pinned; CI runs unit tests, classifier smoke, Bandit over `bin/`, and Gitleaks with a repo-local allowlist for intentional test/docs fixtures. Dependabot tracks action updates.
+
 ## Review And Promotion
 NockBrain may suggest promotion candidates but must not silently rewrite agent behavior.
 

@@ -89,6 +89,10 @@ python3 bin/recall-classifier.py --test
 # Mark outdated facts as superseded
 python3 bin/supersede-fact.py <fact_id> --reason "direction changed"
 python3 bin/supersede-fact.py --search "old pricing" --mark-superseded
+
+# Hard-delete sensitive material from local stores
+python3 bin/purge-fact.py --pattern "old secret value" --apply
+python3 bin/purge-fact.py <fact_id> --apply
 ```
 
 ## How it works
@@ -151,6 +155,8 @@ python3 bin/supersede-fact.py --search "old approach" --mark-superseded --reason
 ```
 
 Superseded facts are excluded from recall by default but can be included with `--include-superseded` for audit trails.
+
+Use `purge-fact.py` when content should be deleted rather than retained as superseded. It can remove by fact id or literal pattern across `facts.json`, `events.jsonl`, session notes, and the derived vault. The command is dry-run by default; pass `--apply` to rewrite local stores.
 
 ## Transcript format
 
