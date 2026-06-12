@@ -11,6 +11,12 @@ import json
 import sys
 from pathlib import Path
 
+BIN_DIR = Path(__file__).resolve().parent
+if str(BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(BIN_DIR))
+
+from _facts import load_facts
+
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 
 
@@ -21,14 +27,14 @@ def search(facts: list[dict], query: str = "", kind: str = "",
     if not include_superseded:
         results = [f for f in results if f.get("status", "current") != "superseded"]
     if kind:
-        results = [f for f in results if f["kind"] == kind]
+        results = [f for f in results if f.get("kind") == kind]
     if since:
-        results = [f for f in results if f["source_date"] >= since]
+        results = [f for f in results if f.get("source_date", "") >= since]
     if query:
         terms = query.lower().split()
         scored = []
         for f in results:
-            content_lower = f["content"].lower()
+            content_lower = str(f.get("content", "")).lower()
             score = sum(1 for t in terms if t in content_lower)
             if score > 0:
                 scored.append((score, f))
@@ -38,9 +44,9 @@ def search(facts: list[dict], query: str = "", kind: str = "",
 
 
 def format_fact(f: dict) -> str:
-    parts = [f"[{f['source_date']}] [{f['kind'].upper()}]"]
+    parts = [f"[{f.get('source_date', 'unknown')}] [{f.get('kind', 'fact').upper()}]"]
     header = " ".join(parts)
-    return f"{header}\n  {f['content'][:200]}"
+    return f"{header}\n  {str(f.get('content', ''))[:200]}"
 
 
 def main():
@@ -58,7 +64,7 @@ def main():
         print("No facts.json found. Run extract-facts.py first.", file=sys.stderr)
         sys.exit(1)
 
-    facts = json.loads(args.facts.read_text())
+    facts = load_facts(args.facts)
     query_str = " ".join(args.query)
     results = search(facts, query=query_str, kind=args.kind,
                      since=args.since,

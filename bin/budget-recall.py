@@ -17,6 +17,12 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+BIN_DIR = Path(__file__).resolve().parent
+if str(BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(BIN_DIR))
+
+from _facts import RECALL_ITEM_FIELDS, load_facts
+
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 DEFAULT_INSIGHTS = Path.home() / ".nock-brain" / "insights.json"
 CHARS_PER_TOKEN = 4
@@ -84,20 +90,16 @@ def search(facts: list[dict], query: str, include_superseded: bool = False) -> l
 
 
 def format_fact(f: dict) -> str:
-    parts = [f"[{f['source_date']}]", f"[{f['kind'].upper()}]"]
+    parts = [f"[{f.get('source_date', 'unknown')}]", f"[{f.get('kind', 'fact').upper()}]"]
     header = " ".join(parts)
-    content = f["content"][:200]
+    content = str(f.get("content", ""))[:200]
     if f.get("status") == "superseded":
         content = f"[SUPERSEDED] {content}"
     return f"{header}\n{content}"
 
 
 def _load(path: Path) -> list[dict]:
-    if path and path.exists():
-        data = json.loads(path.read_text())
-        if data:
-            return data
-    return []
+    return load_facts(path, required_fields=RECALL_ITEM_FIELDS)
 
 
 def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,

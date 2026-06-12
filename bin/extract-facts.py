@@ -27,6 +27,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
+from _facts import load_facts
 from _scrub import scrub_secrets
 from _store import secure_mkdir, secure_write_json
 
@@ -217,7 +218,7 @@ def main():
 
     existing = []
     if args.output.exists():
-        existing = json.loads(args.output.read_text())
+        existing = load_facts(args.output)
         existing_ids = {f["id"] for f in existing}
         new_facts = [f for f in all_facts if f["id"] not in existing_ids]
         all_facts = existing + new_facts
