@@ -18,6 +18,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+BIN_DIR = Path(__file__).resolve().parent
+if str(BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(BIN_DIR))
+
+from _store import secure_write_text
+
 DEFAULT_PATH_DENYLIST = [
     "agents/*/private/**",
     "*/agents/*/private/**",
@@ -52,8 +58,13 @@ SECRET_PATTERNS = [
     # Common bare token prefixes seen in shell output and tool results.
     re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b"),
     re.compile(r"\bsk_[A-Fa-f0-9]{32,}\b"),
     re.compile(r"\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
+    re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bnpm_[A-Za-z0-9]{36,}\b"),
     re.compile(r"(?<![A-Za-z0-9])[A-Fa-f0-9]{32,}(?![A-Za-z0-9])"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\bxox[abpors]-[A-Za-z0-9-]{20,}\b"),
@@ -367,10 +378,10 @@ def main() -> int:
             total[key] = total.get(key, 0) + value
 
     if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        with args.output.open("w", encoding="utf-8") as handle:
-            for event in all_events:
-                handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        secure_write_text(
+            args.output,
+            "".join(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n" for event in all_events),
+        )
 
     total["events_written"] = len(all_events)
     result = {"events": all_events, "stats": total}

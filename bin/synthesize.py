@@ -28,6 +28,12 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+BIN_DIR = Path(__file__).resolve().parent
+if str(BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(BIN_DIR))
+
+from _store import secure_mkdir, secure_write_json
+
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 DEFAULT_OUTPUT = Path.home() / ".nock-brain" / "insights.json"
 DEFAULT_THRESHOLD = 0.3
@@ -169,8 +175,8 @@ def main():
     kinds = {k.strip() for k in args.kinds.split(",")} if args.kinds else None
     insights = synthesize(facts, args.threshold, args.min_cluster, kinds)
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(insights, indent=2, default=str))
+    secure_mkdir(args.output.parent)
+    secure_write_json(args.output, insights, indent=2, default=str)
 
     print(f"Synthesized {len(insights)} insight(s) from {len(facts)} fact(s).")
     for ins in insights[:10]:

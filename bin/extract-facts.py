@@ -23,6 +23,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+BIN_DIR = Path(__file__).resolve().parent
+if str(BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(BIN_DIR))
+
+from _store import secure_mkdir, secure_write_json
+
 DEFAULT_DIRS = [
     Path.home() / ".memsearch" / "memory",
     Path.home() / ".nock-brain" / "transcripts",
@@ -185,7 +191,7 @@ def main():
         print("Use --dir to specify a directory with .md transcript files.", file=sys.stderr)
         sys.exit(1)
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
+    secure_mkdir(args.output.parent)
 
     all_facts = []
     for md_file in sorted(transcript_dir.glob("*.md")):
@@ -203,7 +209,7 @@ def main():
     else:
         new_facts = all_facts
 
-    args.output.write_text(json.dumps(all_facts, indent=2, default=str))
+    secure_write_json(args.output, all_facts, indent=2, default=str)
 
     by_kind = {}
     for f in all_facts:

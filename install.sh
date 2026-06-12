@@ -11,8 +11,10 @@ FACTS_DIR="${HOME}/.nock-brain"
 echo "nock-brain installer"
 echo "===================="
 
-# Create facts directory
-mkdir -p "$FACTS_DIR"
+# Create and harden facts directory. Existing stores are migrated by dropping
+# group/other access across the local memory tree.
+mkdir -p -m 700 "$FACTS_DIR"
+chmod -R go-rwx "$FACTS_DIR"
 echo "[1/4] Created ${FACTS_DIR}"
 
 # Make scripts executable

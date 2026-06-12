@@ -68,3 +68,13 @@ This file records NockCC items filed for NockBrain v2 so local docs and the boar
   - Required remediation: scrub sensitive `KEY=value` env dumps by key name, extend token-shape coverage for `sk_` and bare 32+ hex values, add local live-value artifact scanning, cap oversized fact content, purge and re-scrub Batch B artifacts for re-verify.
   - Remediation result: PR #6 merged as `c719cb4`; Mira re-verified regenerated artifacts and lifted the broader-ingest gate.
   - Verification: `PYTHONDONTWRITEBYTECODE=1 pytest -q` passes with 82 tests after merge.
+
+## 2026-06-12
+
+- N8054: NockBrain hardening wave - 2026-06-11 OWASP audit findings F1-F11
+  - State: `in_progress`
+  - Source report: `docs/audits/2026-06-11-owasp-audit.md`.
+  - Stage 1 scope: F1 private local-store permissions, F2 expanded secret scrub patterns, F9 hook robustness for dash-leading prompts.
+  - Stage 1 result: added private store helpers, installer chmod migration, scrub coverage for Stripe/JWT/Google/GitLab/npm token classes, and hook `printf`/`--` handling.
+  - Verification so far: `PYTHONDONTWRITEBYTECODE=1 pytest -q` passes with 88 tests.
+  - Remaining stages: F3/F4/F6, then F5, then F7/F8/F10/F11.
