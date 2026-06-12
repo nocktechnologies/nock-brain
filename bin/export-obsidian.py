@@ -6,9 +6,15 @@ The vault is a derived, auditable view. JSON stores remain the source of truth.
 import argparse
 import json
 import re
-import shutil
+import sys
 from pathlib import Path
 from typing import Any
+
+BIN_DIR = Path(__file__).resolve().parent
+if str(BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(BIN_DIR))
+
+from _store import secure_copyfile, secure_mkdir, secure_write_text
 
 
 def load_facts(path: Path) -> list[dict[str, Any]]:
@@ -52,23 +58,23 @@ def fact_note(fact: dict[str, Any]) -> str:
 
 def write_fact_notes(facts: list[dict[str, Any]], vault: Path) -> list[Path]:
     facts_dir = vault / "facts"
-    facts_dir.mkdir(parents=True, exist_ok=True)
+    secure_mkdir(facts_dir)
     written = []
     for fact in facts:
         name = f"{fact.get('source_date', 'undated')}-{slugify(fact.get('id', 'fact'))}.md"
         path = facts_dir / name
-        path.write_text(fact_note(fact), encoding="utf-8")
+        secure_write_text(path, fact_note(fact), encoding="utf-8")
         written.append(path)
     return written
 
 
 def copy_markdown_dir(src: Path | None, dst: Path) -> int:
-    dst.mkdir(parents=True, exist_ok=True)
+    secure_mkdir(dst)
     if not src or not src.exists():
         return 0
     count = 0
     for path in sorted(src.glob("*.md")):
-        shutil.copyfile(path, dst / path.name)
+        secure_copyfile(path, dst / path.name)
         count += 1
     return count
 
@@ -89,7 +95,7 @@ def write_index(vault: Path, fact_count: int, session_count: int, review_count: 
         "- [[review]]",
         "",
     ])
-    (vault / "index.md").write_text(text, encoding="utf-8")
+    secure_write_text(vault / "index.md", text, encoding="utf-8")
 
 
 def export_vault(
@@ -98,7 +104,7 @@ def export_vault(
     sessions: Path | None = None,
     review: Path | None = None,
 ) -> dict[str, int]:
-    vault.mkdir(parents=True, exist_ok=True)
+    secure_mkdir(vault)
     fact_paths = write_fact_notes(facts, vault)
     session_count = copy_markdown_dir(sessions, vault / "sessions")
     review_count = copy_markdown_dir(review, vault / "review")

@@ -17,7 +17,7 @@ BRAIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLASSIFIER="${BRAIN_ROOT}/bin/recall-classifier.py"
 BUDGET_RECALL="${BRAIN_ROOT}/bin/budget-recall.py"
 
-PROMPT=$(echo "$INPUT" | python3 -c "
+PROMPT=$(printf '%s' "$INPUT" | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -42,7 +42,7 @@ if ! [[ -f "$FACTS_FILE" ]]; then
     exit 0
 fi
 
-RESULT=$(echo "$PROMPT" | python3 "$CLASSIFIER" 2>/dev/null)
+RESULT=$(printf '%s' "$PROMPT" | python3 "$CLASSIFIER" 2>/dev/null)
 EXIT_CODE=$?
 
 if [[ $EXIT_CODE -ne 0 ]]; then
@@ -50,7 +50,7 @@ if [[ $EXIT_CODE -ne 0 ]]; then
     exit 0
 fi
 
-RECALL=$(python3 "$BUDGET_RECALL" --budget 800 --facts "$FACTS_FILE" "$PROMPT" 2>/dev/null)
+RECALL=$(python3 "$BUDGET_RECALL" --budget 800 --facts "$FACTS_FILE" -- "$PROMPT" 2>/dev/null)
 if [[ -z "$RECALL" ]] || [[ "$RECALL" == "No matching facts found." ]]; then
     echo '{}'
     exit 0

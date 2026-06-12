@@ -12,6 +12,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+BIN_DIR = Path(__file__).resolve().parent
+if str(BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(BIN_DIR))
+
+from _store import secure_write_json
+
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 
 
@@ -61,7 +67,7 @@ def main():
                     f["superseded_by"] = args.by
                 if args.reason:
                     f["supersession_reason"] = args.reason
-            args.facts.write_text(json.dumps(facts, indent=2, default=str))
+            secure_write_json(args.facts, facts, indent=2, default=str)
             print(f"Marked {len(results)} facts as superseded.")
         return
 
@@ -81,7 +87,7 @@ def main():
     if args.reason:
         fact["supersession_reason"] = args.reason
 
-    args.facts.write_text(json.dumps(facts, indent=2, default=str))
+    secure_write_json(args.facts, facts, indent=2, default=str)
     print(f"Fact {args.fact_id} marked as superseded.")
     print(f"  Was: [{fact['kind']}] {fact['content'][:120]}")
 
