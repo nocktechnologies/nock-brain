@@ -27,6 +27,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
+from _scrub import scrub_secrets
 from _store import secure_mkdir, secure_write_json
 
 DEFAULT_DIRS = [
@@ -128,6 +129,7 @@ def parse_file(filepath: Path, since_date: str | None = None) -> list[dict]:
             current_anchor = line.strip()
         elif line.startswith("- "):
             bullet = line[2:].strip()
+            bullet, _ = scrub_secrets(bullet)
             result = classify_bullet(bullet)
             if result:
                 kind, confidence = result

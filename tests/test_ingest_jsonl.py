@@ -478,3 +478,42 @@ def test_credentials_key_and_pem_paths_are_denied(ingest_jsonl, tmp_path):
 
     assert result["events"] == []
     assert result["stats"]["denied_paths"] == 3
+
+
+def test_stage2_path_denylist_matches_relative_casefolded_and_basename_paths(ingest_jsonl, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    write_jsonl(transcript, [
+        {
+            "type": "assistant",
+            "sessionId": "s1",
+            "timestamp": "2026-06-11T01:00:00Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_dotenv",
+                        "name": "Bash",
+                        "input": {"command": "cat .env"},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_upper_token",
+                        "name": "Read",
+                        "input": {"file_path": "logs/MYTOKEN.txt"},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_basename_pem",
+                        "name": "Read",
+                        "input": {"file_path": "client.PEM"},
+                    },
+                ],
+            },
+        }
+    ])
+
+    result = ingest_jsonl.ingest_file(transcript)
+
+    assert result["events"] == []
+    assert result["stats"]["denied_paths"] == 3

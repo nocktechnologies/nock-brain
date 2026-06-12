@@ -170,3 +170,24 @@ def test_memory_hook_uses_printf_and_arg_separator():
     assert 'printf \'%s\' "$INPUT"' in hook
     assert 'printf \'%s\' "$PROMPT"' in hook
     assert '-- "$PROMPT"' in hook
+
+
+def test_stage2_secret_scrubber_is_shared_between_v1_and_v2():
+    assert (REPO / "bin" / "_scrub.py").exists()
+    ingest = (REPO / "bin" / "ingest-jsonl.py").read_text(encoding="utf-8")
+    extract = (REPO / "bin" / "extract-facts.py").read_text(encoding="utf-8")
+
+    assert "from _scrub import scrub_secrets" in ingest
+    assert "from _scrub import scrub_secrets" in extract
+    assert "SECRET_PATTERNS = [" not in ingest
+
+
+def test_stage2_installer_uses_env_passing_and_quoted_hook_command():
+    installer = (REPO / "install.sh").read_text(encoding="utf-8")
+
+    assert "with open('$SETTINGS_FILE')" not in installer
+    assert "'command': 'bash $BRAIN_DIR/hooks/memory-inject.sh'" not in installer
+    assert 'os.environ["SETTINGS_FILE"]' in installer
+    assert 'os.environ["BRAIN_DIR"]' in installer
+    assert "shlex.quote" in installer
+    assert "Unsafe nock-brain path" in installer
