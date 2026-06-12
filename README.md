@@ -103,6 +103,8 @@ The ingest path has three privacy fences:
 2. Private tool or endpoint payloads, such as diary/private NockCC calls, are dropped before event persistence.
 3. Secret-looking strings in surviving content are replaced with `[REDACTED_SECRET]`. This includes value-shape matches and `KEY=value` env dumps where the key ends in `_API_KEY`, `_TOKEN`, `_SECRET`, or `_PASSWORD`.
 
+Generated local stores and derived artifacts are written with private permissions: directories use `0700` and files use `0600`. The installer also migrates an existing `~/.nock-brain` tree by removing group/other access.
+
 ### Session refinement
 
 `refine-sessions.py` consumes sanitized event JSONL, reuses the same classification rules as markdown extraction, writes v1-compatible `facts.json`, and emits markdown session notes with evidence anchors. Oversized fact content is capped at 1,500 characters with a `session_anchor` drill-back pointer so raw tool output cannot be amplified into review or vault artifacts. The output can be used immediately by `budget-recall.py`.

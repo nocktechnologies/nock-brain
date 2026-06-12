@@ -3,8 +3,15 @@
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+BIN_DIR = Path(__file__).resolve().parent
+if str(BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(BIN_DIR))
+
+from _store import secure_mkdir, secure_write_text
 
 STOPWORDS = {
     "about", "after", "also", "code", "fact", "fixed", "found", "from", "into",
@@ -85,8 +92,8 @@ def run(argv: list[str] | None = None) -> int:
         return 1
 
     graph = graph_from_facts(load_facts(args.facts))
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(graph, indent=2, ensure_ascii=False), encoding="utf-8")
+    secure_mkdir(args.output.parent)
+    secure_write_text(args.output, json.dumps(graph, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Wrote graph with {len(graph['nodes'])} node(s) and {len(graph['edges'])} edge(s)")
     return 0
 
