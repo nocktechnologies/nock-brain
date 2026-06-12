@@ -60,6 +60,21 @@ def test_parse_file_extracts_and_skips(extract_facts, tmp_path):
     assert all(f["source_date"] == "2026-06-01" for f in facts)
 
 
+def test_parse_file_scrubs_secret_bullets_on_v1_path(extract_facts, tmp_path):
+    md = tmp_path / "2026-06-01.md"
+    secret = "sk_live_" + "abcdefghijklmnopqrstuvwxyz123456"
+    md.write_text(
+        "## Session 10:00\n"
+        f"- [DECISION] Kevin rotated leaked token {secret}\n"
+    )
+
+    facts = extract_facts.parse_file(md)
+
+    assert len(facts) == 1
+    assert secret not in facts[0]["content"]
+    assert "[REDACTED_SECRET]" in facts[0]["content"]
+
+
 def test_parse_file_respects_since(extract_facts, tmp_path):
     md = tmp_path / "2026-05-01.md"
     md.write_text("## Session 10:00\n- [DECISION] old decision\n")
