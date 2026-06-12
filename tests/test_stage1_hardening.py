@@ -192,3 +192,35 @@ def test_stage2_installer_uses_env_passing_and_quoted_hook_command():
     assert 'os.environ["BRAIN_DIR"]' in installer
     assert "shlex.quote" in installer
     assert "Unsafe nock-brain path" in installer
+
+
+def test_stage4_installer_uses_atomic_settings_write_and_backup():
+    installer = (REPO / "install.sh").read_text(encoding="utf-8")
+
+    assert ".bak." in installer
+    assert "os.replace" in installer
+    assert '2>/dev/null || echo ""' not in installer
+
+
+def test_stage4_installer_fails_loudly_on_malformed_settings(tmp_path):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    settings = claude_dir / "settings.json"
+    settings.write_text("{bad json", encoding="utf-8")
+
+    touched_scripts = list((REPO / "bin").glob("*.py")) + list((REPO / "hooks").glob("*.sh"))
+    original_modes = {path: mode(path) for path in touched_scripts}
+    try:
+        result = subprocess.run(
+            ["bash", str(REPO / "install.sh")],
+            cwd=REPO,
+            text=True,
+            capture_output=True,
+            env={**os.environ, "HOME": str(tmp_path), "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+    finally:
+        for path, original_mode in original_modes.items():
+            path.chmod(original_mode)
+
+    assert result.returncode != 0
+    assert settings.read_text(encoding="utf-8") == "{bad json"

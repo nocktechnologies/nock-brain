@@ -80,5 +80,7 @@ This file records NockCC items filed for NockBrain v2 so local docs and the boar
   - Stage 2 result: extracted `bin/_scrub.py`, wired `extract-facts.py` through the same scrubber as JSONL ingest, normalized path denylist matching across relative paths, basename-only matches, and case variants, and removed shell-variable interpolation from installer Python snippets.
   - Stage 3 scope: F5 actor gate for authority facts and inert memory-inject framing.
   - Stage 3 result: `decision`/`directive`/`correction` facts from v2 events now require `actor == "user"`, legacy markdown authority facts require an explicit user/Kevin/founder cue, tool-result facts are confidence-capped, and recalled memory is framed as reference material rather than instructions.
-  - Verification so far: `PYTHONDONTWRITEBYTECODE=1 pytest -q` passes with 94 tests.
-  - Remaining stages: F7/F8/F10/F11.
+  - Stage 4 scope: F7 atomic settings writes/backups, F8 fact-store schema validation, F10 CI supply-chain hardening, F11 purge/retention tooling.
+  - Stage 4 result: installer settings updates now fail loudly on malformed JSON, write backups, and use atomic replace; fact readers skip malformed records with stderr counts; CI pins actions/deps and runs Bandit/Gitleaks with Dependabot for actions; `purge-fact.py` hard-deletes by id/pattern across facts, events, notes, and vault files.
+  - Verification so far: `PYTHONDONTWRITEBYTECODE=1 pytest -q` passes with 100 tests.
+  - Remaining stages: none.

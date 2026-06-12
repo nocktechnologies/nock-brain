@@ -7,7 +7,6 @@ Usage:
     python3 supersede-fact.py --list-superseded
 """
 import argparse
-import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +15,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
+from _facts import load_facts
 from _store import secure_write_json
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
@@ -36,29 +36,29 @@ def main():
         print("No facts.json found.", file=sys.stderr)
         sys.exit(1)
 
-    facts = json.loads(args.facts.read_text())
+    facts = load_facts(args.facts)
 
     if args.list_superseded:
         superseded = [f for f in facts if f.get("status") == "superseded"]
         print(f"{len(superseded)} superseded facts:")
         for f in superseded:
             by = f.get("superseded_by", "?")
-            print(f"  {f['id']} [{f['kind']}] superseded by {by}")
-            print(f"    {f['content'][:120]}")
+            print(f"  {f.get('id', '')} [{f.get('kind', 'fact')}] superseded by {by}")
+            print(f"    {str(f.get('content', ''))[:120]}")
         return
 
     if args.search:
         terms = args.search.lower().split()
         results = [f for f in facts
                    if f.get("status") != "superseded"
-                   and all(t in f["content"].lower() for t in terms)]
+                   and all(t in str(f.get("content", "")).lower() for t in terms)]
         if not results:
             print("No matching current facts found.")
             return
         print(f"{len(results)} matching current facts:")
         for f in results:
-            print(f"  {f['id']} [{f['source_date']}] [{f['kind']}]")
-            print(f"    {f['content'][:150]}\n")
+            print(f"  {f.get('id', '')} [{f.get('source_date', 'unknown')}] [{f.get('kind', 'fact')}]")
+            print(f"    {str(f.get('content', ''))[:150]}\n")
         if args.mark_superseded:
             for f in results:
                 f["status"] = "superseded"
@@ -75,7 +75,7 @@ def main():
         parser.print_help()
         return
 
-    fact = next((f for f in facts if f["id"] == args.fact_id), None)
+    fact = next((f for f in facts if f.get("id") == args.fact_id), None)
     if not fact:
         print(f"Fact {args.fact_id} not found.", file=sys.stderr)
         sys.exit(1)
@@ -89,7 +89,7 @@ def main():
 
     secure_write_json(args.facts, facts, indent=2, default=str)
     print(f"Fact {args.fact_id} marked as superseded.")
-    print(f"  Was: [{fact['kind']}] {fact['content'][:120]}")
+    print(f"  Was: [{fact.get('kind', 'fact')}] {str(fact.get('content', ''))[:120]}")
 
 
 if __name__ == "__main__":
