@@ -25,6 +25,7 @@ if str(BIN_DIR) not in sys.path:
 from _store import secure_mkdir, secure_write_text
 
 MAX_FACT_CONTENT_CHARS = 1500
+TOOL_RESULT_CONFIDENCE_CAP = 0.55
 
 
 def load_extract_facts():
@@ -90,6 +91,10 @@ def fact_from_event(event: dict[str, Any], extract_facts=None) -> dict[str, Any]
         return None
 
     kind, confidence = result
+    if not extract_facts.authority_fact_allowed(kind, content, actor=event.get("actor", "")):
+        return None
+    if event.get("surface") == "tool_result.content":
+        confidence = min(confidence, TOOL_RESULT_CONFIDENCE_CAP)
     source_date = event_source_date(event)
     created_at = datetime.now(timezone.utc).isoformat()
     metadata = extract_facts.extract_metadata(content)
