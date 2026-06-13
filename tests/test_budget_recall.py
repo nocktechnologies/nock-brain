@@ -1,6 +1,13 @@
 """Tests for budget-aware recall — ranking, the confidence/superseded filters,
-and the token-budget truncation that keeps recall from flooding the context."""
+the per-kind recency decay + supersession penalty (N8069), and the token-budget
+truncation that keeps recall from flooding the context."""
 import json
+from datetime import datetime
+
+
+# A fixed reference clock so the recency-decay tests are deterministic and don't
+# drift with the wall clock.
+NOW = datetime(2026, 6, 13)
 
 
 def fact(content, confidence=0.9, status="current", kind="decision", source_date="2026-06-01"):
@@ -133,3 +140,103 @@ def test_recall_works_with_insights_but_no_facts(budget_recall, tmp_path):
     inf.write_text(json.dumps([insight]))
     out = budget_recall.budget_recall("postgres", tmp_path / "nofacts.json", insights_file=inf)
     assert "Recurring decision" in out
+
+
+# --- N8069: recency- and supersession-aware ranking ------------------------
+
+def test_recency_newer_fact_ranks_higher(budget_recall):
+    # Two facts identical except source_date. The newer one must rank first
+    # once recency decay applies — this is the core audit fix (a stale fact
+    # was outranking a current one on identical term match).
+    old = fact("pricing was locked at the command tier", source_date="2026-05-01")
+    new = fact("pricing was locked at the command tier", source_date="2026-06-12")
+    results = budget_recall.search([old, new], "pricing locked", now=NOW)
+    assert len(results) == 2
+    assert results[0]["source_date"] == "2026-06-12", "newer fact should rank first"
+
+
+def test_recency_per_kind_half_life_protects_durable_kinds(budget_recall):
+    # A durable-kind (decision) old fact must NOT be unfairly decayed below a
+    # fast-decaying-kind (status) old fact of the same age and term match.
+    # Same content, same age, same confidence — only the kind differs.
+    old_decision = fact("the deployment region is us-east", kind="decision",
+                         source_date="2026-03-01")
+    old_status = fact("the deployment region is us-east", kind="status",
+                      source_date="2026-03-01")
+    results = budget_recall.search([old_status, old_decision], "deployment region", now=NOW)
+    assert len(results) == 2
+    # The durable decision outranks the stale status update at equal age.
+    assert results[0]["kind"] == "decision", (
+        f"durable kind should survive decay better, got {results[0]['kind']!r} first"
+    )
+    # And the per-kind factors are actually different (not both clamped/equal).
+    rf_decision = budget_recall.recency_factor(old_decision, NOW)
+    rf_status = budget_recall.recency_factor(old_status, NOW)
+    assert rf_decision > rf_status, (
+        f"decision half-life should decay slower: {rf_decision} vs {rf_status}"
+    )
+
+
+def test_recency_missing_source_date_is_neutral_no_crash(budget_recall):
+    # No source_date at all, and the 'unknown' sentinel — both get a neutral
+    # 1.0 recency factor and must not crash. Backward compat for pre-N8069 facts.
+    no_date = {"content": "pricing locked", "confidence": 0.9,
+               "status": "current", "kind": "decision"}  # no source_date key
+    unknown_date = fact("pricing locked", source_date="unknown")
+    assert budget_recall.recency_factor(no_date, NOW) == 1.0
+    assert budget_recall.recency_factor(unknown_date, NOW) == 1.0
+    # search() must tolerate both without raising.
+    results = budget_recall.search([no_date, unknown_date], "pricing locked", now=NOW)
+    assert len(results) == 2
+
+
+def test_recency_factor_decays_with_age(budget_recall):
+    # Same-day / future-dated facts are fully fresh (1.0); older facts decay
+    # monotonically toward (but never below) the floor.
+    fresh = fact("x", kind="status", source_date="2026-06-13")
+    one_half_life = fact("x", kind="status", source_date="2026-05-30")  # 14d = 1 half-life
+    older = fact("x", kind="status", source_date="2026-05-01")
+    assert budget_recall.recency_factor(fresh, NOW) == 1.0
+    assert abs(budget_recall.recency_factor(one_half_life, NOW) - 0.5) < 0.01
+    assert budget_recall.recency_factor(older, NOW) < budget_recall.recency_factor(one_half_life, NOW)
+    assert budget_recall.recency_factor(older, NOW) >= budget_recall.MIN_RECENCY_FACTOR
+
+
+def test_now_injectable_via_env(budget_recall, monkeypatch):
+    # The scoring path must read an injected 'now' (env), never a bare
+    # datetime.now(). With NOW pinned to the fact's own date, no decay applies.
+    monkeypatch.setenv("NOCK_BRAIN_NOW", "2026-05-01")
+    f = fact("pricing locked", kind="status", source_date="2026-05-01")
+    # now=None -> falls back to env -> same day -> factor 1.0
+    results = budget_recall.search([f], "pricing locked")
+    assert len(results) == 1
+    assert budget_recall._resolve_now(None) == datetime(2026, 5, 1)
+
+
+def test_supersession_factor_is_noop_for_plain_current_facts(budget_recall):
+    # In the live schema supersession is a hard filter, so a normal current
+    # fact gets the no-op 1.0. (Documented hook — see supersession_factor.)
+    assert budget_recall.supersession_factor(fact("anything")) == 1.0
+
+
+def test_supersession_soft_signal_penalizes_but_keeps_rankable(budget_recall):
+    # If a soft signal ever appears (deprecated flag, or a still-current fact
+    # that points at a successor), it is down-weighted but still returned.
+    plain = fact("the api endpoint is /v2/recall")
+    deprecated = {**fact("the api endpoint is /v1/recall"), "deprecated": True}
+    results = budget_recall.search([deprecated, plain], "api endpoint recall", now=NOW)
+    assert len(results) == 2, "soft-deprecated fact is penalized, not filtered out"
+    assert results[0]["content"].endswith("/v2/recall"), "non-deprecated fact wins"
+    assert budget_recall.supersession_factor(deprecated) < 1.0
+
+
+def test_recency_does_not_break_existing_uniform_date_ordering(budget_recall):
+    # Regression guard: when all candidates share a source_date, recency is a
+    # constant multiplier and BM25 relevance ordering is preserved.
+    facts = [
+        fact("pricing was set to 49 dollars for the command tier"),
+        fact("the pricing plan and pricing tiers were locked"),
+        fact("an unrelated note about the weather"),
+    ]
+    results = budget_recall.search(facts, "pricing plan", now=NOW)
+    assert results[0]["content"].startswith("the pricing plan")

@@ -12,9 +12,11 @@ Usage:
 import argparse
 import json
 import math
+import os
 import re
 import sys
 from collections import Counter
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 BIN_DIR = Path(__file__).resolve().parent
@@ -35,6 +37,37 @@ MIN_CONFIDENCE = 0.7
 BM25_K1 = 1.5
 BM25_B = 0.75
 
+# --- Recency decay (N8069) -------------------------------------------------
+# A fact's score is multiplied by an exponential half-life decay on its
+# source_date so a stale fact no longer outranks a current one purely on term
+# match. Half-lives are PER-KIND: a "status" or "dispatch" line goes stale in
+# days, while a "decision" or "directive" stays load-bearing for months. Tune
+# these by editing the dict — they are the only knob for the decay curve.
+#
+# half-life H means score is halved every H days of age:
+#     recency_factor = 0.5 ** (age_days / H)
+# A very large H (DURABLE_HALF_LIFE) is effectively "never decays".
+RECENCY_HALF_LIFE_DAYS: dict[str, float] = {
+    # Fast-decaying / point-in-time kinds — yesterday's status is noise today.
+    "status": 14.0,
+    "dispatch": 14.0,
+    "feed": 14.0,
+    "merge": 30.0,
+    "bug": 45.0,
+    # Durable kinds — decisions/directives/corrections/identity stay relevant.
+    "decision": 180.0,
+    "directive": 180.0,
+    "correction": 180.0,
+    "architecture": 180.0,
+    "insight": 180.0,
+    "identity": 100000.0,  # ~never decays
+}
+# Used for any kind not in the table above (and as a safe middle ground).
+DEFAULT_HALF_LIFE_DAYS = 60.0
+# Floor so a very old fact never decays fully to zero (it would be unrankable
+# even when it is the only term match). Keeps recency a tie-breaker, not a wall.
+MIN_RECENCY_FACTOR = 0.01
+
 
 def estimate_tokens(text: str) -> int:
     return len(text) // CHARS_PER_TOKEN
@@ -44,11 +77,96 @@ def _tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
-def search(facts: list[dict], query: str, include_superseded: bool = False) -> list[dict]:
+def _resolve_now(now: datetime | None = None) -> datetime:
+    """Resolve the reference 'now' for recency decay. Injectable for
+    deterministic tests: explicit arg > NOCK_BRAIN_NOW env (ISO date/datetime)
+    > wall clock. Never a bare datetime.now() buried in the scoring path."""
+    if now is not None:
+        return now
+    env = os.environ.get("NOCK_BRAIN_NOW")
+    if env:
+        parsed = _parse_date(env)
+        if parsed is not None:
+            return parsed
+    return datetime.now(timezone.utc)
+
+
+def _parse_date(value) -> datetime | None:
+    """Parse a source_date into a datetime, or None if absent/unparseable.
+    Accepts 'YYYY-MM-DD', full ISO timestamps, and date objects. Returns None
+    for the sentinel 'unknown' or anything we cannot read — callers treat None
+    as 'no recency signal' (neutral factor), never as a crash."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day)
+    text = str(value).strip()
+    if not text or text.lower() == "unknown":
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            return datetime.strptime(text[:10], "%Y-%m-%d")
+        except ValueError:
+            return None
+
+
+def recency_factor(fact: dict, now: datetime) -> float:
+    """Exponential half-life decay on source_date, with a per-kind half-life.
+    Returns a neutral 1.0 for facts with no parseable source_date (backward
+    compatible — pre-N8069 facts and 'unknown' dates are never penalized)."""
+    parsed = _parse_date(fact.get("source_date"))
+    if parsed is None:
+        return 1.0
+    # Compare in a tz-consistent way: if one side is naive, drop tz from both.
+    ref = now
+    if parsed.tzinfo is None and ref.tzinfo is not None:
+        ref = ref.replace(tzinfo=None)
+    elif parsed.tzinfo is not None and ref.tzinfo is None:
+        parsed = parsed.replace(tzinfo=None)
+    age_days = (ref - parsed).total_seconds() / 86400.0
+    if age_days <= 0:
+        return 1.0  # future-dated or same-day facts are fully fresh
+    half_life = RECENCY_HALF_LIFE_DAYS.get(
+        str(fact.get("kind", "")).lower(), DEFAULT_HALF_LIFE_DAYS
+    )
+    if half_life <= 0:
+        return 1.0
+    return max(MIN_RECENCY_FACTOR, 0.5 ** (age_days / half_life))
+
+
+def supersession_factor(fact: dict) -> float:
+    """Soft penalty for facts that are deprecated-but-not-hard-filtered.
+
+    In the current schema, supersession is expressed ONLY via
+    `status == "superseded"`, which `search()` removes outright (a hard
+    filter) before scoring — so there is no soft-deprecated tier to penalize
+    and this returns 1.0 (a documented no-op hook). If a future fact ever
+    carries a soft signal (`deprecated: true`, or a `supersedes`/`superseded_by`
+    pointer while still status=current), it is down-weighted but kept rankable.
+    We deliberately do NOT invent fields the store does not have."""
+    if fact.get("deprecated") is True:
+        return 0.4
+    # A still-current fact that nonetheless announces it is being superseded by
+    # something newer: keep it, but let the newer fact win ties.
+    if fact.get("status", "current") == "current" and fact.get("superseded_by"):
+        return 0.6
+    return 1.0
+
+
+def search(facts: list[dict], query: str, include_superseded: bool = False,
+           now: datetime | None = None) -> list[dict]:
     """Rank facts against the query with Okapi BM25 — proper token matching with
     IDF (rarer query terms count for more) and document-length normalization.
     This replaces a naive substring-overlap count, which both over-matched
-    (e.g. "cat" inside "category") and treated every term as equally important."""
+    (e.g. "cat" inside "category") and treated every term as equally important.
+
+    The BM25 relevance is then multiplied by confidence, a per-kind recency
+    decay (N8069: stale status facts no longer beat current ones), and a soft
+    supersession penalty. `now` is injectable for deterministic tests."""
     if not include_superseded:
         facts = [f for f in facts if f.get("status", "current") != "superseded"]
     facts = [f for f in facts if f.get("confidence", 0) >= MIN_CONFIDENCE]
@@ -58,6 +176,8 @@ def search(facts: list[dict], query: str, include_superseded: bool = False) -> l
     query_terms = set(_tokenize(query))
     if not query_terms:
         return []
+
+    ref_now = _resolve_now(now)
 
     # Corpus statistics for BM25, computed over the candidate set.
     docs = [_tokenize(f.get("content", "")) for f in facts]
@@ -72,7 +192,7 @@ def search(facts: list[dict], query: str, include_superseded: bool = False) -> l
     for f, doc in zip(facts, docs):
         tf = Counter(doc)
         dl = len(doc)
-        score = 0.0
+        bm25 = 0.0
         for term in query_terms:
             df = doc_freq.get(term, 0)
             if df == 0:
@@ -81,7 +201,15 @@ def search(facts: list[dict], query: str, include_superseded: bool = False) -> l
             freq = tf[term]
             denom = freq + BM25_K1 * (1 - BM25_B + BM25_B * (dl / avgdl if avgdl else 0))
             if denom > 0:
-                score += idf * (freq * (BM25_K1 + 1)) / denom
+                bm25 += idf * (freq * (BM25_K1 + 1)) / denom
+        if bm25 <= 0:
+            continue
+        score = (
+            bm25
+            * f.get("confidence", 0)
+            * recency_factor(f, ref_now)
+            * supersession_factor(f)
+        )
         if score > 0:
             results.append((score, f))
 
@@ -103,9 +231,10 @@ def _load(path: Path) -> list[dict]:
 
 
 def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
-                  include_superseded: bool = False, insights_file: Path | None = None) -> str:
-    fact_results = search(_load(facts_file), query, include_superseded) if facts_file else []
-    insight_results = search(_load(insights_file), query, include_superseded) if insights_file else []
+                  include_superseded: bool = False, insights_file: Path | None = None,
+                  now: datetime | None = None) -> str:
+    fact_results = search(_load(facts_file), query, include_superseded, now=now) if facts_file else []
+    insight_results = search(_load(insights_file), query, include_superseded, now=now) if insights_file else []
 
     # Consolidated insights lead; drop the raw facts an insight already covers so
     # recall shows the synthesis, not the synthesis plus its own sources.
