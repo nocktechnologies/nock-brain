@@ -29,7 +29,7 @@ Usage:
 import argparse
 import json
 import shutil
-import subprocess
+import subprocess  # nosec B404 - only invokes trusted sibling bin/ CLIs (no shell, no untrusted input)
 import sys
 import tempfile
 import time
@@ -65,8 +65,10 @@ def _run_cli(script: str, args: list[str]) -> subprocess.CompletedProcess:
     Raises RebuildError on non-zero exit with the captured stderr/stdout so the
     operator sees exactly which stage failed and why.
     """
+    # cmd is [sys.executable, a fixed bin/ script path, internal args] — no shell,
+    # no user/untrusted input, so the B603 subprocess warning is a reviewed non-issue.
     cmd = [sys.executable, str(BIN_DIR / script), *args]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # nosec B603
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
         raise RebuildError(f"{script} failed (exit {proc.returncode}): {detail}")
