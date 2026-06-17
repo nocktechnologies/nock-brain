@@ -230,11 +230,51 @@ def _load(path: Path) -> list[dict]:
     return load_facts(path, required_fields=RECALL_ITEM_FIELDS)
 
 
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _env_truthy(name: str) -> bool:
+    """A flag env var is truthy iff its (case-insensitive, stripped) value is in
+    {1,true,yes,on}; absent/anything-else is off. Mirrors the gate the design
+    requires for NOCKBRAIN_GRAPH_RECALL."""
+    return os.environ.get(name, "").strip().lower() in _TRUTHY
+
+
+def _maybe_graph_expand(all_facts: list[dict], seeds: list[dict], query: str,
+                        include_superseded: bool, now: datetime,
+                        graph_expand: bool) -> list[dict]:
+    """Gate for graph-augmented recall. When `graph_expand` is False this is a
+    PURE pass-through: it returns the exact same `seeds` list object, before any
+    graph import/build/allocation runs — so the off-path is byte-identical to
+    the flat path. When True, it delegates to _graph_recall.expand(), which
+    appends graph neighbors (weighted strictly below the weakest seed) using the
+    SAME recency/supersession/confidence gates as search()."""
+    if not graph_expand:
+        return seeds  # additive guarantee: identical object, zero graph work
+    if not seeds:
+        return seeds
+    import _graph_recall  # local import: never loaded on the off-path
+    return _graph_recall.expand(
+        all_facts, seeds, include_superseded, now,
+        recency_factor=recency_factor,
+        supersession_factor=supersession_factor,
+        min_confidence=MIN_CONFIDENCE,
+    )
+
+
 def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
                   include_superseded: bool = False, insights_file: Path | None = None,
-                  now: datetime | None = None) -> str:
-    fact_results = search(_load(facts_file), query, include_superseded, now=now) if facts_file else []
-    insight_results = search(_load(insights_file), query, include_superseded, now=now) if insights_file else []
+                  now: datetime | None = None, graph_expand: bool = False) -> str:
+    ref_now = _resolve_now(now)
+    if facts_file:
+        all_facts = _load(facts_file)
+        fact_results = search(all_facts, query, include_superseded, now=ref_now)
+        fact_results = _maybe_graph_expand(
+            all_facts, fact_results, query, include_superseded, ref_now, graph_expand
+        )
+    else:
+        fact_results = []
+    insight_results = search(_load(insights_file), query, include_superseded, now=ref_now) if insights_file else []
 
     # Consolidated insights lead; drop the raw facts an insight already covers so
     # recall shows the synthesis, not the synthesis plus its own sources.
@@ -273,12 +313,16 @@ def main():
     parser.add_argument("--insights", type=Path, default=DEFAULT_INSIGHTS,
                         help="Synthesized-insight store (surfaced first); optional")
     parser.add_argument("--include-superseded", action="store_true")
+    parser.add_argument("--graph", action="store_true",
+                        help="Enable graph-augmented recall (default off; also "
+                             "via NOCKBRAIN_GRAPH_RECALL=1)")
     args = parser.parse_args()
 
     budget = min(args.budget, MAX_BUDGET)
     query_str = " ".join(args.query)
+    graph_expand = args.graph or _env_truthy("NOCKBRAIN_GRAPH_RECALL")
     result = budget_recall(query_str, args.facts, budget, args.include_superseded,
-                           insights_file=args.insights)
+                           insights_file=args.insights, graph_expand=graph_expand)
 
     if result:
         print(result)
