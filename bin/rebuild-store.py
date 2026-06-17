@@ -27,6 +27,7 @@ Usage:
     python3 bin/rebuild-store.py --print-schedule     # emit example launchd plist
 """
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess  # nosec B404 - only invokes trusted sibling bin/ CLIs (no shell, no untrusted input)
@@ -123,18 +124,74 @@ def stage_paths(staging_dir: Path) -> dict[str, Path]:
     }
 
 
+# --- merge: preserve live history across a windowed rebuild (N8142) ---------
+
+def _facts_as_list(data: Any) -> list[dict]:
+    """Return the fact list from a facts payload, whether it is a bare list or a
+    ``{"facts": [...]}`` wrapper. Unknown shapes yield an empty list."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        facts = data.get("facts")
+        if isinstance(facts, list):
+            return facts
+    return []
+
+
+def _fact_key(fact: dict) -> tuple[str, str]:
+    """Stable dedup key: the fact id when present, else a hash of its content."""
+    fid = fact.get("id")
+    if fid:
+        return ("id", str(fid))
+    content = fact.get("content") or ""
+    return ("content", hashlib.sha256(content.encode("utf-8")).hexdigest())
+
+
+def merge_facts(live: list[dict], recent: list[dict]) -> list[dict]:
+    """Union ``live`` + ``recent`` facts, deduped by id (fallback: content hash).
+
+    ``recent`` wins on key collision -- a re-extracted fact supersedes its older
+    copy. Every live fact is preserved unless a recent fact with the same key
+    replaces it, so the result is ALWAYS a superset of the live store by key.
+    This is what lets a windowed rebuild ADD recent facts without amnesia-ing the
+    migrated history the window would never re-extract.
+    """
+    merged: dict[tuple[str, str], dict] = {}
+    for fact in live:
+        if isinstance(fact, dict):
+            merged[_fact_key(fact)] = fact
+    for fact in recent:
+        if isinstance(fact, dict):
+            merged[_fact_key(fact)] = fact  # recent wins on collision
+    return list(merged.values())
+
+
+def _count_facts(path: Path) -> int:
+    """Count facts in a store file (0 if absent/unreadable)."""
+    try:
+        return len(_facts_as_list(json.loads(Path(path).read_text(encoding="utf-8"))))
+    except (OSError, ValueError):
+        return 0
+
+
 def build_staging(
     staging_dir: Path,
     transcripts: list[Path],
     *,
     key_path: Path,
     pub_path: Path,
+    merge_from: Path | None = None,
 ) -> dict[str, Any]:
-    """Run ingest -> refine -> review -> health into ``staging_dir``.
+    """Run ingest -> refine -> [merge] -> review -> health into ``staging_dir``.
 
     Returns a dict with the health report and counts. Does NOT sign/export here;
     the caller signs + exports only after the health gate passes so a failing
     gate does no wasted (or misleading) signing work.
+
+    When ``merge_from`` points at an existing live ``facts.json``, its facts are
+    merged into the freshly-refined staging facts BEFORE review/health/sign so
+    the windowed rebuild preserves migrated history instead of dropping it on the
+    full-replace promote (N8142).
     """
     secure_mkdir(staging_dir)
     sp = stage_paths(staging_dir)
@@ -159,6 +216,31 @@ def build_staging(
             "--notes-dir", str(sp["sessions"]),
         ],
     )
+
+    # 2a.5 MERGE the existing live store into the freshly-refined staging facts
+    # (N8142). Without this, the windowed ingest would full-replace the live
+    # store with only the last N days of facts, silently amnesia-ing all older
+    # history (e.g. the migrated .memsearch facts). Recent (staged) facts win on
+    # key collision. The merged set is a superset of live, so the downstream
+    # review/health/sign/export all operate on the full store. The staging
+    # file's top-level shape (list vs {"facts": [...]}) is preserved so the
+    # promoted facts.json stays in the shape recall expects.
+    if merge_from is not None and Path(merge_from).exists():
+        live_raw = json.loads(Path(merge_from).read_text(encoding="utf-8"))
+        staged_raw = (
+            json.loads(sp["facts"].read_text(encoding="utf-8"))
+            if sp["facts"].exists()
+            else []
+        )
+        merged_list = merge_facts(_facts_as_list(live_raw), _facts_as_list(staged_raw))
+        if isinstance(staged_raw, dict):
+            staged_raw["facts"] = merged_list
+            out: Any = staged_raw
+        else:
+            out = merged_list
+        sp["facts"].write_text(
+            json.dumps(out, ensure_ascii=False), encoding="utf-8"
+        )
 
     # 2b. Review promotions -> staging review queue.
     _run_cli(
@@ -369,6 +451,7 @@ def rebuild(
     source_roots: list[Path] | None = None,
     since_days: int = DEFAULT_SINCE_DAYS,
     dry_run: bool = False,
+    merge: bool = True,
     staging_dir: Path | None = None,
     key_path: Path | None = None,
     pub_path: Path | None = None,
@@ -377,10 +460,19 @@ def rebuild(
 
     The live store is only mutated by promote(), which is skipped on dry_run and
     never reached if the health gate raises.
+
+    ``merge`` (default True) seeds staging from the existing live ``facts.json``
+    so a windowed rebuild ADDS recent facts instead of replacing the whole store
+    with only the window -- and an anti-amnesia guard aborts if the merged store
+    would still end up smaller than the live one. ``merge=False`` (--replace)
+    opts into an intentional from-scratch rebuild and skips both.
     """
     source_roots = source_roots or list(DEFAULT_SOURCE_ROOTS)
     key_path = key_path or (store_dir / "signing-key")
     pub_path = pub_path or (store_dir / "signing-key.pub")
+
+    live_facts = store_dir / "facts.json"
+    merge_from = live_facts if (merge and live_facts.exists()) else None
 
     transcripts = discover_transcripts(source_roots, since_days)
     if not transcripts:
@@ -397,10 +489,23 @@ def rebuild(
 
     try:
         build = build_staging(
-            staging_dir, transcripts, key_path=key_path, pub_path=pub_path
+            staging_dir, transcripts, key_path=key_path, pub_path=pub_path,
+            merge_from=merge_from,
         )
         # HARD GATE before any signing/export work or any live write.
         health_gate(build["health"])
+        # ANTI-AMNESIA GATE (N8142): when merging, the promoted store must never
+        # be smaller than the live store it replaces. Catches a broken merge or a
+        # bad window before it can full-replace history with a subset.
+        if merge_from is not None:
+            staged_count = _count_facts(build["stage_paths"]["facts"])
+            live_count = _count_facts(merge_from)
+            if staged_count < live_count:
+                raise RebuildError(
+                    f"merge would SHRINK the store ({staged_count} < {live_count} "
+                    "live facts); refusing to promote. Use --replace for an "
+                    "intentional from-scratch rebuild."
+                )
         sign_and_export(build)
 
         promote_result = None
@@ -448,6 +553,11 @@ def run(argv: list[str] | None = None) -> int:
         help="Build + health-gate + sign + export into staging, but do NOT promote",
     )
     parser.add_argument(
+        "--replace", action="store_true",
+        help="From-scratch rebuild: do NOT merge the existing live store and skip "
+             "the anti-amnesia shrink guard (default is merge: preserve history)",
+    )
+    parser.add_argument(
         "--staging-dir", type=Path, default=None,
         help="Explicit staging directory (default: a fresh tempdir)",
     )
@@ -467,6 +577,7 @@ def run(argv: list[str] | None = None) -> int:
             source_roots=args.source,
             since_days=args.since,
             dry_run=args.dry_run,
+            merge=not args.replace,
             staging_dir=args.staging_dir,
         )
     except RebuildError as exc:

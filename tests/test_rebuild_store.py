@@ -115,7 +115,7 @@ def test_rebuild_aborts_and_leaves_live_untouched_on_secret(rebuild_store, tmp_p
     staging_dir = tmp_path / "staging"
 
     # Stub the build to land a staging store + an UNHEALTHY report (secret found).
-    def fake_build_staging(staging, transcripts, *, key_path, pub_path):
+    def fake_build_staging(staging, transcripts, *, key_path, pub_path, merge_from=None):
         sp = _seed_staging(staging)
         return {
             "health": _healthy_report(findings=2),
@@ -157,7 +157,7 @@ def test_dry_run_builds_but_performs_no_swap(rebuild_store, tmp_path, monkeypatc
 
     staging_dir = tmp_path / "staging"
 
-    def fake_build_staging(staging, transcripts, *, key_path, pub_path):
+    def fake_build_staging(staging, transcripts, *, key_path, pub_path, merge_from=None):
         sp = _seed_staging(staging)
         return {
             "health": _healthy_report(),
@@ -278,3 +278,144 @@ def test_rebuild_aborts_when_no_transcripts(rebuild_store, tmp_path):
             since_days=7,
         )
     assert "no transcripts" in str(exc.value).lower()
+
+
+# --- 4. MERGE MODE: preserve live history + add the recent window (N8142) ---
+#
+# rebuild-store builds from a time-windowed transcript ingest and promote() does
+# a FULL REPLACE of facts.json. Without merge that silently DROPS all history
+# older than the window (e.g. the 1732 migrated .memsearch facts) on every run.
+# Merge mode seeds staging facts from the existing live store so a scheduled
+# refresh ADDS recent facts and never amnesias the store.
+
+class _FakeProc:
+    """Minimal stand-in for subprocess.CompletedProcess (stdout + returncode)."""
+
+    def __init__(self, stdout="", returncode=0):
+        self.stdout = stdout
+        self.stderr = ""
+        self.returncode = returncode
+
+
+def test_merge_facts_preserves_live_and_adds_recent(rebuild_store):
+    """Union: every live id survives, new ids are added, recent wins on collision."""
+    live = [{"id": "OLD1", "content": "old one"}, {"id": "OLD2", "content": "old two"}]
+    recent = [{"id": "OLD2", "content": "old two UPDATED"}, {"id": "NEW1", "content": "new one"}]
+    merged = rebuild_store.merge_facts(live, recent)
+    by_id = {f.get("id"): f for f in merged}
+    assert {"OLD1", "OLD2", "NEW1"} <= set(by_id)          # every live id survives + new added
+    assert by_id["OLD2"]["content"] == "old two UPDATED"   # recent wins on id collision
+    assert len(merged) == 3                                 # no history dropped
+    assert len(merged) >= len({f["id"] for f in live})      # never shrink below live
+
+
+def test_merge_facts_dedups_idless_by_content(rebuild_store):
+    """Facts without an id dedup on content so a re-extract does not double them."""
+    live = [{"content": "no id fact"}]
+    recent = [{"content": "no id fact"}, {"content": "brand new"}]
+    merged = rebuild_store.merge_facts(live, recent)
+    assert sorted(f["content"] for f in merged) == ["brand new", "no id fact"]
+
+
+def test_build_staging_merges_live_history(rebuild_store, tmp_path, monkeypatch):
+    """build_staging(merge_from=...) seeds staging facts from the live store, so a
+    full-replace promote can never drop migrated history."""
+    live_facts = tmp_path / "live-facts.json"
+    live_facts.write_text(
+        json.dumps([{"id": "HIST", "content": "historical fact"}]), encoding="utf-8"
+    )
+    staging = tmp_path / "staging"
+
+    def fake_run_cli(script, args):
+        if script == "ingest-jsonl.py":
+            return _FakeProc('{"stats": {}}')
+        if script == "refine-sessions.py":
+            fp = Path(args[args.index("--facts") + 1])
+            fp.write_text(
+                json.dumps([{"id": "RECENT", "content": "recent fact"}]), encoding="utf-8"
+            )
+            return _FakeProc("")
+        if script == "review-promotions.py":
+            return _FakeProc("")
+        if script == "nockbrain-health.py":
+            return _FakeProc(json.dumps(_healthy_report()))
+        return _FakeProc("")
+
+    monkeypatch.setattr(rebuild_store, "_run_cli", fake_run_cli)
+
+    rebuild_store.build_staging(
+        staging,
+        [Path("x.jsonl")],
+        key_path=tmp_path / "k",
+        pub_path=tmp_path / "k.pub",
+        merge_from=live_facts,
+    )
+    staged = json.loads((staging / "facts.json").read_text(encoding="utf-8"))
+    assert {f.get("id") for f in staged} == {"HIST", "RECENT"}  # history preserved + recent added
+
+
+def test_rebuild_never_shrinks_below_live_when_merging(rebuild_store, tmp_path, monkeypatch):
+    """Anti-amnesia gate: a merge rebuild whose staging would drop below the live
+    fact count ABORTS (non-zero) and leaves the live store untouched."""
+    store_dir = tmp_path / "live"
+    _seed_live_store(store_dir)  # live: 1 fact (id OLD)
+
+    def fake_build_staging(staging, transcripts, *, key_path, pub_path, merge_from=None):
+        sp = _seed_staging(staging)
+        sp["facts"].write_text("[]", encoding="utf-8")  # 0 facts -> would shrink
+        return {
+            "health": _healthy_report(),
+            "ingest_stats": {},
+            "stage_paths": {**sp, "events": staging / "events.jsonl",
+                            "ingest_stats": staging / "ingest-stats.json"},
+            "key_path": key_path,
+            "pub_path": pub_path,
+        }
+
+    monkeypatch.setattr(rebuild_store, "build_staging", fake_build_staging)
+    monkeypatch.setattr(rebuild_store, "discover_transcripts", lambda roots, days: [Path("x.jsonl")])
+    monkeypatch.setattr(rebuild_store, "sign_and_export",
+                        lambda build: pytest.fail("sign_and_export ran despite shrink gate"))
+
+    before = {p.name: p.read_bytes() for p in store_dir.iterdir() if p.is_file()}
+    with pytest.raises(rebuild_store.RebuildError) as exc:
+        rebuild_store.rebuild(
+            store_dir=store_dir,
+            staging_dir=tmp_path / "staging",
+            since_days=7,
+        )
+    assert "shrink" in str(exc.value).lower()
+    after = {p.name: p.read_bytes() for p in store_dir.iterdir() if p.is_file()}
+    assert before == after  # live store byte-identical
+
+
+def test_replace_flag_allows_intentional_shrink(rebuild_store, tmp_path, monkeypatch):
+    """--replace (merge=False) opts out of merge + the shrink gate for an
+    intentional from-scratch rebuild."""
+    store_dir = tmp_path / "live"
+    _seed_live_store(store_dir)  # live: 1 fact
+
+    def fake_build_staging(staging, transcripts, *, key_path, pub_path, merge_from=None):
+        # When merge is off, merge_from must be None (no live seed requested).
+        assert merge_from is None
+        sp = _seed_staging(staging)  # 1 fact (id NEW)
+        return {
+            "health": _healthy_report(),
+            "ingest_stats": {},
+            "stage_paths": {**sp, "events": staging / "events.jsonl",
+                            "ingest_stats": staging / "ingest-stats.json"},
+            "key_path": key_path,
+            "pub_path": pub_path,
+        }
+
+    monkeypatch.setattr(rebuild_store, "build_staging", fake_build_staging)
+    monkeypatch.setattr(rebuild_store, "discover_transcripts", lambda roots, days: [Path("x.jsonl")])
+    monkeypatch.setattr(rebuild_store, "sign_and_export", lambda build: None)
+
+    result = rebuild_store.rebuild(
+        store_dir=store_dir,
+        staging_dir=tmp_path / "staging",
+        since_days=7,
+        merge=False,
+    )
+    assert result["promote"] is not None  # promoted, no shrink-abort
