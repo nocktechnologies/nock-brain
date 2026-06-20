@@ -23,7 +23,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-from _facts import RECALL_ITEM_FIELDS, load_facts
+from _facts import RECALL_ITEM_FIELDS, fact_source, load_facts
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 DEFAULT_INSIGHTS = Path.home() / ".nock-brain" / "insights.json"
@@ -161,7 +161,8 @@ def supersession_factor(fact: dict) -> float:
 
 
 def search(facts: list[dict], query: str, include_superseded: bool = False,
-           now: datetime | None = None) -> list[dict]:
+           now: datetime | None = None,
+           sources: "set[str] | list[str] | None" = None) -> list[dict]:
     """Rank facts against the query with Okapi BM25 — proper token matching with
     IDF (rarer query terms count for more) and document-length normalization.
     This replaces a naive substring-overlap count, which both over-matched
@@ -169,9 +170,17 @@ def search(facts: list[dict], query: str, include_superseded: bool = False,
 
     The BM25 relevance is then multiplied by confidence, a per-kind recency
     decay (N8069: stale status facts no longer beat current ones), and a soft
-    supersession penalty. `now` is injectable for deterministic tests."""
+    supersession penalty. `now` is injectable for deterministic tests.
+
+    `sources` scopes recall to facts owned by those agents (gbrain-style fleet
+    scoping). `None` (the default) means no scoping — exact prior behavior, so
+    every existing caller is unaffected. A fact's owner is `fact_source(f)`
+    (missing source defaults to DEFAULT_SOURCE)."""
     if not include_superseded:
         facts = [f for f in facts if f.get("status", "current") != "superseded"]
+    if sources is not None:
+        allowed = set(sources)
+        facts = [f for f in facts if fact_source(f) in allowed]
     facts = [f for f in facts if f.get("confidence", 0) >= MIN_CONFIDENCE]
     if not facts:
         return []

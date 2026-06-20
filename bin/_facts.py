@@ -8,6 +8,23 @@ from typing import Any
 REQUIRED_FACT_FIELDS = {"id", "kind", "status", "confidence", "content", "source_date", "evidence"}
 RECALL_ITEM_FIELDS = {"kind", "status", "confidence", "content", "source_date"}
 
+# The owning agent/source of a fact (gbrain-style fleet scoping). DELIBERATELY
+# NOT in the required-field sets above: it is optional, so a single-brain store
+# and every pre-source fact stay valid and read as all-DEFAULT_SOURCE. Add it to
+# a fact to scope it; leave it off and the fact belongs to the default brain.
+DEFAULT_SOURCE = "mira"
+
+
+def fact_source(fact: Any) -> str:
+    """The source/owner of a fact. Missing, blank, or non-string `source`
+    defaults to DEFAULT_SOURCE — so backward compatibility is automatic and a
+    null source can never read as a distinct scope."""
+    if isinstance(fact, dict):
+        src = fact.get("source")
+        if isinstance(src, str) and src:
+            return src
+    return DEFAULT_SOURCE
+
 
 def malformed_fact_reason(fact: Any, required_fields: set[str] | None = None) -> str:
     if not isinstance(fact, dict):
