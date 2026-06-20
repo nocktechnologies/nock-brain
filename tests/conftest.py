@@ -32,6 +32,11 @@ def brain_check():
 
 
 @pytest.fixture(scope="session")
+def brain_think():
+    return _load("brain-think")
+
+
+@pytest.fixture(scope="session")
 def extract_facts():
     return _load("extract-facts")
 
