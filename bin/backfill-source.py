@@ -53,6 +53,14 @@ def main():
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
 
+    # A blank/whitespace --source would write a value that fact_source() reads
+    # as the default (unstamped), so the run would claim success yet leave the
+    # facts re-stampable on the next run — breaking idempotency. Reject it.
+    source = args.source.strip()
+    if not source:
+        print("--source must be a non-blank name", file=sys.stderr)
+        sys.exit(2)
+
     if not args.facts.exists():
         print(f"no facts file at {args.facts}", file=sys.stderr)
         sys.exit(1)
@@ -74,12 +82,12 @@ def main():
     total = len(data)
 
     if args.dry_run:
-        print(f"dry-run: {needing}/{total} facts would be stamped source={args.source!r}")
+        print(f"dry-run: {needing}/{total} facts would be stamped source={source!r}")
         return
 
-    stamped = backfill(data, args.source)
+    stamped = backfill(data, source)
     secure_write_json(args.facts, data, ensure_ascii=False)
-    print(f"stamped source={args.source!r} onto {stamped}/{total} facts "
+    print(f"stamped source={source!r} onto {stamped}/{total} facts "
           f"(file: {args.facts})")
 
 

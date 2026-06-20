@@ -104,6 +104,25 @@ def test_backfill_is_idempotent():
     assert bf.backfill(facts, "mira") == 0   # second run is a no-op
 
 
+def test_backfill_rejects_blank_source(tmp_path):
+    # A whitespace --source would write a non-stamping value (breaks idempotency).
+    import sys
+    import pytest
+    bf = _load("backfill-source")
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([fact("a")]), encoding="utf-8")
+    argv = sys.argv
+    sys.argv = ["backfill-source.py", "--facts", str(store), "--source", "   "]
+    try:
+        with pytest.raises(SystemExit) as exc:
+            bf.main()
+        assert exc.value.code == 2
+    finally:
+        sys.argv = argv
+    after = json.loads(store.read_text(encoding="utf-8"))
+    assert "source" not in after[0]   # store untouched
+
+
 def test_backfill_dry_run_does_not_write(tmp_path):
     bf = _load("backfill-source")
     store = tmp_path / "facts.json"
