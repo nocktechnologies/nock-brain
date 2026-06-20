@@ -71,7 +71,7 @@ def think(facts: list[dict], query: str, *, now=None,
         "kind": f.get("kind", "fact"),
         "date": f.get("source_date", "unknown"),
         "confidence": f.get("confidence"),
-        "content": bc._content(f)[:300],
+        "content": (bc._content(f) or "")[:300],
         "id": f.get("id"),
     } for i, f in enumerate(ranked[:max_cite])]
 
@@ -128,7 +128,7 @@ def main():
     if gap["freshness"]:
         print(f"  - newest evidence: {gap['freshness']}"
               f"{' [STALE]' if gap['stale'] else ''}")
-    print("  - " + gap["note"])
+    print(f"  - {gap['note'] or ''}")
 
 
 if __name__ == "__main__":
