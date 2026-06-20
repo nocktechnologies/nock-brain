@@ -27,6 +27,11 @@ def budget_recall():
 
 
 @pytest.fixture(scope="session")
+def brain_check():
+    return _load("brain-check")
+
+
+@pytest.fixture(scope="session")
 def extract_facts():
     return _load("extract-facts")
 

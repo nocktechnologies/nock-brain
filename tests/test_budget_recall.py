@@ -20,6 +20,25 @@ def fact(content, confidence=0.9, status="current", kind="decision", source_date
     }
 
 
+def test_tokenize_is_none_safe(budget_recall):
+    # A fact with content explicitly None must not crash the recall path.
+    assert budget_recall._tokenize(None) == []
+    assert budget_recall._tokenize("") == []
+    assert budget_recall._tokenize("Hello World") == ["hello", "world"]
+
+
+def test_search_survives_null_content_fact(budget_recall):
+    facts = [
+        {"content": None, "confidence": 0.9, "status": "current",
+         "kind": "decision", "source_date": "2026-06-01"},
+        fact("pricing was set to 49 dollars"),
+    ]
+    # Must not raise; the null-content fact simply never matches.
+    results = budget_recall.search(facts, "pricing")
+    assert len(results) == 1
+    assert "pricing" in results[0]["content"]
+
+
 def test_search_ranks_by_term_overlap(budget_recall):
     facts = [
         fact("pricing was set to 49 dollars for the command tier"),

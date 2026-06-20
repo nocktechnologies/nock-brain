@@ -74,7 +74,10 @@ def estimate_tokens(text: str) -> int:
 
 
 def _tokenize(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9]+", text.lower())
+    # Coerce None/empty to "" so a fact whose content is explicitly null never
+    # crashes the recall path (.lower() on None) — the live injection path runs
+    # this over every candidate fact.
+    return re.findall(r"[a-z0-9]+", (text or "").lower())
 
 
 def _resolve_now(now: datetime | None = None) -> datetime:
