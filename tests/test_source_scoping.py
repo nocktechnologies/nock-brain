@@ -36,8 +36,19 @@ def test_fact_source_defaults_to_mira():
     facts = _load("_facts")
     assert facts.fact_source({"content": "x"}) == "mira"
     assert facts.fact_source({"content": "x", "source": ""}) == "mira"
+    assert facts.fact_source({"content": "x", "source": "   "}) == "mira"
     assert facts.fact_source({"content": "x", "source": None}) == "mira"
     assert facts.fact_source({"content": "x", "source": "mar"}) == "mar"
+    assert facts.fact_source({"content": "x", "source": "  mar  "}) == "mar"
+
+
+def test_search_accepts_a_bare_string_source(budget_recall):
+    # A caller slip — sources="mira" — must not shatter into characters.
+    facts = [fact("pricing in mira", source="mira"),
+             fact("pricing in mar", source="mar")]
+    results = budget_recall.search(facts, "pricing", sources="mira")
+    assert len(results) == 1
+    assert results[0]["source"] == "mira"
 
 
 # ---- scoped search -------------------------------------------------------
@@ -78,12 +89,12 @@ def test_search_scope_treats_missing_source_as_default(budget_recall):
 
 def test_backfill_stamps_only_missing():
     bf = _load("backfill-source")
-    facts = [fact("a"), fact("b", source="mar"), fact("c")]
+    facts = [fact("a"), fact("b", source="mar"), fact("c", source="   ")]
     stamped = bf.backfill(facts, "mira")
     assert stamped == 2
     assert facts[0]["source"] == "mira"
     assert facts[1]["source"] == "mar"   # preserved
-    assert facts[2]["source"] == "mira"
+    assert facts[2]["source"] == "mira"  # whitespace-only treated as missing
 
 
 def test_backfill_is_idempotent():

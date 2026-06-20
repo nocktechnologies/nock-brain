@@ -179,7 +179,9 @@ def search(facts: list[dict], query: str, include_superseded: bool = False,
     if not include_superseded:
         facts = [f for f in facts if f.get("status", "current") != "superseded"]
     if sources is not None:
-        allowed = set(sources)
+        # A bare string is a common caller slip — set("mira") would shatter into
+        # {'m','i','r','a'} and silently match nothing. Wrap it.
+        allowed = {sources} if isinstance(sources, str) else set(sources)
         facts = [f for f in facts if fact_source(f) in allowed]
     facts = [f for f in facts if f.get("confidence", 0) >= MIN_CONFIDENCE]
     if not facts:

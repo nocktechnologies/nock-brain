@@ -21,8 +21,8 @@ def fact_source(fact: Any) -> str:
     null source can never read as a distinct scope."""
     if isinstance(fact, dict):
         src = fact.get("source")
-        if isinstance(src, str) and src:
-            return src
+        if isinstance(src, str) and src.strip():
+            return src.strip()
     return DEFAULT_SOURCE
 
 

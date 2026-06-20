@@ -38,7 +38,7 @@ def backfill(facts: list, source: str) -> int:
         if not isinstance(fact, dict):
             continue
         existing = fact.get("source")
-        if isinstance(existing, str) and existing:
+        if isinstance(existing, str) and existing.strip():
             continue
         fact["source"] = source
         stamped += 1
@@ -69,7 +69,7 @@ def main():
     # Count without mutating, for the dry-run report.
     needing = sum(
         1 for f in data
-        if isinstance(f, dict) and not (isinstance(f.get("source"), str) and f.get("source"))
+        if isinstance(f, dict) and not (isinstance(f.get("source"), str) and f.get("source").strip())
     )
     total = len(data)
 
