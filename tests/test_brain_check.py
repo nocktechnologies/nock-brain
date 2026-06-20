@@ -105,6 +105,18 @@ def test_empty_query_is_unknown(brain_check):
     assert r["query_terms"] == []
 
 
+def test_null_content_does_not_false_match(brain_check):
+    # A fact with content explicitly None must not tokenize to "none" and
+    # match a query containing the word 'none'.
+    facts = [
+        {"content": None, "confidence": 0.9, "status": "current",
+         "kind": "decision", "source_date": "2026-06-10"},
+    ]
+    r = brain_check.check(facts, "none", now=NOW)
+    assert r["verdict"] == "unknown"
+    assert r["hits"] == 0
+
+
 def test_superseded_facts_do_not_create_exists(brain_check):
     facts = [
         fact("old plan said quux tier", status="superseded"),

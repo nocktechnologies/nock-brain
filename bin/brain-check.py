@@ -21,7 +21,8 @@ Usage:
     python3 brain-check.py --json "vps root access mar gateway"
     python3 brain-check.py --facts /path/to/facts.json "boardroom voting rules"
 
-Exit code is always 0 (this is a query tool, not a gate). Read `verdict`.
+Exit code is 0 for a valid query (this is a query tool, not a gate); a usage
+error (empty query) returns 2. Read `verdict`.
 """
 import argparse
 import importlib.util
@@ -68,9 +69,19 @@ def _br():
     if _BR is None:
         path = BIN_DIR / "budget-recall.py"
         spec = importlib.util.spec_from_file_location("budget_recall", path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"could not load budget-recall.py from {path}")
         _BR = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_BR)
     return _BR
+
+
+def _content(fact) -> str:
+    """A fact's content as text, treating an explicit None as empty — so a null
+    content can't tokenize to the literal string 'none' and false-match a query
+    that contains the word 'none'."""
+    value = fact.get("content")
+    return str(value) if value is not None else ""
 
 
 def meaningful_terms(query: str) -> list[str]:
@@ -98,8 +109,8 @@ def _advice(verdict: str, result: dict) -> str:
                 f"(no signal on: {miss}). Likely exists; verify against live "
                 "substrate before asserting absence.")
     return ("No brain signal on this. Absence is plausible — but verify-before-"
-            "claim still applies: check live substrate before telling Kevin it "
-            "does not exist.")
+            "claim still applies: check live substrate before asserting it does "
+            "not exist.")
 
 
 def check(facts: list[dict], query: str, *, now=None,
@@ -140,7 +151,7 @@ def check(facts: list[dict], query: str, *, now=None,
     top_overlap = 0.0
     strong_hits = 0
     for f in pool:
-        covered = term_set & set(br._tokenize(str(f.get("content", ""))))
+        covered = term_set & set(br._tokenize(_content(f)))
         if covered:
             matched |= covered
             top_overlap = max(top_overlap, len(covered) / len(term_set))
@@ -171,7 +182,7 @@ def check(facts: list[dict], query: str, *, now=None,
         "kind": f.get("kind", "fact"),
         "source_date": f.get("source_date", "unknown"),
         "confidence": f.get("confidence"),
-        "content": str(f.get("content", ""))[:200],
+        "content": _content(f)[:200],
     } for f in ranked[:MAX_EVIDENCE]]
 
     newest = None
