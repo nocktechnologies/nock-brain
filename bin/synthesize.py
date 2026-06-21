@@ -47,6 +47,10 @@ DEFAULT_MIN_CLUSTER = 2
 # API), so the LLM-distill carries no per-call spend.
 DEFAULT_LLM_MODEL = "haiku"
 DEFAULT_LLM_TIMEOUT = 60.0  # seconds per cluster before falling back to heuristic
+# Bound LLM spend: enrich only the top-N strongest recurrences with Haiku; the
+# long tail stays heuristic. Keeps the full insight set complete while capping
+# calls (the store has ~270 clusters — re-distilling all nightly is wasteful).
+DEFAULT_LLM_TOP = 40
 
 STOPWORDS = {
     "the", "a", "an", "and", "or", "but", "to", "of", "in", "on", "for", "with",
@@ -205,12 +209,15 @@ def synthesize_cluster(cluster: list[dict], synthesizer=None) -> dict:
 def synthesize(
     facts: list[dict], threshold: float = DEFAULT_THRESHOLD,
     min_cluster: int = DEFAULT_MIN_CLUSTER, kinds: set[str] | None = None,
-    synthesizer=None,
+    synthesizer=None, llm_top: int | None = None,
 ) -> list[dict]:
     """Consolidate current facts into insights. Only clusters with at least
     min_cluster members (a genuine recurrence) become insights. An optional
     ``synthesizer`` callable enriches each insight's prose (see
-    :func:`synthesize_cluster`); ``None`` (default) uses the heuristic."""
+    :func:`synthesize_cluster`); ``None`` (default) uses the heuristic. When a
+    synthesizer is given, ``llm_top`` bounds enrichment to the N strongest
+    recurrences (the highest-value lessons); the long tail stays heuristic.
+    ``llm_top=None`` enriches every cluster."""
     active = [f for f in facts if f.get("status", "current") != "superseded"]
     if kinds:
         active = [f for f in active if f.get("kind") in kinds]
@@ -219,13 +226,22 @@ def synthesize(
     for f in active:
         by_kind.setdefault(f.get("kind", "fact"), []).append(f)
 
+    # Collect every qualifying cluster, then rank strongest-first so LLM
+    # enrichment targets the top recurrences within a bounded call budget.
+    clusters = [
+        cluster
+        for kind_facts in by_kind.values()
+        for cluster in cluster_kind(kind_facts, threshold)
+        if len(cluster) >= min_cluster
+    ]
+    clusters.sort(key=len, reverse=True)
+
     insights = []
-    for kind_facts in by_kind.values():
-        for cluster in cluster_kind(kind_facts, threshold):
-            if len(cluster) >= min_cluster:
-                insights.append(synthesize_cluster(cluster, synthesizer))
-    # Strongest recurrences first.
-    insights.sort(key=lambda i: -i["recurrence"])
+    for rank, cluster in enumerate(clusters):
+        use = synthesizer if (
+            synthesizer is not None and (llm_top is None or rank < llm_top)
+        ) else None
+        insights.append(synthesize_cluster(cluster, use))
     return insights
 
 
@@ -247,6 +263,10 @@ def main():
     parser.add_argument("--llm-timeout", type=float, default=DEFAULT_LLM_TIMEOUT,
                         help="Per-cluster LLM timeout in seconds "
                              f"(default: {DEFAULT_LLM_TIMEOUT})")
+    parser.add_argument("--llm-top", type=int, default=DEFAULT_LLM_TOP,
+                        help="With --llm, enrich only the N strongest recurrences; "
+                             f"the rest stay heuristic (default: {DEFAULT_LLM_TOP}, "
+                             "0 = no cap)")
     args = parser.parse_args()
 
     if not args.facts.exists():
@@ -257,7 +277,9 @@ def main():
     kinds = {k.strip() for k in args.kinds.split(",")} if args.kinds else None
     synthesizer = (make_claude_synthesizer(args.model, args.llm_timeout)
                    if args.llm else None)
-    insights = synthesize(facts, args.threshold, args.min_cluster, kinds, synthesizer)
+    llm_top = args.llm_top if args.llm_top and args.llm_top > 0 else None
+    insights = synthesize(facts, args.threshold, args.min_cluster, kinds,
+                          synthesizer, llm_top)
 
     secure_mkdir(args.output.parent)
     secure_write_json(args.output, insights, indent=2, default=str)

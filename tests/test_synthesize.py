@@ -187,3 +187,44 @@ def test_make_claude_synthesizer_collapses_and_returns_llm_text(synthesize, monk
     synth = synthesize.make_claude_synthesizer(model="haiku", timeout=5)
     out = synth([fact("x"), fact("y")], "heuristic fallback content")
     assert out == "Confirm the pricing tier with Kevin first."
+
+
+def test_llm_top_caps_enrichment_to_strongest_clusters(synthesize):
+    # Two disjoint clusters: a strong recurrence (4) and a weaker one (2).
+    facts = (
+        [fact(f"apple orchard harvest {i}") for i in range(4)]   # recurrence 4
+        + [fact(f"zebra desert mirage {i}") for i in range(2)]   # recurrence 2
+    )
+    calls = []
+
+    def fake(cluster, h):
+        calls.append(len(cluster))
+        return "Consolidated lesson sentence for this cluster."
+
+    ins = synthesize.synthesize(
+        facts, threshold=0.2, min_cluster=2, synthesizer=fake, llm_top=1
+    )
+    # Only the single strongest cluster was sent to the LLM (bounded budget).
+    assert calls == [4]
+    llm = [i for i in ins if i["synthesized_by"] == "llm"]
+    heur = [i for i in ins if i["synthesized_by"] == "heuristic"]
+    assert len(llm) == 1 and llm[0]["recurrence"] == 4
+    assert any(i["recurrence"] == 2 for i in heur)  # weaker cluster stayed heuristic
+
+
+def test_llm_top_none_enriches_every_cluster(synthesize):
+    facts = (
+        [fact(f"apple orchard harvest {i}") for i in range(3)]
+        + [fact(f"zebra desert mirage {i}") for i in range(2)]
+    )
+    calls = []
+
+    def fake(cluster, h):
+        calls.append(len(cluster))
+        return "Consolidated lesson sentence for this cluster."
+
+    ins = synthesize.synthesize(
+        facts, threshold=0.2, min_cluster=2, synthesizer=fake, llm_top=None
+    )
+    assert len(calls) == 2  # no cap -> both clusters enriched
+    assert all(i["synthesized_by"] == "llm" for i in ins)
