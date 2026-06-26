@@ -39,14 +39,19 @@ PROPOSAL_ACTIONS = ["approve", "edit", "reject", "defer"]
 
 
 def _load_module(name: str):
-    """Load a hyphenated sibling script as a module (no package structure)."""
-    spec = importlib.util.spec_from_file_location(name.replace("-", "_"), BIN_DIR / f"{name}.py")
+    """Load a hyphenated sibling script as a module (cached, no package structure)."""
+    mod_name = name.replace("-", "_")
+    if mod_name in sys.modules:
+        return sys.modules[mod_name]
+    spec = importlib.util.spec_from_file_location(mod_name, BIN_DIR / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
     return mod
 
 
 def _now() -> str:
+    """Return the current UTC time as an ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -79,6 +84,7 @@ def new_proposals(candidates: list[dict], live_facts: list[dict], queued: list[d
 
 
 def render_markdown(proposals: list[dict]) -> str:
+    """Render the proposal queue as a human-readable review markdown."""
     lines = [f"# Proposed facts (review queue) — {len(proposals)} pending", ""]
     if not proposals:
         lines.append("_No new proposals. The live store already covers everything extracted._")
@@ -97,6 +103,7 @@ def render_markdown(proposals: list[dict]) -> str:
 
 
 def run(argv: list[str] | None = None) -> int:
+    """Extract candidates and queue the genuinely-new ones as proposals; the live store is never touched."""
     parser = argparse.ArgumentParser(description="Propose new facts for gated review (never auto-writes the store)")
     parser.add_argument("--dir", type=Path, default=None, help="Directory with markdown transcripts")
     parser.add_argument("--since", type=str, default=None, help="YYYY-MM-DD lower bound")
@@ -128,11 +135,12 @@ def run(argv: list[str] | None = None) -> int:
 
     print(f"Proposed {len(fresh)} new fact(s); queue now holds {len(merged_queue)} pending.")
     print(f"Live store ({args.facts}) untouched. Review: {args.queue.with_suffix('.md')}")
-    print(f"Release with: approve-proposals.py --approve-all  (or --approve <id>)")
+    print("Release with: approve-proposals.py --approve-all  (or --approve <id>)")
     return 0
 
 
 def main() -> int:
+    """CLI entry point."""
     return run()
 
 

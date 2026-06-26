@@ -17,6 +17,7 @@ Usage:
     python3 approve-proposals.py --reject <id> [<id> ...]    # drop from queue
 """
 import argparse
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -25,7 +26,30 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from _facts import load_facts
-from _store import secure_write_json
+from _store import secure_write_json, secure_write_text
+
+
+def _load_module(name: str):
+    """Load a hyphenated sibling script as a module (cached, no package structure)."""
+    mod_name = name.replace("-", "_")
+    if mod_name in sys.modules:
+        return sys.modules[mod_name]
+    spec = importlib.util.spec_from_file_location(mod_name, BIN_DIR / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[mod_name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _sync_markdown(queue_path: Path, remaining: list[dict]) -> None:
+    """Keep the human-readable .md review file in step with the JSON queue:
+    re-render it from what's still pending, or remove it once the queue drains."""
+    md_path = queue_path.with_suffix(".md")
+    if remaining:
+        render = _load_module("propose-facts").render_markdown
+        secure_write_text(md_path, render(remaining), encoding="utf-8")
+    elif md_path.exists():
+        md_path.unlink()
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 DEFAULT_QUEUE = Path.home() / ".nock-brain" / "proposed-facts.json"
@@ -40,6 +64,7 @@ def _to_current(proposal: dict) -> dict:
 
 
 def run(argv: list[str] | None = None) -> int:
+    """Release approved proposals into the live store and re-sync the pending queue."""
     parser = argparse.ArgumentParser(description="Release reviewed fact proposals into the live store")
     parser.add_argument("--facts", type=Path, default=DEFAULT_FACTS)
     parser.add_argument("--queue", type=Path, default=DEFAULT_QUEUE)
@@ -59,8 +84,14 @@ def run(argv: list[str] | None = None) -> int:
         if not (args.approve or args.approve_all or args.reject):
             return 0
 
-    approve_ids = {pid for pid in args.approve}
-    reject_ids = {pid for pid in args.reject}
+    approve_ids = set(args.approve)
+    reject_ids = set(args.reject)
+
+    # Surface typos / stale IDs instead of silently ignoring them.
+    queued_ids = {p.get("id") for p in queued}
+    unknown = (approve_ids | reject_ids) - queued_ids
+    if unknown:
+        print(f"Warning: ID(s) not in queue, ignored: {', '.join(sorted(unknown))}", file=sys.stderr)
 
     to_release, remaining = [], []
     for p in queued:
@@ -78,8 +109,10 @@ def run(argv: list[str] | None = None) -> int:
         merged = live + [f for f in to_release if f.get("id") not in live_ids]
         secure_write_json(args.facts, merged, indent=2, default=str)
 
-    # Rewrite the queue with whatever is still pending.
-    secure_write_json(args.queue, remaining, indent=2, default=str)
+    # Rewrite the queue (and its markdown view) only if something changed.
+    if len(remaining) != len(queued):
+        secure_write_json(args.queue, remaining, indent=2, default=str)
+        _sync_markdown(args.queue, remaining)
 
     print(f"Released {len(to_release)} into {args.facts}; "
           f"rejected {len(reject_ids)}; {len(remaining)} still pending.")
@@ -89,6 +122,7 @@ def run(argv: list[str] | None = None) -> int:
 
 
 def main() -> int:
+    """CLI entry point."""
     return run()
 
 

@@ -81,6 +81,7 @@ def test_approve_all_releases_into_store(propose_facts, approve_proposals, tmp_p
     assert all(f["status"] == "current" for f in live)
     assert all("proposed_at" not in f and "actions" not in f for f in live)
     assert json.loads(queue.read_text()) == []  # queue drained
+    assert not (tmp_path / "proposed.md").exists()  # markdown view removed with it
 
 
 def test_reject_drops_without_writing(propose_facts, approve_proposals, tmp_path):
@@ -96,4 +97,24 @@ def test_reject_drops_without_writing(propose_facts, approve_proposals, tmp_path
     assert rc == 0
     live = json.loads(facts_path.read_text()) if facts_path.exists() else []
     assert victim not in {f["id"] for f in live}  # never written
-    assert victim not in {p["id"] for p in json.loads(queue.read_text())}  # dropped from queue
+    remaining = json.loads(queue.read_text())
+    assert victim not in {p["id"] for p in remaining}  # dropped from queue
+    # The markdown view tracks the JSON queue: still present (others pending),
+    # and the rejected id no longer appears in it.
+    md = (tmp_path / "proposed.md").read_text()
+    assert victim not in md
+
+
+def test_rejecting_all_clears_markdown(propose_facts, approve_proposals, tmp_path):
+    tdir = _transcript(tmp_path)
+    facts_path = tmp_path / "facts.json"
+    queue = tmp_path / "proposed.json"
+    propose_facts.run(["--dir", str(tdir), "--facts", str(facts_path), "--queue", str(queue)])
+    ids = [p["id"] for p in json.loads(queue.read_text())]
+    assert ids
+
+    approve_proposals.run(["--facts", str(facts_path), "--queue", str(queue), "--reject", *ids])
+
+    assert json.loads(queue.read_text()) == []  # queue emptied by rejection
+    assert not (tmp_path / "proposed.md").exists()  # markdown view cleaned up
+    assert not facts_path.exists()  # nothing was ever written to the store
