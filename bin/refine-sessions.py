@@ -22,10 +22,16 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
+from _scrub import is_structural_noise
 from _store import secure_mkdir, secure_write_text
 
 MAX_FACT_CONTENT_CHARS = 1500
 TOOL_RESULT_CONFIDENCE_CAP = 0.55
+
+# N8392-A: tool I/O is evidence, never a durable fact. Drop both surfaces so
+# the inferred 'merge'/'bug' patterns can't mint facts out of raw command JSON
+# (tool_use.input) or raw command/result output (tool_result.content).
+NON_FACT_SURFACES = {"tool_use.input", "tool_result.content"}
 
 
 def load_extract_facts():
@@ -84,6 +90,13 @@ def fact_from_event(event: dict[str, Any], extract_facts=None) -> dict[str, Any]
     original_content = raw_content.strip()
     if not original_content:
         return None
+
+    # N8392-A: never mint a fact from raw tool I/O or bus/dump artifacts. The
+    # prefix guard catches '=== AGENT MESSAGE' blobs that arrive as message-text
+    # events and dodge the surface check; both layers are needed.
+    if is_structural_noise(original_content) or event.get("surface") in NON_FACT_SURFACES:
+        return None
+
     content, truncated = cap_fact_content(original_content)
 
     result = extract_facts.classify_bullet(content)
