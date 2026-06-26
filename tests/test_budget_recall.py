@@ -259,3 +259,85 @@ def test_recency_does_not_break_existing_uniform_date_ordering(budget_recall):
     ]
     results = budget_recall.search(facts, "pricing plan", now=NOW)
     assert results[0]["content"].startswith("the pricing plan")
+
+
+# --- N8142: per-batch source_date diversity cap ----------------------------
+
+def test_diversity_cap_defers_overflow_same_date_to_tail(budget_recall):
+    # 10 facts all dated the same day (a single bulk import); the cap keeps the
+    # first N in score order at the front and defers the rest to the tail.
+    same = [{"content": f"item {i}", "source_date": "2026-05-19"} for i in range(10)]
+    capped = budget_recall._apply_date_diversity_cap(same, max_per_date=4)
+    assert len(capped) == 10, "no fact is dropped — only reordered"
+    # The first 4 are the original head (score order preserved); the rest are
+    # deferred but still present.
+    assert [f["content"] for f in capped[:4]] == [f"item {i}" for i in range(4)]
+
+
+def test_diversity_cap_interleaves_other_dates_to_front(budget_recall):
+    # A few May-19 facts followed by other-date facts. After the cap, the
+    # over-cap May-19 facts are pushed behind the other-date facts.
+    results = (
+        [{"content": f"may19 {i}", "source_date": "2026-05-19"} for i in range(6)]
+        + [{"content": "june fact", "source_date": "2026-06-20"}]
+    )
+    capped = budget_recall._apply_date_diversity_cap(results, max_per_date=4)
+    front = [f["content"] for f in capped[:5]]
+    assert "june fact" in front, "an other-date fact must reach the front, not be buried"
+    # Exactly 4 May-19 facts sit ahead of the deferred tail.
+    may_before_june = []
+    for f in capped:
+        if f["content"] == "june fact":
+            break
+        may_before_june.append(f)
+    assert len(may_before_june) == 4
+
+
+def test_diversity_cap_disabled_when_zero_or_negative(budget_recall):
+    results = [{"content": f"x{i}", "source_date": "2026-05-19"} for i in range(10)]
+    assert budget_recall._apply_date_diversity_cap(results, max_per_date=0) == results
+    assert budget_recall._apply_date_diversity_cap(results, max_per_date=-1) == results
+
+
+def test_diversity_cap_noop_when_under_cap(budget_recall):
+    results = [{"content": "a", "source_date": "2026-05-19"}]
+    assert budget_recall._apply_date_diversity_cap(results, max_per_date=4) == results
+
+
+def test_diversity_cap_handles_missing_source_date(budget_recall):
+    # Facts with no source_date all key to 'unknown' — they are capped together
+    # and the path must not crash on the missing key.
+    results = [{"content": f"x{i}"} for i in range(8)]
+    capped = budget_recall._apply_date_diversity_cap(results, max_per_date=3)
+    assert len(capped) == 8
+
+def test_resolve_max_per_date_precedence(budget_recall, monkeypatch):
+    monkeypatch.delenv("NOCKBRAIN_MAX_PER_DATE", raising=False)
+    assert budget_recall._resolve_max_per_date(None) == budget_recall.DEFAULT_MAX_PER_DATE
+    assert budget_recall._resolve_max_per_date(2) == 2  # explicit wins
+    monkeypatch.setenv("NOCKBRAIN_MAX_PER_DATE", "7")
+    assert budget_recall._resolve_max_per_date(None) == 7
+    assert budget_recall._resolve_max_per_date(2) == 2  # explicit still wins over env
+    monkeypatch.setenv("NOCKBRAIN_MAX_PER_DATE", "notanint")
+    assert budget_recall._resolve_max_per_date(None) == budget_recall.DEFAULT_MAX_PER_DATE
+
+
+def test_budget_recall_applies_diversity_cap_end_to_end(budget_recall, tmp_path):
+    # 30 May-19 facts that all match the query plus a couple of other-date
+    # matches. With the cap on, the other-date facts must surface in the output
+    # rather than being buried behind 30 identical-date hits.
+    facts = (
+        [fact("pricing decision detail", source_date="2026-05-19") for _ in range(30)]
+        + [fact("pricing decision fresh june note", source_date="2026-06-24")]
+    )
+    fp = tmp_path / "facts.json"
+    fp.write_text(json.dumps(facts))
+    out = budget_recall.budget_recall("pricing decision", fp, budget=200, now=NOW,
+                                      max_per_date=4)
+    assert "2026-06-24" in out, "other-date fact should surface under the cap"
+    # At the SAME constrained budget with the cap disabled, May-19 dominates and
+    # the june fact is buried below the truncation line.
+    out_uncapped = budget_recall.budget_recall("pricing decision", fp, budget=200,
+                                               now=NOW, max_per_date=0)
+    assert "2026-06-24" not in out_uncapped, "uncapped: june fact buried by May-19"
+    assert out_uncapped.count("2026-05-19") > out.count("2026-05-19")
