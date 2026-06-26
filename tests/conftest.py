@@ -47,6 +47,16 @@ def synthesize():
 
 
 @pytest.fixture(scope="session")
+def propose_facts():
+    return _load("propose-facts")
+
+
+@pytest.fixture(scope="session")
+def approve_proposals():
+    return _load("approve-proposals")
+
+
+@pytest.fixture(scope="session")
 def ingest_jsonl():
     return _load("ingest-jsonl")
 
