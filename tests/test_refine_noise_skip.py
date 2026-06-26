@@ -99,6 +99,25 @@ def test_is_structural_noise_flags_raw_artifacts(scrub):
     assert scrub.is_structural_noise('   {"command":"x"}') is True
 
 
+# (f) N8392-A hardening: longer '=====' dump banners + raw harness-notification
+# blobs are also caught (coverage gaps the adversarial review found).
+def test_is_structural_noise_flags_extended_dump_families(scrub):
+    assert scrub.is_structural_noise("===== #8129 FULL =====\nbody") is True
+    assert scrub.is_structural_noise("==================== Nock #8085") is True
+    assert scrub.is_structural_noise("===== N8322 =====") is True
+    assert scrub.is_structural_noise("<task-notification>\n<task-id>abc</task-id>") is True
+    assert scrub.is_structural_noise("<system-reminder>\nbackground context") is True
+
+
+# (g) the [TAG] escape hatch: a genuine tagged fact is spared even if its body
+# later contains a dump-like '===' line, and JSON-array noise is NOT spared by it.
+def test_genuine_tag_escape_hatch(scrub):
+    assert scrub.is_structural_noise("[INSIGHT] recurring lesson === see prior notes ===") is False
+    assert scrub.is_structural_noise("[ARCHITECTURE] split the bus === before === after") is False
+    # '[{"' starts with '[' but is JSON-array noise, NOT a [TAG] — still caught.
+    assert scrub.is_structural_noise('[{"text":"x"}]') is True
+
+
 def test_is_structural_noise_spares_genuine_facts(scrub):
     spared = [
         "[CORRECTION] fixed boot-health-probe.sh diary surface bug: "
