@@ -70,7 +70,11 @@ RECENCY_HALF_LIFE_DAYS: dict[str, float] = {
     "directive": 180.0,
     "correction": 180.0,
     "architecture": 180.0,
-    "insight": 180.0,
+    # Synthesized insights inherit a FROZEN source_date (the day they were first
+    # distilled — often the historical dump), so a 180-day half-life lets stale
+    # insights bury recent raw facts in recall. Decay them faster so recent work
+    # surfaces (N8392: the May-19 dump was 85% of insights and dominated recall).
+    "insight": 45.0,
     "identity": 100000.0,  # ~never decays
 }
 # Used for any kind not in the table above (and as a safe middle ground).
