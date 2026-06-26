@@ -32,6 +32,17 @@ DEFAULT_BUDGET = 1000
 MAX_BUDGET = 1500
 MIN_CONFIDENCE = 0.7
 
+# --- Per-batch diversity cap (N8142) ---------------------------------------
+# A post-scoring SELECTION constraint (scoring itself is untouched): cap how
+# many facts that share the SAME source_date may sit in the front of a recall
+# result. A single bulk import (e.g. the 1650-fact 2026-05-19 backfill, 66% of
+# the store) otherwise term-matches almost any generic/recency query and crowds
+# the top-K — recency decay alone does not fix it because durable-kind facts
+# barely decay and sheer volume wins. This caps any one import's footprint
+# regardless of kind. Env-configurable via NOCKBRAIN_MAX_PER_DATE; 0 (or any
+# value <= 0) disables the cap entirely (legacy/unbounded behavior).
+DEFAULT_MAX_PER_DATE = 4
+
 # BM25 parameters (Okapi defaults). k1 controls term-frequency saturation; b
 # controls how strongly document length is normalized.
 BM25_K1 = 1.5
@@ -231,6 +242,50 @@ def search(facts: list[dict], query: str, include_superseded: bool = False,
     return [f for _, f in results]
 
 
+def _resolve_max_per_date(explicit: "int | None" = None) -> int:
+    """Resolve the per-source_date diversity cap: explicit arg >
+    NOCKBRAIN_MAX_PER_DATE env > DEFAULT_MAX_PER_DATE. A non-integer env value
+    is ignored (falls through to the default) rather than crashing the live
+    recall path. A value <= 0 means 'unlimited' (cap disabled)."""
+    if explicit is not None:
+        return explicit
+    raw = os.environ.get("NOCKBRAIN_MAX_PER_DATE", "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return DEFAULT_MAX_PER_DATE
+
+
+def _apply_date_diversity_cap(results: list[dict], max_per_date: int) -> list[dict]:
+    """Post-scoring selection constraint — NOT a re-score and NOT a filter.
+
+    Cap how many facts sharing the SAME source_date may appear in the front of
+    the (already score-sorted) result list. Walk the list in score order, keep a
+    fact while its source_date is still under the cap, and DEFER any further
+    same-date facts to the tail (still in their relative score order). No fact is
+    dropped here — the downstream token-budget truncation then naturally sheds
+    the deferred tail first, so a single bulk import can no longer dominate the
+    top-K of a generic/recency query while a genuinely top-scored same-date fact
+    still survives.
+
+    max_per_date <= 0 disables the cap (returns the list unchanged)."""
+    if max_per_date <= 0 or len(results) <= max_per_date:
+        return results
+    seen: Counter = Counter()
+    kept: list[dict] = []
+    deferred: list[dict] = []
+    for f in results:
+        key = str(f.get("source_date", "unknown"))
+        if seen[key] < max_per_date:
+            seen[key] += 1
+            kept.append(f)
+        else:
+            deferred.append(f)
+    return kept + deferred
+
+
 def format_fact(f: dict) -> str:
     parts = [f"[{f.get('source_date', 'unknown')}]", f"[{f.get('kind', 'fact').upper()}]"]
     header = " ".join(parts)
@@ -278,7 +333,8 @@ def _maybe_graph_expand(all_facts: list[dict], seeds: list[dict], query: str,
 
 def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
                   include_superseded: bool = False, insights_file: Path | None = None,
-                  now: datetime | None = None, graph_expand: bool = False) -> str:
+                  now: datetime | None = None, graph_expand: bool = False,
+                  max_per_date: "int | None" = None) -> str:
     ref_now = _resolve_now(now)
     if facts_file:
         all_facts = _load(facts_file)
@@ -298,6 +354,11 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
     results = insight_results + fact_results
     if not results:
         return ""
+
+    # Diversity cap (post-scoring): keep any single source_date's import from
+    # crowding the top of the budget-bounded result. Applied after insight-lead
+    # ordering and source dedup, before budget truncation.
+    results = _apply_date_diversity_cap(results, _resolve_max_per_date(max_per_date))
 
     output_lines = [f"Memory recall ({len(results)} matches, budget {budget} tokens):"]
     tokens_used = estimate_tokens(output_lines[0])
@@ -330,13 +391,18 @@ def main():
     parser.add_argument("--graph", action="store_true",
                         help="Enable graph-augmented recall (default off; also "
                              "via NOCKBRAIN_GRAPH_RECALL=1)")
+    parser.add_argument("--max-per-date", type=int, default=None,
+                        help="Cap facts sharing one source_date in the result "
+                             "(default 4; 0 disables; also via "
+                             "NOCKBRAIN_MAX_PER_DATE)")
     args = parser.parse_args()
 
     budget = min(args.budget, MAX_BUDGET)
     query_str = " ".join(args.query)
     graph_expand = args.graph or _env_truthy("NOCKBRAIN_GRAPH_RECALL")
     result = budget_recall(query_str, args.facts, budget, args.include_superseded,
-                           insights_file=args.insights, graph_expand=graph_expand)
+                           insights_file=args.insights, graph_expand=graph_expand,
+                           max_per_date=args.max_per_date)
 
     if result:
         print(result)
