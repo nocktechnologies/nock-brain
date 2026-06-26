@@ -57,6 +57,11 @@ def refine_sessions():
 
 
 @pytest.fixture(scope="session")
+def scrub():
+    return _load("_scrub")
+
+
+@pytest.fixture(scope="session")
 def review_promotions():
     return _load("review-promotions")
 
