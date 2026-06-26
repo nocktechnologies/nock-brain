@@ -196,6 +196,29 @@ def test_recency_per_kind_half_life_protects_durable_kinds(budget_recall):
     )
 
 
+def test_recency_insight_decays_faster_than_durable_kinds(budget_recall):
+    # N8392: synthesized insights inherit a FROZEN (often old) source_date, so a
+    # 180-day half-life let stale insights bury recent work (the May-19 dump was
+    # 85% of insights and dominated recall). Insights now decay at 45 days — faster
+    # than durable decisions/directives — so a same-age insight ranks below a
+    # decision and recent raw facts can surface.
+    old_insight = fact("the deployment region is us-east", kind="insight",
+                       source_date="2026-03-01")
+    old_decision = fact("the deployment region is us-east", kind="decision",
+                        source_date="2026-03-01")
+    results = budget_recall.search([old_insight, old_decision], "deployment region", now=NOW)
+    assert results[0]["kind"] == "decision", (
+        f"a same-age insight (HL45) should rank below a decision (HL180), got {results[0]['kind']!r}"
+    )
+    rf_insight = budget_recall.recency_factor(old_insight, NOW)
+    rf_decision = budget_recall.recency_factor(old_decision, NOW)
+    assert rf_insight < rf_decision, (
+        f"insight half-life should decay faster: {rf_insight} vs {rf_decision}"
+    )
+    # Lock the constant so the regression can't silently revert.
+    assert budget_recall.RECENCY_HALF_LIFE_DAYS["insight"] == 45.0
+
+
 def test_recency_missing_source_date_is_neutral_no_crash(budget_recall):
     # No source_date at all, and the 'unknown' sentinel — both get a neutral
     # 1.0 recency factor and must not crash. Backward compat for pre-N8069 facts.
