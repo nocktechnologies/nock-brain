@@ -60,9 +60,13 @@ def main():
             print(f"  {f.get('id', '')} [{f.get('source_date', 'unknown')}] [{f.get('kind', 'fact')}]")
             print(f"    {str(f.get('content', ''))[:150]}\n")
         if args.mark_superseded:
+            stamp = datetime.now(timezone.utc).isoformat()
             for f in results:
                 f["status"] = "superseded"
-                f["superseded_at"] = datetime.now(timezone.utc).isoformat()
+                f["superseded_at"] = stamp
+                # Bi-temporal: close the validity window at the supersession time
+                # so recall stops treating it as current, while it stays queryable.
+                f.setdefault("invalid_at", stamp)
                 if args.by:
                     f["superseded_by"] = args.by
                 if args.reason:
@@ -80,8 +84,12 @@ def main():
         print(f"Fact {args.fact_id} not found.", file=sys.stderr)
         sys.exit(1)
 
+    stamp = datetime.now(timezone.utc).isoformat()
     fact["status"] = "superseded"
-    fact["superseded_at"] = datetime.now(timezone.utc).isoformat()
+    fact["superseded_at"] = stamp
+    # Bi-temporal: close the validity window so recall stops surfacing it as
+    # current (it stays in the store for historical queries).
+    fact.setdefault("invalid_at", stamp)
     if args.by:
         fact["superseded_by"] = args.by
     if args.reason:
