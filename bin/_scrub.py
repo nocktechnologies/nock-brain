@@ -2,6 +2,55 @@
 import re
 
 
+# N8392-A: prefixes that mark a fact's content as a raw, un-synthesized
+# artifact rather than a durable fact. These are tool_use.input JSON blobs,
+# tool_result payloads, bus inbox dumps (=== AGENT MESSAGE / TELEGRAM /
+# SYSTEM), fenced code, command tags, and cat -n line-numbered file dumps.
+# Genuine facts start with a [TAG] (e.g. [DECISION]) or with prose, never with
+# these prefixes.
+_STRUCTURAL_NOISE_PREFIXES = (
+    '{"',
+    '[{"',
+    "=== AGENT MESSAGE",
+    "=== TELEGRAM",
+    "=== SYSTEM",
+    "=== ",  # three-equals + space, generic bus/dump header
+    "```",
+    "<command-",
+)
+_LINE_NUMBERED_DUMP_RE = re.compile(r"^\d+\t")
+
+
+def is_structural_noise(content: str) -> bool:
+    """Return True if *content* is a raw, un-synthesized artifact, not a fact.
+
+    Guards the JSONL->facts path (N8392-A): refine-sessions.py was minting
+    facts out of raw tool_use.input JSON and bus-dump message text, because the
+    inferred 'merge' pattern fires on "PR #6 merged" text buried inside a
+    command or inbox dump. This prefix-based discriminator drops those before
+    classification. purge-fact.py can also import it to sweep existing noise.
+
+    Content is structural noise IFF content.lstrip() either:
+      - startswith one of _STRUCTURAL_NOISE_PREFIXES, OR
+      - matches ^\\d+\\t (cat -n line-numbered file dumps).
+
+    Prefix-based ONLY (never substring): a genuine fact like
+    "[CORRECTION] ...CRM_AGENT_NAME=mira was passing author_surface=..." must be
+    spared, so we never match 'CRM_AGENT_NAME=' anywhere in the text. Empty or
+    whitespace-only input returns False.
+    """
+    if not content:
+        return False
+    stripped = content.lstrip()
+    if not stripped:
+        return False
+    if stripped.startswith(_STRUCTURAL_NOISE_PREFIXES):
+        return True
+    if _LINE_NUMBERED_DUMP_RE.match(stripped):
+        return True
+    return False
+
+
 SENSITIVE_ENV_ASSIGNMENT = re.compile(
     r"(?im)(\b[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)\b\s*=\s*)([^\s\r\n]+)"
 )

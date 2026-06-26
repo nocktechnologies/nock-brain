@@ -66,7 +66,10 @@ def test_authority_facts_from_tool_events_are_dropped(refine_sessions):
     assert facts == []
 
 
-def test_non_authority_tool_result_facts_are_demoted_not_dropped(refine_sessions):
+def test_tool_result_facts_are_dropped(refine_sessions):
+    # N8392-A: tool I/O is evidence, never a durable fact. tool_result.content
+    # is now dropped outright rather than demoted, so the inferred bug/merge
+    # patterns can't mint facts out of raw command/result output.
     facts = refine_sessions.facts_from_events([
         event(
             "[BUG] Found root cause in failing parser output",
@@ -77,9 +80,7 @@ def test_non_authority_tool_result_facts_are_demoted_not_dropped(refine_sessions
         )
     ])
 
-    assert len(facts) == 1
-    assert facts[0]["kind"] == "bug"
-    assert facts[0]["confidence"] < 0.9
+    assert facts == []
 
 
 def test_events_to_facts_dedupes_same_content(refine_sessions):
