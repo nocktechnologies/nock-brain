@@ -100,5 +100,35 @@ def test_supersede_sets_invalid_at(tmp_path, monkeypatch):
 
     fact = json.loads(store.read_text())[0]
     assert fact["status"] == "superseded"
-    assert "invalid_at" in fact and fact["invalid_at"]  # window closed
+    assert fact.get("invalid_at")  # window closed
     assert fact["id"] == "old"  # still in the store, not deleted
+
+
+def test_supersede_overwrites_future_invalid_at(tmp_path, monkeypatch):
+    """If a fact already carries a FUTURE invalid_at, supersession must overwrite
+    it to close the window NOW — not leave the future bound (the setdefault bug
+    gemini flagged on PR #29)."""
+    import importlib.util
+    import json
+    import sys
+    from pathlib import Path
+
+    bin_dir = Path(__file__).resolve().parent.parent / "bin"
+    spec = importlib.util.spec_from_file_location("supersede_fact", bin_dir / "supersede-fact.py")
+    sf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sf)
+
+    future = "2099-01-01T00:00:00+00:00"
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("old", "future-dated bound", invalid_at=future)]))
+
+    monkeypatch.setattr(sys, "argv",
+                        ["supersede-fact.py", "old", "--facts", str(store)])
+    try:
+        sf.main()
+    except SystemExit:
+        pass
+
+    fact = json.loads(store.read_text())[0]
+    assert fact["status"] == "superseded"
+    assert fact["invalid_at"] < future  # window closed now, not at the future bound

@@ -66,7 +66,11 @@ def main():
                 f["superseded_at"] = stamp
                 # Bi-temporal: close the validity window at the supersession time
                 # so recall stops treating it as current, while it stays queryable.
-                f.setdefault("invalid_at", stamp)
+                # Overwrite a missing OR future-dated invalid_at so supersession
+                # takes effect immediately (setdefault would leave a future bound
+                # in place, delaying the close); never push an already-past close later.
+                if not f.get("invalid_at") or f["invalid_at"] > stamp:
+                    f["invalid_at"] = stamp
                 if args.by:
                     f["superseded_by"] = args.by
                 if args.reason:
@@ -88,8 +92,11 @@ def main():
     fact["status"] = "superseded"
     fact["superseded_at"] = stamp
     # Bi-temporal: close the validity window so recall stops surfacing it as
-    # current (it stays in the store for historical queries).
-    fact.setdefault("invalid_at", stamp)
+    # current (it stays in the store for historical queries). Overwrite a missing
+    # OR future-dated invalid_at so supersession takes effect immediately; never
+    # push an already-past close later.
+    if not fact.get("invalid_at") or fact["invalid_at"] > stamp:
+        fact["invalid_at"] = stamp
     if args.by:
         fact["superseded_by"] = args.by
     if args.reason:
