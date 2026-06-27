@@ -23,7 +23,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-from _facts import RECALL_ITEM_FIELDS, fact_source, load_facts
+from _facts import RECALL_ITEM_FIELDS, fact_currently_valid, fact_source, load_facts
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 DEFAULT_INSIGHTS = Path.home() / ".nock-brain" / "insights.json"
@@ -193,6 +193,12 @@ def search(facts: list[dict], query: str, include_superseded: bool = False,
     (missing source defaults to DEFAULT_SOURCE)."""
     if not include_superseded:
         facts = [f for f in facts if f.get("status", "current") != "superseded"]
+        # Bi-temporal gate: a fact outside its validity window (invalid_at passed,
+        # or valid_at not yet reached) is not CURRENT, so it drops from default
+        # recall — but stays in the store and returns with include_superseded.
+        # Facts with no window bounds are always valid (backward compatible).
+        _now = _resolve_now(now)
+        facts = [f for f in facts if fact_currently_valid(f, _now)]
     if sources is not None:
         # A bare string is a common caller slip — set("mira") would shatter into
         # {'m','i','r','a'} and silently match nothing. Wrap it.
@@ -332,6 +338,7 @@ def _maybe_graph_expand(all_facts: list[dict], seeds: list[dict], query: str,
         recency_factor=recency_factor,
         supersession_factor=supersession_factor,
         min_confidence=MIN_CONFIDENCE,
+        currently_valid=fact_currently_valid,
     )
 
 

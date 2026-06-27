@@ -70,7 +70,8 @@ def _env_int(name: str, default: int) -> int:
 
 
 def expand(all_facts, seeds, include_superseded, now, *,
-           recency_factor, supersession_factor, min_confidence):
+           recency_factor, supersession_factor, min_confidence,
+           currently_valid=None):
     """Return a re-ranked SUPERSET of `seeds`: the seeds first, in their
     original BM25 order, followed by graph neighbors sorted by descending
     graph_score (always strictly below the weakest seed).
@@ -156,6 +157,11 @@ def expand(all_facts, seeds, include_superseded, now, *,
         if f is None:
             continue
         if not include_superseded and f.get("status", "current") == "superseded":
+            continue
+        # Bi-temporal gate: graph neighbors outside their validity window are not
+        # current, so they do not get pulled in via expansion either (same rule
+        # as the flat path). No-op when currently_valid is not injected.
+        if not include_superseded and currently_valid is not None and not currently_valid(f, now):
             continue
         if f.get("confidence", 0) < min_confidence:
             continue
