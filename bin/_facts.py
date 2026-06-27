@@ -1,6 +1,7 @@
 """Shared fact-store validation and loading helpers."""
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -77,3 +78,45 @@ def load_facts(
         print(f"{label}: skipped malformed fact store ({exc})", file=sys.stderr)
         return []
     return filter_valid_facts(data, source=label, required_fields=required_fields)
+
+
+# ── Bi-temporal validity (N-borrow-2: supersede-over-delete with a window) ───
+# Facts may carry OPTIONAL `valid_at` / `invalid_at` ISO-8601 bounds. A fact is
+# "currently valid" iff valid_at <= now < invalid_at, treating a MISSING bound as
+# open (-inf / +inf). Both fields absent ⇒ always valid — so every existing fact
+# and every caller is unaffected. This lets recall stop surfacing a fact as
+# *current* once it has been superseded/expired, while the fact stays in the
+# store for historical queries (recoverable via include_superseded).
+def _parse_ts(value: Any) -> "datetime | None":
+    """Parse an ISO-8601 timestamp; return None on anything unparseable
+    (lenient by design — a malformed bound must never break recall)."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    # Normalize to aware UTC so comparisons against an aware `now` never raise.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def fact_currently_valid(fact: Any, now: "datetime | None" = None) -> bool:
+    """True if `fact`'s bi-temporal validity window contains `now`.
+
+    Missing/blank/unparseable `valid_at` or `invalid_at` are treated as open
+    bounds, so a fact without these fields is always valid (backward compatible).
+    """
+    if not isinstance(fact, dict):
+        return True
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    valid_at = _parse_ts(fact.get("valid_at"))
+    invalid_at = _parse_ts(fact.get("invalid_at"))
+    if valid_at is not None and now < valid_at:
+        return False  # not yet in effect
+    if invalid_at is not None and now >= invalid_at:
+        return False  # window has closed (superseded/expired)
+    return True
