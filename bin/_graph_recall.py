@@ -71,7 +71,7 @@ def _env_int(name: str, default: int) -> int:
 
 def expand(all_facts, seeds, include_superseded, now, *,
            recency_factor, supersession_factor, min_confidence,
-           currently_valid=None):
+           currently_valid=None, query_terms=None, tokenize=None):
     """Return a re-ranked SUPERSET of `seeds`: the seeds first, in their
     original BM25 order, followed by graph neighbors sorted by descending
     graph_score (always strictly below the weakest seed).
@@ -165,6 +165,9 @@ def expand(all_facts, seeds, include_superseded, now, *,
             continue
         if f.get("confidence", 0) < min_confidence:
             continue
+        if query_terms and len(query_terms) >= 3 and tokenize is not None:
+            if len(set(tokenize(f.get("content", ""))) & set(query_terms)) < 2:
+                continue
         graph_score = (
             base
             * f.get("confidence", 0)

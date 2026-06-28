@@ -166,7 +166,9 @@ def main() -> int:
     if not args.i_have_reviewed_the_manifest:
         print("\nREFUSING --execute without --i-have-reviewed-the-manifest", file=sys.stderr)
         return 2
-    assert not any(c["kind"] == "correction" for c in sel["candidates"]), "correction in candidates!"
+    if any(c["kind"] == "correction" for c in sel["candidates"]):
+        print("REFUSING --execute with correction in candidates", file=sys.stderr)
+        return 2
     backup = STORE.with_suffix(f".json.bak-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
     shutil.copy2(STORE, backup)
     print(f"backup written: {backup}")

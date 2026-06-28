@@ -151,6 +151,27 @@ def test_graph_neighbors_rank_below_direct_hits(budget_recall, tmp_path):
         )
 
 
+def test_graph_expansion_filters_neighbors_for_multi_subject_queries(budget_recall, tmp_path):
+    facts = [
+        fact("NockLock pricing uses the shared seatbelt anchor", id="seed",
+             source_file="s.jsonl", session="s1"),
+        fact("the seatbelt implementation note has no query subject terms", id="neighbor",
+             source_file="s.jsonl", session="s2"),
+    ]
+    fp = _write(tmp_path, facts)
+
+    out = budget_recall.budget_recall(
+        "remind me what NockLock pricing is and who is on the consumer team",
+        fp,
+        budget=1000,
+        graph_expand=True,
+        now=NOW,
+    )
+
+    assert "NockLock pricing uses" in out
+    assert "implementation note" not in out
+
+
 def test_graph_expansion_respects_budget(budget_recall, tmp_path):
     # Many concept-neighbors but a tiny budget -> seeds present, truncation
     # message emitted, output never exceeds budget. (graph_expand=True variant
