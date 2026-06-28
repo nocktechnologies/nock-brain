@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Ingest the CURATED auto-memory into the NockBrain fact store (Finding A5).
+"""Ingest a hand-curated Markdown memory dir into the NockBrain fact store.
 
-The Claude Code project keeps a hand-curated, canonical auto-memory at
-``~/.claude/projects/-home-nock-Dev-crm-mira/memory/`` — one Markdown file per
-durable fact (``feedback_*.md``, ``project_*.md``, ``reference_*.md``) holding
-the fleet roster, NockLock/product pricing, ownership, standing corrections,
-etc., plus a ``MEMORY.md`` index. nock-brain recall (``budget-recall.py``) reads
-``~/.nock-brain/facts.json`` and never saw these files, so recall fired but
-could not return the curated roster/pricing. This script extracts each curated
-file as ONE high-confidence, SIGNED fact and writes it into the store so recall
-surfaces it.
+Point this at a directory of hand-curated, canonical Markdown notes — one file
+per durable fact (e.g. ``feedback_*.md``, ``project_*.md``, ``reference_*.md``),
+plus an optional ``MEMORY.md`` index — and it extracts each file as ONE
+high-confidence, SIGNED fact and writes it into the store, so per-prompt recall
+(``budget-recall.py`` over ``~/.nock-brain/facts.json``) can surface your
+curated notes instead of only the auto-distilled session facts.
+
+Configure the source dir via ``--memory-dir`` or the ``NOCKBRAIN_CURATED_DIR``
+env var. (Claude Code keeps such a dir under ``~/.claude/projects/<slug>/memory/``.)
 
 Properties:
   * One fact per curated file (the ``MEMORY.md`` index is skipped — it is a
@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,13 +51,24 @@ from _sign import (  # noqa: E402
     verify_fact,
 )
 
-DEFAULT_MEMORY_DIR = (
-    Path.home()
-    / ".claude"
-    / "projects"
-    / "-home-nock-Dev-crm-mira"
-    / "memory"
-)
+def _discover_memory_dir() -> Path | None:
+    """Resolve the curated-memory dir without hardcoding any project slug.
+
+    Order: NOCKBRAIN_CURATED_DIR env -> the sole ``~/.claude/projects/*/memory``
+    dir if exactly one exists -> None (caller must pass --memory-dir)."""
+    env = os.environ.get("NOCKBRAIN_CURATED_DIR")
+    if env:
+        return Path(env).expanduser()
+    projects = Path.home() / ".claude" / "projects"
+    if projects.is_dir():
+        candidates = sorted(p / "memory" for p in projects.iterdir()
+                            if (p / "memory").is_dir())
+        if len(candidates) == 1:
+            return candidates[0]
+    return None
+
+
+DEFAULT_MEMORY_DIR = _discover_memory_dir()
 DEFAULT_STORE = Path.home() / ".nock-brain" / "facts.json"
 
 # Provenance tag — distinct so the curated slice is trivially found, re-ingested,
@@ -255,6 +267,10 @@ def main() -> None:
     ap.add_argument("--pub-path", type=Path, default=DEFAULT_PUB_PATH)
     args = ap.parse_args()
 
+    if args.memory_dir is None:
+        raise SystemExit(
+            "no curated memory dir resolved — set NOCKBRAIN_CURATED_DIR or pass --memory-dir"
+        )
     if not args.memory_dir.exists():
         raise SystemExit(f"curated memory dir not found: {args.memory_dir}")
 
