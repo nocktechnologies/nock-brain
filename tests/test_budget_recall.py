@@ -448,7 +448,13 @@ def test_resolve_max_per_date_precedence(budget_recall, monkeypatch):
     assert budget_recall._resolve_max_per_date(None) == budget_recall.DEFAULT_MAX_PER_DATE
 
 
-def test_budget_recall_applies_diversity_cap_end_to_end(budget_recall, tmp_path):
+def test_budget_recall_applies_diversity_cap_end_to_end(budget_recall, tmp_path,
+                                                        monkeypatch):
+    # Disable the A3 bulk-date down-weight here so this test exercises the
+    # diversity CAP in isolation. (A3 independently demotes an over-represented
+    # date, which would also surface the june fact in the uncapped control and
+    # mask whether the cap itself works — they are separate mechanisms.)
+    monkeypatch.setenv("NOCKBRAIN_BULK_DATE_THRESHOLD", "0")
     # 30 May-19 facts that all match the query plus a couple of other-date
     # matches. With the cap on, the other-date facts must surface in the output
     # rather than being buried behind 30 identical-date hits.
@@ -467,3 +473,49 @@ def test_budget_recall_applies_diversity_cap_end_to_end(budget_recall, tmp_path)
                                                now=NOW, max_per_date=0)
     assert "2026-06-24" not in out_uncapped, "uncapped: june fact buried by May-19"
     assert out_uncapped.count("2026-05-19") > out.count("2026-05-19")
+
+
+# --- A3: bulk-date down-weight --------------------------------------------
+def test_bulk_date_factor_is_conservative(budget_recall):
+    bdf = budget_recall.bulk_date_factor
+    # At/below threshold: untouched.
+    assert bdf(0.10, 0.25, 0.5) == 1.0
+    assert bdf(0.25, 0.25, 0.5) == 1.0
+    # Above threshold: mild linear penalty with the excess share.
+    assert bdf(0.45, 0.25, 0.5) == 0.8   # 1 - (0.45 - 0.25)
+    # Floored — even an overwhelming majority is down-weighted, never crushed.
+    assert bdf(0.95, 0.25, 0.5) == 0.5
+    # Disabled by an out-of-range threshold.
+    assert bdf(0.95, 0.0, 0.5) == 1.0
+    assert bdf(0.95, 1.0, 0.5) == 1.0
+
+
+def test_bulk_date_penalty_demotes_over_represented_date(budget_recall, monkeypatch):
+    monkeypatch.delenv("NOCKBRAIN_BULK_DATE_THRESHOLD", raising=False)
+    monkeypatch.delenv("NOCKBRAIN_BULK_DATE_MIN_FACTOR", raising=False)
+    # A bulk date that is the overwhelming majority of the candidate corpus,
+    # plus one equally-matching fact on another date. Both dates are AFTER NOW so
+    # recency_factor is exactly 1.0 for both — isolating the bulk-date penalty as
+    # the only differentiator (no recency confound).
+    facts = (
+        [fact("pricing decision detail", source_date="2026-06-20") for _ in range(20)]
+        + [fact("pricing decision detail", source_date="2026-06-21")]
+    )
+    # With the penalty ON, the lone other-date fact (~5% share, untouched) must
+    # outrank the over-represented bulk-date facts (penalized to the floor).
+    ranked = budget_recall.search(facts, "pricing decision", now=NOW)
+    assert ranked[0]["source_date"] == "2026-06-21"
+    # With the penalty OFF, scores tie and stable-sort preserves input order, so
+    # a bulk-date fact (first in the input) leads — the demotion is gone.
+    monkeypatch.setenv("NOCKBRAIN_BULK_DATE_THRESHOLD", "0")
+    ranked_off = budget_recall.search(facts, "pricing decision", now=NOW)
+    assert ranked_off[0]["source_date"] == "2026-06-20"
+
+
+def test_bulk_date_penalty_does_not_crush_results(budget_recall):
+    # The penalty must never empty out a legitimate result set.
+    facts = [fact("pricing decision detail", source_date="2026-05-19") for _ in range(50)]
+    ranked = budget_recall.search(facts, "pricing decision", now=NOW)
+    assert len(ranked) == 50  # all still rankable, just uniformly down-weighted
+    for f in ranked:
+        assert f["source_date"] == "2026-05-19"

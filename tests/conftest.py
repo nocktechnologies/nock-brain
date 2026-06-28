@@ -94,3 +94,8 @@ def export_graph():
 @pytest.fixture(scope="session")
 def nockbrain_health():
     return _load("nockbrain-health")
+
+
+@pytest.fixture(scope="session")
+def ingest_curated_memory():
+    return _load("ingest-curated-memory")
