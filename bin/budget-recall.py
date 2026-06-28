@@ -92,6 +92,56 @@ DEFAULT_HALF_LIFE_DAYS = 60.0
 # even when it is the only term match). Keeps recency a tie-breaker, not a wall.
 MIN_RECENCY_FACTOR = 0.01
 
+# --- Bulk-date down-weight (A3) ---------------------------------------------
+# A single bulk import (the 2026-05-19 backfill: ~65% of the store) term-matches
+# almost any query. Per-kind recency decay does not fix it — durable kinds barely
+# decay — and the post-scoring per-date diversity cap only REORDERS the front of
+# the result; the bulk date still floods the candidate pool and stays ~45% of
+# recall-eligible facts. This applies a mild, SCORE-level penalty to facts whose
+# source_date is OVER-REPRESENTED in the *candidate corpus* of a query, so no
+# single date can monopolize ranking. Conservative by construction: it triggers
+# ONLY above a share threshold and is floored, so a normal date (a few % of the
+# corpus) is untouched and a legitimately-relevant old fact is down-weighted,
+# never crushed. Env overrides: NOCKBRAIN_BULK_DATE_THRESHOLD (share above which
+# a date is penalized; <=0 or >=1 disables) and NOCKBRAIN_BULK_DATE_MIN_FACTOR.
+BULK_DATE_SHARE_THRESHOLD = 0.25
+BULK_DATE_MIN_FACTOR = 0.5
+
+
+def _resolve_bulk_date_params() -> tuple[float, float]:
+    """Resolve (threshold, floor) for the bulk-date penalty from env, falling
+    back to the module defaults. A non-float env value is ignored rather than
+    crashing the live recall path."""
+    threshold = BULK_DATE_SHARE_THRESHOLD
+    floor = BULK_DATE_MIN_FACTOR
+    raw = os.environ.get("NOCKBRAIN_BULK_DATE_THRESHOLD", "").strip()
+    if raw:
+        try:
+            threshold = float(raw)
+        except ValueError:
+            pass
+    raw = os.environ.get("NOCKBRAIN_BULK_DATE_MIN_FACTOR", "").strip()
+    if raw:
+        try:
+            floor = float(raw)
+        except ValueError:
+            pass
+    return threshold, floor
+
+
+def bulk_date_factor(share: float, threshold: float, floor: float) -> float:
+    """Mild multiplicative penalty for a fact from an over-represented date.
+
+    `share` is the date's fraction of the candidate corpus. At or below
+    `threshold` the factor is 1.0 (untouched). Above it the factor falls
+    linearly with the excess share and is clamped at `floor`, so even a date
+    that is the overwhelming majority of candidates is down-weighted, not
+    erased. A threshold outside (0, 1) disables the penalty entirely."""
+    if threshold <= 0 or threshold >= 1 or share <= threshold:
+        return 1.0
+    excess = share - threshold
+    return max(floor, 1.0 - excess)
+
 
 def estimate_tokens(text: str) -> int:
     return len(text) // CHARS_PER_TOKEN
@@ -341,6 +391,13 @@ def search(facts: list[dict], query: str, include_superseded: bool = False,
         for term in set(d):
             doc_freq[term] += 1
 
+    # Bulk-date down-weight (A3): how much of the candidate corpus each
+    # source_date occupies, so an over-represented date (e.g. the May-19 bulk
+    # import) gets a mild score penalty and cannot monopolize ranking.
+    bulk_threshold, bulk_floor = _resolve_bulk_date_params()
+    date_counts: Counter = Counter(str(f.get("source_date", "unknown")) for f in facts)
+    date_share = {d: c / n_docs for d, c in date_counts.items()} if n_docs else {}
+
     results = []
     for f, doc in zip(facts, docs):
         tf = Counter(doc)
@@ -365,6 +422,7 @@ def search(facts: list[dict], query: str, include_superseded: bool = False,
         pair_matches = _pair_window_count(doc, query_pairs)
         coverage_boost = 1.0 + (max(0, matched_terms - 1) * 3.0)
         phrase_boost = 1.0 + (pair_matches * 4.0)
+        share = date_share.get(str(f.get("source_date", "unknown")), 0.0)
         score = (
             bm25
             * f.get("confidence", 0)
@@ -372,6 +430,7 @@ def search(facts: list[dict], query: str, include_superseded: bool = False,
             * supersession_factor(f)
             * coverage_boost
             * phrase_boost
+            * bulk_date_factor(share, bulk_threshold, bulk_floor)
         )
         if score > 0:
             results.append((score, pair_matches, matched_terms, f))

@@ -24,7 +24,7 @@ Usage:
     python3 bin/rebuild-store.py --dry-run           # build + gate, no swap
     python3 bin/rebuild-store.py --since 14          # 14-day transcript window
     python3 bin/rebuild-store.py --source ~/.claude/projects --source /other
-    python3 bin/rebuild-store.py --print-schedule     # emit example launchd plist
+    python3 bin/rebuild-store.py --print-schedule     # print the live cron schedule
 """
 import argparse
 import hashlib
@@ -411,35 +411,22 @@ def render_summary(
 
 
 def example_plist(store_dir: Path) -> str:
-    script = BIN_DIR / "rebuild-store.py"
-    return f"""<!-- Example weekly launchd job (NOT installed). Save to
-     ~/Library/LaunchAgents/io.nocktechnologies.nockbrain-rebuild.plist
-     then: launchctl load <that path>. Runs Sundays at 03:30 local. -->
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
- "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>io.nocktechnologies.nockbrain-rebuild</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>{sys.executable}</string>
-    <string>{script}</string>
-    <string>--since</string><string>14</string>
-  </array>
-  <key>StartCalendarInterval</key>
-  <dict>
-    <key>Weekday</key><integer>0</integer>
-    <key>Hour</key><integer>3</integer>
-    <key>Minute</key><integer>30</integer>
-  </dict>
-  <key>StandardOutPath</key><string>{store_dir}/rebuild.log</string>
-  <key>StandardErrorPath</key><string>{store_dir}/rebuild.err</string>
-</dict>
-</plist>
+    """Print the ACTUAL live schedule for this store.
 
-# Or as a weekly cron line (crontab -e):
-30 3 * * 0 {sys.executable} {script} --since 14 >> {store_dir}/rebuild.log 2>&1
+    The rebuild runs nightly from the VPS user crontab (nightly distiller), not
+    a macOS launchd job — that was a stale leftover from the Mac-era install.
+    This prints the real crontab line so the file documents reality."""
+    script = BIN_DIR / "rebuild-store.py"
+    return f"""# NockBrain nightly rebuild — ACTUAL live schedule (VPS user crontab).
+# Runs every day at 03:33 over a 3-day transcript window, merging into the live
+# store. Inspect/edit with `crontab -l` / `crontab -e`.
+#
+# 33 3 * * * /usr/bin/python3 {script} --since 3 >> {store_dir}/rebuild.log 2>&1 # nockbrain-distiller-nightly (mira)
+#
+# (Was historically documented as a macOS launchd plist,
+# io.nocktechnologies.nockbrain-rebuild — that schedule is NOT what runs; the
+# live cadence is the crontab line above.)
+33 3 * * * {sys.executable} {script} --since 3 >> {store_dir}/rebuild.log 2>&1
 """
 
 
@@ -563,7 +550,7 @@ def run(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--print-schedule", action="store_true",
-        help="Print an example weekly launchd plist + cron line and exit (installs nothing)",
+        help="Print the live nightly cron schedule for this store and exit (installs nothing)",
     )
     args = parser.parse_args(argv)
 
