@@ -32,6 +32,15 @@ DEFAULT_BUDGET = 1000
 MAX_BUDGET = 1500
 MIN_CONFIDENCE = 0.7
 
+QUERY_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "been", "but", "by",
+    "can", "did", "do", "does", "for", "from", "had", "has", "have",
+    "how", "i", "in", "is", "it", "me", "of", "on", "or", "our",
+    "please", "remind", "show", "tell", "that", "the", "their", "this",
+    "to", "us", "was", "we", "were", "what", "when", "where", "which",
+    "who", "why", "with", "you", "your",
+}
+
 # --- Per-batch diversity cap (N8142) ---------------------------------------
 # A post-scoring SELECTION constraint (scoring itself is untouched): cap how
 # many facts that share the SAME source_date may sit in the front of a recall
@@ -88,11 +97,115 @@ def estimate_tokens(text: str) -> int:
     return len(text) // CHARS_PER_TOKEN
 
 
+def _normalize_token(token: str) -> str:
+    if len(token) > 4 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if len(token) > 4 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
+
+
 def _tokenize(text: str) -> list[str]:
     # Coerce None/empty to "" so a fact whose content is explicitly null never
     # crashes the recall path (.lower() on None) — the live injection path runs
     # this over every candidate fact.
-    return re.findall(r"[a-z0-9]+", (text or "").lower())
+    return [
+        _normalize_token(term)
+        for term in re.findall(r"[a-z0-9]+", (text or "").lower())
+    ]
+
+
+def _ordered_query_terms(query: str) -> list[str]:
+    terms: list[str] = []
+    for term in _tokenize(query):
+        if term in QUERY_STOPWORDS or term in terms:
+            continue
+        terms.append(term)
+    return terms
+
+
+def _query_terms(query: str) -> set[str]:
+    """Return content-bearing query terms for ranking.
+
+    Prompt-time recall receives natural-language questions. Ranking on every
+    token lets high-frequency scaffolding words ("what", "is", "the", "who")
+    match generic session notes and bury the real subject. Drop those words and
+    rank on the remaining signal terms. If a query has no signal terms, return
+    an empty set rather than recalling keyword noise.
+    """
+    return set(_ordered_query_terms(query))
+
+
+def _query_pairs(ordered_terms: list[str]) -> list[tuple[str, str]]:
+    return list(zip(ordered_terms, ordered_terms[1:]))
+
+
+def _default_recall_min_matches(query_terms: set[str]) -> int:
+    return 2 if len(query_terms) >= 3 else 1
+
+
+def _pair_window_count(
+    doc: list[str],
+    pairs: list[tuple[str, str]],
+    max_gap: int = 40,
+) -> int:
+    if not pairs:
+        return 0
+    positions: dict[str, list[int]] = {}
+    for idx, term in enumerate(doc):
+        positions.setdefault(term, []).append(idx)
+
+    count = 0
+    for left, right in pairs:
+        left_positions = positions.get(left, [])
+        right_positions = positions.get(right, [])
+        if any(
+            abs(rpos - lpos) <= max_gap
+            for lpos in left_positions
+            for rpos in right_positions
+        ):
+            count += 1
+    return count
+
+
+def _token_spans(text: str) -> list[tuple[str, int, int]]:
+    return [
+        (_normalize_token(match.group(0).lower()), match.start(), match.end())
+        for match in re.finditer(r"[a-z0-9]+", text or "", re.IGNORECASE)
+    ]
+
+
+def _relevant_excerpt(content: str, query_terms: set[str] | None, max_chars: int = 220) -> str:
+    content = str(content or "")
+    if len(content) <= max_chars or not query_terms:
+        return content[:max_chars]
+
+    spans = _token_spans(content)
+    hits = [(term, start, end) for term, start, end in spans if term in query_terms]
+    if not hits:
+        return content[:max_chars]
+
+    best: tuple[int, int, int] | None = None
+    for _, start, _ in hits:
+        window_start = max(0, start - 30)
+        window_end = min(len(content), window_start + max_chars)
+        terms_in_window = {
+            term for term, span_start, _ in spans
+            if window_start <= span_start < window_end and term in query_terms
+        }
+        score = len(terms_in_window)
+        candidate = (score, -window_start, window_start)
+        if best is None or candidate > best:
+            best = candidate
+
+    start = best[2] if best else hits[0][1]
+    end = min(len(content), start + max_chars)
+    excerpt = content[start:end].strip()
+    if start > 0:
+        excerpt = "..." + excerpt
+    if end < len(content):
+        excerpt += "..."
+    return excerpt
 
 
 def _resolve_now(now: datetime | None = None) -> datetime:
@@ -177,7 +290,8 @@ def supersession_factor(fact: dict) -> float:
 
 def search(facts: list[dict], query: str, include_superseded: bool = False,
            now: datetime | None = None,
-           sources: "set[str] | list[str] | None" = None) -> list[dict]:
+           sources: "set[str] | list[str] | None" = None,
+           min_matched_terms: int | None = None) -> list[dict]:
     """Rank facts against the query with Okapi BM25 — proper token matching with
     IDF (rarer query terms count for more) and document-length normalization.
     This replaces a naive substring-overlap count, which both over-matched
@@ -208,9 +322,13 @@ def search(facts: list[dict], query: str, include_superseded: bool = False,
     if not facts:
         return []
 
-    query_terms = set(_tokenize(query))
+    ordered_terms = _ordered_query_terms(query)
+    query_terms = set(ordered_terms)
     if not query_terms:
         return []
+    if min_matched_terms is None:
+        min_matched_terms = 1
+    query_pairs = _query_pairs(ordered_terms)
 
     ref_now = _resolve_now(now)
 
@@ -228,28 +346,38 @@ def search(facts: list[dict], query: str, include_superseded: bool = False,
         tf = Counter(doc)
         dl = len(doc)
         bm25 = 0.0
+        matched_terms = 0
         for term in query_terms:
             df = doc_freq.get(term, 0)
             if df == 0:
                 continue
             idf = math.log(1 + (n_docs - df + 0.5) / (df + 0.5))
             freq = tf[term]
+            if freq > 0:
+                matched_terms += 1
             denom = freq + BM25_K1 * (1 - BM25_B + BM25_B * (dl / avgdl if avgdl else 0))
             if denom > 0:
                 bm25 += idf * (freq * (BM25_K1 + 1)) / denom
         if bm25 <= 0:
             continue
+        if matched_terms < min_matched_terms:
+            continue
+        pair_matches = _pair_window_count(doc, query_pairs)
+        coverage_boost = 1.0 + (max(0, matched_terms - 1) * 3.0)
+        phrase_boost = 1.0 + (pair_matches * 4.0)
         score = (
             bm25
             * f.get("confidence", 0)
             * recency_factor(f, ref_now)
             * supersession_factor(f)
+            * coverage_boost
+            * phrase_boost
         )
         if score > 0:
-            results.append((score, f))
+            results.append((score, pair_matches, matched_terms, f))
 
-    results.sort(key=lambda x: (-x[0], -x[1].get("confidence", 0)))
-    return [f for _, f in results]
+    results.sort(key=lambda x: (-x[0], -x[1], -x[2], -x[3].get("confidence", 0)))
+    return [f for _, _, _, f in results]
 
 
 def _resolve_max_per_date(explicit: "int | None" = None) -> int:
@@ -296,10 +424,10 @@ def _apply_date_diversity_cap(results: list[dict], max_per_date: int) -> list[di
     return kept + deferred
 
 
-def format_fact(f: dict) -> str:
+def format_fact(f: dict, query_terms: set[str] | None = None) -> str:
     parts = [f"[{f.get('source_date', 'unknown')}]", f"[{f.get('kind', 'fact').upper()}]"]
     header = " ".join(parts)
-    content = str(f.get("content", ""))[:200]
+    content = _relevant_excerpt(str(f.get("content", "")), query_terms, max_chars=320)
     if f.get("status") == "superseded":
         content = f"[SUPERSEDED] {content}"
     return f"{header}\n{content}"
@@ -339,6 +467,8 @@ def _maybe_graph_expand(all_facts: list[dict], seeds: list[dict], query: str,
         supersession_factor=supersession_factor,
         min_confidence=MIN_CONFIDENCE,
         currently_valid=fact_currently_valid,
+        query_terms=_query_terms(query),
+        tokenize=_tokenize,
     )
 
 
@@ -347,15 +477,26 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
                   now: datetime | None = None, graph_expand: bool = False,
                   max_per_date: "int | None" = None) -> str:
     ref_now = _resolve_now(now)
+    query_terms = _query_terms(query)
+    min_matches = _default_recall_min_matches(query_terms)
     if facts_file:
         all_facts = _load(facts_file)
-        fact_results = search(all_facts, query, include_superseded, now=ref_now)
+        fact_results = search(
+            all_facts, query, include_superseded,
+            now=ref_now, min_matched_terms=min_matches,
+        )
         fact_results = _maybe_graph_expand(
             all_facts, fact_results, query, include_superseded, ref_now, graph_expand
         )
     else:
         fact_results = []
-    insight_results = search(_load(insights_file), query, include_superseded, now=ref_now) if insights_file else []
+    insight_results = (
+        search(
+            _load(insights_file), query, include_superseded,
+            now=ref_now, min_matched_terms=min_matches,
+        )
+        if insights_file else []
+    )
 
     # Consolidated insights lead; drop the raw facts an insight already covers so
     # recall shows the synthesis, not the synthesis plus its own sources.
@@ -376,7 +517,7 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
     included = 0
 
     for f in results:
-        formatted = format_fact(f)
+        formatted = format_fact(f, query_terms)
         fact_tokens = estimate_tokens(formatted)
         if tokens_used + fact_tokens > budget:
             remaining = len(results) - included

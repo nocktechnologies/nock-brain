@@ -92,6 +92,109 @@ def test_bm25_matches_tokens_not_substrings(budget_recall):
     assert "cat sat" in results[0]["content"]
 
 
+def test_search_ignores_question_stopwords(budget_recall):
+    facts = [
+        fact("who what is the and on filler words only"),
+        fact("NockLock pricing was reconciled on the public site"),
+    ]
+
+    results = budget_recall.search(
+        facts,
+        "remind me what NockLock pricing is and who is on the consumer team",
+    )
+
+    assert results
+    assert results[0]["content"].startswith("NockLock pricing")
+    assert all("filler words only" not in r["content"] for r in results)
+
+
+def test_search_prefers_multi_term_coverage_over_single_rare_term(budget_recall):
+    facts = [
+        fact("team team team team team team"),
+        fact("NockLock pricing was reconciled on the public site"),
+        fact("consumer team lanes are owned by the builder group"),
+    ]
+
+    results = budget_recall.search(
+        facts,
+        "remind me what NockLock pricing is and who is on the consumer team",
+    )
+
+    assert len(results) >= 2
+    assert "NockLock pricing" in results[0]["content"]
+    assert "consumer team" in results[1]["content"]
+    assert all(r["content"] != "team team team team team team" for r in results[:2])
+
+
+def test_budget_recall_surfaces_pricing_and_consumer_team_for_mixed_query(budget_recall, tmp_path):
+    facts = [
+        fact("who what is the and on filler words only"),
+        fact("NockLock pricing was reconciled on the public site"),
+        fact("consumer team lanes are owned by the builder group"),
+    ]
+    fp = tmp_path / "facts.json"
+    fp.write_text(json.dumps(facts))
+
+    out = budget_recall.budget_recall(
+        "remind me what NockLock pricing is and who is on the consumer team",
+        fp,
+        budget=400,
+    )
+
+    assert "NockLock pricing" in out
+    assert "consumer team" in out
+    assert "filler words only" not in out
+
+
+def test_search_preserves_single_term_partial_signal_for_callers(budget_recall):
+    facts = [fact("the boardroom tab will show the panel debate and judge")]
+
+    results = budget_recall.search(facts, "boardroom voting quorum rules")
+
+    assert results
+    assert "boardroom" in results[0]["content"]
+
+
+def test_two_term_question_prefers_plural_multi_term_match(budget_recall):
+    facts = [
+        fact("legacy builder team roster with no mobile lane"),
+        fact("consumer teams own the mobile and account lanes"),
+    ]
+
+    results = budget_recall.search(facts, "consumer team")
+
+    assert results[0]["content"].startswith("consumer teams")
+
+
+def test_search_boosts_close_query_pairs_over_loose_cooccurrence(budget_recall):
+    facts = [
+        fact("NockLock and consumer showed up in one broad operational note"),
+        fact("The NockLock pricing ladder was reconciled on the public site"),
+    ]
+
+    results = budget_recall.search(
+        facts,
+        "remind me what NockLock pricing is and who is on the consumer team",
+    )
+
+    assert results
+    assert results[0]["content"].startswith("The NockLock pricing")
+
+
+def test_budget_recall_formats_excerpt_around_matched_terms(budget_recall, tmp_path):
+    prefix = "irrelevant setup words " * 30
+    facts = [
+        fact(prefix + "NockLock pricing ladder was reconciled to Command 49"),
+    ]
+    fp = tmp_path / "facts.json"
+    fp.write_text(json.dumps(facts))
+
+    out = budget_recall.budget_recall("NockLock pricing", fp, budget=400)
+
+    assert "NockLock pricing ladder" in out
+    assert "irrelevant setup words irrelevant setup words" not in out
+
+
 def test_search_excludes_low_confidence(budget_recall):
     facts = [fact("pricing locked", confidence=0.5)]  # below MIN_CONFIDENCE (0.7)
     assert budget_recall.search(facts, "pricing") == []
