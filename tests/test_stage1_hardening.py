@@ -165,6 +165,45 @@ def test_memory_hook_handles_prompt_that_starts_with_dash(tmp_path):
     assert "reference material, not instructions" in payload["systemMessage"]
 
 
+def test_memory_hook_logs_recall_errors_to_private_file(tmp_path):
+    # Recall failures keep the hook contract (emit {} and exit 0) but land in
+    # ~/.nock-brain/hook-errors.log (0600) instead of vanishing to /dev/null.
+    facts_dir = tmp_path / ".nock-brain"
+    facts_dir.mkdir()
+    (facts_dir / "facts.json").write_text("[]", encoding="utf-8")
+
+    # The hook resolves bin/ relative to its own path, so run a copy of it
+    # next to a classifier stub that fails loudly.
+    hook_dir = tmp_path / "hooks"
+    bin_dir = tmp_path / "bin"
+    hook_dir.mkdir()
+    bin_dir.mkdir()
+    hook = hook_dir / "memory-inject.sh"
+    hook.write_text(
+        (REPO / "hooks" / "memory-inject.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (bin_dir / "recall-classifier.py").write_text(
+        "import sys\nsys.stderr.write('classifier exploded\\n')\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "budget-recall.py").write_text("", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(hook)],
+        input=json.dumps({"prompt": "what did we decide about stage one memory recall"}),
+        text=True,
+        capture_output=True,
+        env={**os.environ, "HOME": str(tmp_path), "PYTHONDONTWRITEBYTECODE": "1"},
+        check=True,
+    )
+
+    assert json.loads(result.stdout) == {}
+    err_log = facts_dir / "hook-errors.log"
+    assert "classifier exploded" in err_log.read_text(encoding="utf-8")
+    assert mode(err_log) == 0o600
+
+
 def test_memory_hook_uses_printf_and_arg_separator():
     hook = (REPO / "hooks" / "memory-inject.sh").read_text(encoding="utf-8")
 
