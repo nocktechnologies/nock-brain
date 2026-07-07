@@ -42,7 +42,13 @@ if ! [[ -f "$FACTS_FILE" ]]; then
     exit 0
 fi
 
-RESULT=$(printf '%s' "$PROMPT" | python3 "$CLASSIFIER" 2>/dev/null)
+# Recall failures must never break the hook (always exit 0), but they must
+# not be invisible either — keep classifier/recall stderr in a private log.
+ERROR_LOG="${HOME}/.nock-brain/hook-errors.log"
+( umask 077; touch "$ERROR_LOG" ) 2>/dev/null
+chmod 600 "$ERROR_LOG" 2>/dev/null
+
+RESULT=$(printf '%s' "$PROMPT" | python3 "$CLASSIFIER" 2>>"$ERROR_LOG")
 EXIT_CODE=$?
 
 if [[ $EXIT_CODE -ne 0 ]]; then
@@ -50,7 +56,7 @@ if [[ $EXIT_CODE -ne 0 ]]; then
     exit 0
 fi
 
-RECALL=$(python3 "$BUDGET_RECALL" --budget 800 --facts "$FACTS_FILE" -- "$PROMPT" 2>/dev/null)
+RECALL=$(python3 "$BUDGET_RECALL" --budget 800 --facts "$FACTS_FILE" -- "$PROMPT" 2>>"$ERROR_LOG")
 if [[ -z "$RECALL" ]] || [[ "$RECALL" == "No matching facts found." ]]; then
     echo '{}'
     exit 0

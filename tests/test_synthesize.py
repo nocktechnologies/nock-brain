@@ -179,6 +179,32 @@ def test_make_claude_synthesizer_returns_empty_on_failed_call(synthesize, monkey
     assert synth([fact("x"), fact("y")], "heuristic fallback content") == ""
 
 
+def test_make_claude_synthesizer_scrubs_secrets_from_prompt(synthesize, monkeypatch):
+    # Fact content is re-scrubbed before it is embedded in the LLM prompt, and
+    # scrubbing happens BEFORE the 300-char truncation so a secret near the cut
+    # cannot leak as a fragment.
+    token = "ghp_" + "a1B2c3D4e5F6g7H8i9J0" * 2
+    padding = "x" * 290  # pushes the second secret across the 300-char boundary
+    facts = [
+        fact(f"deploy failed with GITHUB_TOKEN={token} in the release step"),
+        fact(f"{padding} api_key: {'k' * 24} rotated after the incident"),
+    ]
+    prompts = []
+
+    def capture(prompt, model, timeout):
+        prompts.append(prompt)
+        return "Rotate credentials before every release."
+
+    monkeypatch.setattr(synthesize, "_call_claude", capture)
+    synth = synthesize.make_claude_synthesizer(model="haiku", timeout=5)
+    assert synth(facts, "heuristic fallback content") != ""
+
+    prompt = prompts[0]
+    assert token not in prompt
+    assert "k" * 24 not in prompt
+    assert "[REDACTED_SECRET]" in prompt
+
+
 def test_make_claude_synthesizer_collapses_and_returns_llm_text(synthesize, monkeypatch):
     monkeypatch.setattr(
         synthesize, "_call_claude",
