@@ -8,6 +8,7 @@ Usage:
     python3 budget-recall.py "what did we decide about content strategy"
     python3 budget-recall.py --budget 800 "status of the audit"
     python3 budget-recall.py --budget 1500 --include-superseded "pricing history"
+    python3 budget-recall.py --strict-verify "..."   # only signed+valid facts
 """
 import argparse
 import json
@@ -483,6 +484,89 @@ def _apply_date_diversity_cap(results: list[dict], max_per_date: int) -> list[di
     return kept + deferred
 
 
+# --- Attestation verification on the recall hot path (OWASP F5 / N8068) -----
+# The signed fact envelope (_sign.py) made tampering with facts.json
+# *detectable*, but detection only ran in the offline verify-facts.py CLI — the
+# recall path that actually injects facts into live sessions never checked it,
+# so a poisoned store would be injected undetected. Close that loop here: when
+# signing has been set up (a key exists), every loaded fact is verified and
+# TAMPERED facts are dropped before ranking, with a one-line stderr count (the
+# injection hook discards stderr, so the warning can never leak into a
+# session). Unsigned facts stay recallable by default — much of the store
+# predates signing — but are counted in the warning; --strict-verify fails
+# closed and keeps only VALID facts. No key on disk means verification is
+# skipped entirely (pre-signing behavior, and _sign/cryptography are never
+# imported, keeping the no-key hot path cost-free).
+DEFAULT_SIGNING_KEY = Path.home() / ".nock-brain" / "signing-key"
+DEFAULT_SIGNING_PUB = Path.home() / ".nock-brain" / "signing-key.pub"
+
+
+def _resolve_verify_key():
+    """Load the attestation-verification key, or None when signing was never
+    set up (None disables verification). Paths are overridable via
+    NOCKBRAIN_SIGNING_PUB / NOCKBRAIN_SIGNING_KEY; the public key is preferred,
+    the private key (which can also verify) is the fallback.
+
+    A key that exists but cannot be loaded fails OPEN with a stderr note:
+    attestations are tamper-*evidence*, not a gate — an attacker who can
+    corrupt the key file could as easily delete it, and recall powers a live
+    injection hook that must keep working."""
+    pub_path = Path(os.environ.get("NOCKBRAIN_SIGNING_PUB", "").strip()
+                    or DEFAULT_SIGNING_PUB)
+    key_path = Path(os.environ.get("NOCKBRAIN_SIGNING_KEY", "").strip()
+                    or DEFAULT_SIGNING_KEY)
+    try:
+        if pub_path.exists():
+            import _sign
+            return _sign.load_public_key(pub_path)
+        if key_path.exists():
+            import _sign
+            return _sign.load_or_create_key(key_path, pub_path, create=False)
+    except Exception as exc:  # noqa: BLE001 - never break live recall on key trouble
+        print(f"budget-recall: cannot load signing key ({exc}); "
+              "attestation verification skipped", file=sys.stderr)
+    return None
+
+
+def _verify_filter(facts: list[dict], verify_key, *, label: str,
+                   strict: bool = False) -> list[dict]:
+    """Enforce attestations on loaded facts (see block comment above).
+
+    TAMPERED facts are always excluded. Default mode keeps UNSIGNED and
+    PARENT_SUSPECT facts (backward compatible — their own content is unproven
+    or intact respectively, not known-poisoned) and counts them in the stderr
+    warning; strict mode keeps only VALID. No key -> facts pass unchanged."""
+    if verify_key is None or not facts:
+        return facts
+    import _sign
+    facts_by_id = {f.get("id", ""): f for f in facts}
+    counts: Counter = Counter()
+    kept: list[dict] = []
+    for f in facts:
+        status = _sign.verify_fact(f, verify_key, facts_by_id=facts_by_id)
+        counts[status] += 1
+        if status == _sign.TAMPERED:
+            continue
+        if strict and status != _sign.VALID:
+            continue
+        kept.append(f)
+    flagged = [
+        (counts[_sign.TAMPERED], "tampered", True),
+        (counts[_sign.UNSIGNED], "unsigned", strict),
+        (counts[_sign.PARENT_SUSPECT], "parent-suspect", strict),
+    ]
+    if any(count for count, _, _ in flagged):
+        parts = [
+            f"{'excluded' if excluded else 'allowed'} {count} {name}"
+            for count, name, excluded in flagged if count
+        ]
+        print(f"{label}: attestation check: " + "; ".join(parts)
+              + f" of {len(facts)} fact(s)"
+              + ("" if strict else " (--strict-verify excludes unverified)"),
+              file=sys.stderr)
+    return kept
+
+
 def format_fact(f: dict, query_terms: set[str] | None = None) -> str:
     parts = [f"[{f.get('source_date', 'unknown')}]", f"[{f.get('kind', 'fact').upper()}]"]
     header = " ".join(parts)
@@ -492,8 +576,9 @@ def format_fact(f: dict, query_terms: set[str] | None = None) -> str:
     return f"{header}\n{content}"
 
 
-def _load(path: Path) -> list[dict]:
-    return load_facts(path, required_fields=RECALL_ITEM_FIELDS)
+def _load(path: Path, *, verify_key=None, strict_verify: bool = False) -> list[dict]:
+    facts = load_facts(path, required_fields=RECALL_ITEM_FIELDS)
+    return _verify_filter(facts, verify_key, label=str(path), strict=strict_verify)
 
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -534,12 +619,18 @@ def _maybe_graph_expand(all_facts: list[dict], seeds: list[dict], query: str,
 def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
                   include_superseded: bool = False, insights_file: Path | None = None,
                   now: datetime | None = None, graph_expand: bool = False,
-                  max_per_date: "int | None" = None) -> str:
+                  max_per_date: "int | None" = None,
+                  strict_verify: bool = False) -> str:
     ref_now = _resolve_now(now)
     query_terms = _query_terms(query)
     min_matches = _default_recall_min_matches(query_terms)
+    verify_key = _resolve_verify_key()
+    if strict_verify and verify_key is None:
+        print("budget-recall: --strict-verify requested but no signing key "
+              "found; attestation verification skipped", file=sys.stderr)
     if facts_file:
-        all_facts = _load(facts_file)
+        all_facts = _load(facts_file, verify_key=verify_key,
+                          strict_verify=strict_verify)
         fact_results = search(
             all_facts, query, include_superseded,
             now=ref_now, min_matched_terms=min_matches,
@@ -551,7 +642,9 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
         fact_results = []
     insight_results = (
         search(
-            _load(insights_file), query, include_superseded,
+            _load(insights_file, verify_key=verify_key,
+                  strict_verify=strict_verify),
+            query, include_superseded,
             now=ref_now, min_matched_terms=min_matches,
         )
         if insights_file else []
@@ -606,14 +699,21 @@ def main():
                         help="Cap facts sharing one source_date in the result "
                              "(default 4; 0 disables; also via "
                              "NOCKBRAIN_MAX_PER_DATE)")
+    parser.add_argument("--strict-verify", action="store_true",
+                        help="Fail closed: recall only facts whose attestation "
+                             "verifies as valid (default also excludes tampered "
+                             "facts but still allows unsigned ones; also via "
+                             "NOCKBRAIN_STRICT_VERIFY=1)")
     args = parser.parse_args()
 
     budget = min(args.budget, MAX_BUDGET)
     query_str = " ".join(args.query)
     graph_expand = args.graph or _env_truthy("NOCKBRAIN_GRAPH_RECALL")
+    strict_verify = args.strict_verify or _env_truthy("NOCKBRAIN_STRICT_VERIFY")
     result = budget_recall(query_str, args.facts, budget, args.include_superseded,
                            insights_file=args.insights, graph_expand=graph_expand,
-                           max_per_date=args.max_per_date)
+                           max_per_date=args.max_per_date,
+                           strict_verify=strict_verify)
 
     if result:
         print(result)
