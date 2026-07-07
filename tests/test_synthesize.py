@@ -3,14 +3,15 @@ recurring same-kind facts into higher-level insights."""
 import json
 
 
-def fact(content, kind="correction", source_date="2026-06-01", status="current", fid=None):
+def fact(content, kind="correction", source_date="2026-06-01", status="current",
+         fid=None, confidence=0.9):
     return {
         "id": fid or f"f{abs(hash((content, source_date))) % 10_000}",
         "kind": kind,
         "content": content,
         "source_date": source_date,
         "status": status,
-        "confidence": 0.9,
+        "confidence": confidence,
     }
 
 
@@ -66,6 +67,68 @@ def test_confidence_grows_with_recurrence(synthesize):
     high = synthesize.synthesize(more, threshold=0.2, min_cluster=2)[0]
     assert high["confidence"] >= low["confidence"]
     assert high["confidence"] <= 0.95  # capped
+
+
+def test_confidence_capped_by_mean_member_confidence(synthesize):
+    # The 2026-07-06 review scenario: many sightings of a mediocre fact must
+    # not mint a high-confidence insight. Six 0.7-confidence members would
+    # previously score min(0.95, 0.7 + 0.05*6) = 0.95; now the mean caps it.
+    facts = [fact(f"shared recurring theme item number {i}", confidence=0.7)
+             for i in range(6)]
+    ins = synthesize.synthesize(facts, threshold=0.2, min_cluster=2)[0]
+    assert ins["confidence"] == 0.7
+
+
+def test_confidence_formula_locked(synthesize):
+    # confidence = round(min(0.95, 0.7 + 0.05*n, mean(member confidence)), 2)
+    # n=2 at 0.9: recurrence term (0.8) binds, not the mean (0.9).
+    two = [fact(f"shared recurring theme item number {i}") for i in range(2)]
+    assert synthesize.synthesize(two, threshold=0.2, min_cluster=2)[0]["confidence"] == 0.8
+    # n=5 at 0.9: recurrence term reaches 0.95 but the mean (0.9) caps it.
+    five = [fact(f"shared recurring theme item number {i}") for i in range(5)]
+    assert synthesize.synthesize(five, threshold=0.2, min_cluster=2)[0]["confidence"] == 0.9
+    # Mixed members: the cap is the MEAN, not the max or min.
+    mixed = [
+        fact("shared recurring theme item number 0", confidence=0.62),
+        fact("shared recurring theme item number 1", confidence=0.9),
+    ]
+    assert synthesize.synthesize(mixed, threshold=0.2, min_cluster=2)[0]["confidence"] == 0.76
+
+
+def test_low_confidence_facts_never_enter_clustering(synthesize):
+    # Six 0.55-confidence status updates: below the 0.6 default floor, they
+    # produce NO insight at all (recurrence of noise is not a lesson).
+    facts = [fact(f"boot status heartbeat item number {i}", kind="status",
+                  confidence=0.55) for i in range(6)]
+    assert synthesize.synthesize(facts, threshold=0.2, min_cluster=2) == []
+    # A floor of 0 restores the old include-everything behavior, and the mean
+    # cap still holds the insight at member quality.
+    ins = synthesize.synthesize(facts, threshold=0.2, min_cluster=2,
+                                confidence_floor=0.0)
+    assert len(ins) == 1
+    assert ins[0]["confidence"] == 0.55
+
+
+def test_confidence_floor_is_inclusive_at_the_boundary(synthesize):
+    facts = [fact(f"shared recurring theme item number {i}", confidence=0.6)
+             for i in range(2)]
+    ins = synthesize.synthesize(facts, threshold=0.2, min_cluster=2)
+    assert len(ins) == 1  # >= floor stays eligible
+    assert ins[0]["confidence"] == 0.6
+
+
+def test_floor_drops_only_weak_members_not_the_cluster(synthesize):
+    # A weak member below the floor is excluded from the cluster (and from the
+    # mean) while the strong members still consolidate.
+    facts = [
+        fact("shared recurring theme item number 0", confidence=0.9),
+        fact("shared recurring theme item number 1", confidence=0.9),
+        fact("shared recurring theme item number 2", confidence=0.5),
+    ]
+    ins = synthesize.synthesize(facts, threshold=0.2, min_cluster=2)
+    assert len(ins) == 1
+    assert ins[0]["recurrence"] == 2
+    assert ins[0]["confidence"] == 0.8  # min(0.95, 0.7 + 0.05*2, 0.9)
 
 
 def test_kinds_filter(synthesize):
