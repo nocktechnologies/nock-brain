@@ -16,6 +16,17 @@ def _load(name: str):
     return mod
 
 
+@pytest.fixture(autouse=True)
+def _isolate_signing_key_env(monkeypatch, tmp_path):
+    """Keep tests hermetic: budget-recall verifies fact attestations against
+    the key at ~/.nock-brain by default, so a developer machine with a real
+    signing key would silently change recall-test behavior. Point resolution
+    at paths that never exist; verification tests override these env vars."""
+    missing = tmp_path / "no-such-signing-key"
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(missing))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(missing) + ".pub")
+
+
 @pytest.fixture(scope="session")
 def classifier():
     return _load("recall-classifier")
@@ -99,3 +110,8 @@ def nockbrain_health():
 @pytest.fixture(scope="session")
 def ingest_curated_memory():
     return _load("ingest-curated-memory")
+
+
+@pytest.fixture(scope="session")
+def sign_lib():
+    return _load("_sign")
