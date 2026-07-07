@@ -115,3 +115,8 @@ def ingest_curated_memory():
 @pytest.fixture(scope="session")
 def sign_lib():
     return _load("_sign")
+
+
+@pytest.fixture(scope="session")
+def consolidate_facts():
+    return _load("consolidate-facts")
