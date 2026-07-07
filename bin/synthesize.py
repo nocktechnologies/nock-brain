@@ -36,6 +36,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
+from _scrub import scrub_secrets
 from _store import secure_mkdir, secure_write_json
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
@@ -134,7 +135,13 @@ def make_claude_synthesizer(model: str = DEFAULT_LLM_MODEL,
     Identity and provenance fields are never touched by the LLM.
     """
     def _synth(cluster: list[dict], heuristic_content: str) -> str:
-        members = "\n".join(f"- {f.get('content', '')[:300]}" for f in cluster[:25])
+        # Re-scrub before the content leaves the store: facts are scrubbed at
+        # extraction, but older/imported facts may predate a pattern. Scrub
+        # BEFORE truncation so a secret straddling the 300-char cut cannot
+        # survive as a recognizable fragment.
+        members = "\n".join(
+            f"- {scrub_secrets(f.get('content', ''))[0][:300]}" for f in cluster[:25]
+        )
         prompt = (
             "These notes are the same recurring lesson from past work sessions. "
             "Write ONE clear, specific sentence (max 45 words) stating the durable, "
