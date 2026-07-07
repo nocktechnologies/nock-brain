@@ -43,6 +43,11 @@ DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 DEFAULT_OUTPUT = Path.home() / ".nock-brain" / "insights.json"
 DEFAULT_THRESHOLD = 0.3
 DEFAULT_MIN_CLUSTER = 2
+# Members below this confidence never enter clustering: recurrence of low-value
+# noise is not a lesson. 0.6 sits between the [STATUS] extraction tier (0.5)
+# and the weakest durable inferred kind (architecture, 0.7), so status-grade
+# noise is excluded while every durable extraction stays eligible.
+DEFAULT_CONFIDENCE_FLOOR = 0.6
 # Opt-in LLM (Haiku-distill) synthesizer. "haiku" is the CLI alias for the cheap
 # Haiku tier; `claude -p` runs on the Claude Code subscription (NOT the metered
 # API), so the LLM-distill carries no per-call spend.
@@ -60,6 +65,15 @@ STOPWORDS = {
     "code", "kevin", "mira", "not", "no", "so", "if", "then", "than", "into",
     "out", "up", "down", "over", "after", "before", "about",
 }
+
+
+def member_confidence(fact: dict) -> float:
+    """A fact's confidence for synthesis math; missing/garbage reads as 0.0
+    (no evidence of quality contributes no quality)."""
+    try:
+        return float(fact.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def tokenize(text: str) -> set[str]:
@@ -203,7 +217,12 @@ def synthesize_cluster(cluster: list[dict], synthesizer=None) -> dict:
         # which path wrote `content` — heuristic (deterministic) or llm (enriched).
         "synthesized_by": synthesized_by,
         "status": "current",
-        "confidence": round(min(0.95, 0.7 + 0.05 * n), 2),
+        # Recurrence grows confidence, but member quality caps it: an insight
+        # can never be more confident than the average fact it was minted from
+        # (six 0.55-confidence sightings are not one 0.95-confidence lesson).
+        "confidence": round(
+            min(0.95, 0.7 + 0.05 * n, sum(member_confidence(f) for f in cluster) / n), 2
+        ),
         # source_date (latest member) keeps insights first-class for the recall
         # formatter/search, which key off source_date; source_dates keeps the span.
         "source_date": dates[-1] if dates else "",
@@ -217,15 +236,18 @@ def synthesize(
     facts: list[dict], threshold: float = DEFAULT_THRESHOLD,
     min_cluster: int = DEFAULT_MIN_CLUSTER, kinds: set[str] | None = None,
     synthesizer=None, llm_top: int | None = None,
+    confidence_floor: float = DEFAULT_CONFIDENCE_FLOOR,
 ) -> list[dict]:
     """Consolidate current facts into insights. Only clusters with at least
-    min_cluster members (a genuine recurrence) become insights. An optional
-    ``synthesizer`` callable enriches each insight's prose (see
+    min_cluster members (a genuine recurrence) become insights. Facts below
+    ``confidence_floor`` never enter clustering (pass ``0.0`` to include all).
+    An optional ``synthesizer`` callable enriches each insight's prose (see
     :func:`synthesize_cluster`); ``None`` (default) uses the heuristic. When a
     synthesizer is given, ``llm_top`` bounds enrichment to the N strongest
     recurrences (the highest-value lessons); the long tail stays heuristic.
     ``llm_top=None`` enriches every cluster."""
     active = [f for f in facts if f.get("status", "current") != "superseded"]
+    active = [f for f in active if member_confidence(f) >= confidence_floor]
     if kinds:
         active = [f for f in active if f.get("kind") in kinds]
 
@@ -260,6 +282,12 @@ def main():
     parser.add_argument("--min-cluster", type=int, default=DEFAULT_MIN_CLUSTER)
     parser.add_argument("--kinds", type=str, default=None,
                         help="Comma-separated kinds to consolidate (default: all)")
+    parser.add_argument("--confidence-floor", type=float,
+                        default=DEFAULT_CONFIDENCE_FLOOR,
+                        help="Exclude facts below this confidence from "
+                             "clustering; insight confidence is also capped at "
+                             "the mean member confidence "
+                             f"(default: {DEFAULT_CONFIDENCE_FLOOR}, 0 = include all)")
     parser.add_argument("--llm", action="store_true",
                         help="Enrich insight prose with a cheap LLM (Haiku via "
                              "`claude -p`, subscription path — no metered spend). "
@@ -286,7 +314,8 @@ def main():
                    if args.llm else None)
     llm_top = args.llm_top if args.llm_top and args.llm_top > 0 else None
     insights = synthesize(facts, args.threshold, args.min_cluster, kinds,
-                          synthesizer, llm_top)
+                          synthesizer, llm_top,
+                          confidence_floor=args.confidence_floor)
 
     secure_mkdir(args.output.parent)
     secure_write_json(args.output, insights, indent=2, default=str)
