@@ -36,8 +36,11 @@ TAMPERED and silently drop from recall. Losers keep their validity window
 
 Default is a DRY-RUN: prints a summary and writes a reviewable manifest,
 mutating nothing. --execute additionally requires
---i-have-reviewed-the-manifest, backs up the store first, then applies the
-status flips.
+--i-have-reviewed-the-manifest AND a prior dry-run manifest whose selection
+still matches the live store exactly — execute never rewrites the manifest,
+it applies precisely the loser->canonical mapping the operator reviewed or
+refuses (store drift between review and execute invalidates the review).
+On a match it backs up the store first, then applies the status flips.
 
 OPS RULE (from the #32/#33 handoff): after any --execute against a live store,
 run bin/sign-facts.py then bin/verify-facts.py.
@@ -194,19 +197,27 @@ def select(rows: list[dict], kinds: set[str] | None = None,
     }
 
 
+def supersession_map(clusters: list[dict]) -> dict[str, str]:
+    """loser fact id -> canonical fact id: the exact mutation --execute
+    applies. Works on both live selection clusters (full facts) and manifest
+    clusters (summary entries), so the reviewed-vs-live comparison in the
+    execute gate is apples-to-apples."""
+    return {
+        str(f.get("id")): str(c["canonical"].get("id"))
+        for c in clusters for f in c.get("supersede", [])
+    }
+
+
 def apply_supersessions(rows: list[dict], clusters: list[dict],
                         now: str | None = None) -> int:
     """Flip every cluster loser to status=superseded with a superseded_by
     pointer at the canonical fact. Status-only: id/kind/content/evidence are
     never touched, so attestations stay valid."""
     stamp = now or datetime.now(timezone.utc).isoformat()
-    canonical_by_loser = {
-        f.get("id"): c["canonical"].get("id")
-        for c in clusters for f in c["supersede"]
-    }
+    canonical_by_loser = supersession_map(clusters)
     n = 0
     for f in rows:
-        canonical_id = canonical_by_loser.get(f.get("id"))
+        canonical_id = canonical_by_loser.get(str(f.get("id")))
         if canonical_id:
             f["status"] = "superseded"
             f["superseded_at"] = stamp
@@ -247,7 +258,9 @@ def main() -> int:
                     help="also consolidate clusters whose members share one "
                          "source_date (default: cross-date only)")
     ap.add_argument("--execute", action="store_true",
-                    help="apply the supersede flips (gated; default is dry-run)")
+                    help="apply the reviewed manifest's supersede flips (gated; "
+                         "requires a prior dry-run whose manifest still matches "
+                         "the live selection; default is dry-run)")
     ap.add_argument("--i-have-reviewed-the-manifest", action="store_true")
     args = ap.parse_args()
 
@@ -316,23 +329,44 @@ def main() -> int:
         ],
         "candidate_ids": [c["id"] for c in sel["candidates"]],
     }
-    secure_write_json(manifest_path, manifest, indent=2, default=str)
-    print(f"\nmanifest written: {manifest_path}")
-
     if not args.execute:
+        secure_write_json(manifest_path, manifest, indent=2, default=str)
+        print(f"\nmanifest written: {manifest_path}")
         print("\nDRY-RUN only — nothing mutated. Review the manifest, then re-run with")
         print("  --execute --i-have-reviewed-the-manifest")
         return 0
 
     # ---- gated execute ----
+    # Never rewrites the manifest: execute applies exactly the loser->canonical
+    # mapping the operator reviewed, or refuses. Anything else (store drift,
+    # changed params, missing manifest) means the review no longer covers what
+    # would be applied — back to the dry-run.
     if not args.i_have_reviewed_the_manifest:
         print("\nREFUSING --execute without --i-have-reviewed-the-manifest",
               file=sys.stderr)
+        return 2
+    try:
+        reviewed = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"REFUSING --execute: no reviewable manifest at {manifest_path} "
+              f"({exc}) — run the dry-run first.", file=sys.stderr)
+        return 2
+    reviewed_map = supersession_map(reviewed.get("clusters", []))
+    live_map = supersession_map(sel["clusters"])
+    if reviewed_map != live_map:
+        print("REFUSING --execute: live selection no longer matches the "
+              f"reviewed manifest ({len(reviewed_map)} reviewed vs "
+              f"{len(live_map)} live supersessions). The store or parameters "
+              "changed since the dry-run — re-run it and review the fresh "
+              "manifest.", file=sys.stderr)
         return 2
     if any(c["kind"] in NEVER_TOUCH for c in sel["candidates"]):
         print("REFUSING --execute with never-touch kinds in candidates",
               file=sys.stderr)
         return 2
+    if not live_map:
+        print("nothing to consolidate — no near-duplicate candidates.")
+        return 0
     backup = args.facts.with_suffix(
         f".json.bak-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
     shutil.copy2(args.facts, backup)

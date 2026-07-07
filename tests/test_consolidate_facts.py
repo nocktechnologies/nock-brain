@@ -217,6 +217,7 @@ def test_cli_execute_refused_without_review_ack(tmp_path):
 def test_cli_gated_execute_applies_backs_up_and_prints_signing_rule(tmp_path):
     facts = store(tmp_path)
     original = {f["id"]: f for f in json.loads(facts.read_text())}
+    assert run_cli(["--facts", str(facts)]).returncode == 0  # dry-run + review
     proc = run_cli(["--facts", str(facts), "--execute",
                     "--i-have-reviewed-the-manifest"])
     assert proc.returncode == 0, proc.stderr
@@ -233,6 +234,58 @@ def test_cli_gated_execute_applies_backs_up_and_prints_signing_rule(tmp_path):
     assert list(tmp_path.glob("facts.json.bak-*"))  # backup taken first
     # Established ops rule is surfaced in the execute summary.
     assert "sign-facts.py" in proc.stdout and "verify-facts.py" in proc.stdout
+
+
+def test_cli_execute_refused_without_prior_dry_run_manifest(tmp_path):
+    # The review attestation must bind to an actual reviewed artifact: with no
+    # dry-run manifest on disk, --execute refuses even with the ack flag.
+    facts = store(tmp_path)
+    before = facts.read_text()
+    proc = run_cli(["--facts", str(facts), "--execute",
+                    "--i-have-reviewed-the-manifest"])
+    assert proc.returncode == 2
+    assert "no reviewable manifest" in proc.stderr
+    assert facts.read_text() == before
+
+
+def test_cli_execute_refused_when_store_drifted_after_review(consolidate_facts, tmp_path):
+    # TOCTOU guard: if the store changes between the reviewed dry-run and
+    # --execute, the live selection differs from the manifest and execute
+    # refuses — and does NOT silently refresh the manifest (a refresh would
+    # let an immediate re-run pass without a new review).
+    facts = store(tmp_path)
+    assert run_cli(["--facts", str(facts)]).returncode == 0
+    manifest_path = tmp_path / consolidate_facts.MANIFEST_NAME
+    reviewed = manifest_path.read_text()
+
+    rows = json.loads(facts.read_text())
+    rows.append(fact("We use Postgres 14 as the primary datastore",
+                     source_date="2026-06-30", confidence=0.8, fid="drift"))
+    facts.write_text(json.dumps(rows, indent=2))
+    before = facts.read_text()
+
+    proc = run_cli(["--facts", str(facts), "--execute",
+                    "--i-have-reviewed-the-manifest"])
+    assert proc.returncode == 2
+    assert "no longer matches" in proc.stderr
+    assert facts.read_text() == before
+    assert manifest_path.read_text() == reviewed  # manifest untouched by execute
+
+
+def test_cli_execute_noop_when_nothing_to_consolidate(tmp_path):
+    # Clean store: dry-run writes an empty manifest; execute matches it and
+    # exits 0 without taking a backup or rewriting anything.
+    facts = tmp_path / "facts.json"
+    facts.write_text(json.dumps([fact("a unique architecture decision about "
+                                      "the primary datastore engine")]))
+    before = facts.read_text()
+    assert run_cli(["--facts", str(facts)]).returncode == 0
+    proc = run_cli(["--facts", str(facts), "--execute",
+                    "--i-have-reviewed-the-manifest"])
+    assert proc.returncode == 0
+    assert "nothing to consolidate" in proc.stdout
+    assert facts.read_text() == before
+    assert not list(tmp_path.glob("facts.json.bak-*"))
 
 
 def test_cli_help_documents_post_execute_signing_rule():
