@@ -38,7 +38,10 @@ if str(BIN_DIR) not in sys.path:
 
 DEFAULT_RRF_K = 60
 DEFAULT_DENSE_TOP = 40
-DEFAULT_RESERVED_SLOTS = 3
+# 5, not 3: the Phase 0 spike measured k=5 as harmless (same hit rate, two
+# more ~80-token facts of budget), and live phrasing variance moves a target's
+# dense rank by a few places — rank 5 must still be guaranteed injection.
+DEFAULT_RESERVED_SLOTS = 5
 
 
 def _env_int(name: str, default: int) -> int:
@@ -53,7 +56,8 @@ def _env_int(name: str, default: int) -> int:
 
 def fuse(all_facts: list, seeds: list, query: str, include_superseded: bool,
          now: datetime, *, min_confidence: float,
-         currently_valid=None, sidecar_path: "Path | None" = None):
+         currently_valid=None, sidecar_path: "Path | None" = None,
+         embed_query: "str | None" = None):
     """Return (fused_results, reserved_ids). Falls back to (seeds, empty) on
     any semantic-tier unavailability — BM25 is always the floor."""
     import _embed
@@ -80,8 +84,13 @@ def fuse(all_facts: list, seeds: list, query: str, include_superseded: bool,
 
     import numpy as np
 
-    query_vec = encoder.encode([_embed.embed_text(query)])[0]
-    sims = sidecar["mat"] @ query_vec
+    query_vec = encoder.encode([_embed.embed_text(embed_query or query)])[0]
+    # np.errstate: numpy 2.0 on macOS Accelerate emits spurious divide/
+    # overflow/invalid warnings from this matmul; results were verified
+    # element-exact against a float64 einsum (max diff 3e-8), and the
+    # warnings would otherwise append to the hook error log on every prompt.
+    with np.errstate(all="ignore"):
+        sims = sidecar["mat"] @ query_vec
     order = np.argsort(-sims)
 
     by_id = {}

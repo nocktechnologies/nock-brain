@@ -14,7 +14,7 @@ Most Claude Code sessions start from zero. nock-brain fixes that.
 4. **Review** — Suggests promotion candidates for durable rules or skills, but never rewrites agent behavior without human approval.
 5. **Export** — Writes derived Obsidian vault and Graphify-compatible graph views for audit and exploration.
 6. **Classify** — Determines if a prompt needs past-session context. "What did we decide about X?" triggers recall. "merge PR 223" doesn't.
-7. **Recall** — Ranks with **BM25** (IDF-weighted token matching with length normalization) and retrieves the most relevant items within a configurable token budget — **synthesized insights first**, then raw facts — so memory enhances without overwhelming the context window.
+7. **Recall** — Ranks with **BM25** (IDF-weighted token matching with length normalization) and retrieves the most relevant items within a configurable token budget — **synthesized insights first**, then raw facts — so memory enhances without overwhelming the context window. With the optional **semantic tier** enabled, BM25 is RRF-fused with cosine similarity over locally computed embeddings, so a paraphrase ("payment processing") finds the fact it shares no words with ("Stripe webhook") — and recall silently degrades to flat BM25 whenever the tier can't run.
 8. **Inject** — A Claude Code hook that chains the steps transparently. Relevant context appears as system messages when needed.
 
 ## Install
@@ -29,6 +29,11 @@ The installer:
 - Finds transcript sources (memsearch plugin or local files)
 - Extracts facts from existing transcripts
 - Wires the auto-injection hook into Claude Code settings
+- Optionally enables **semantic recall** (`--semantic`, or answer the prompt):
+  creates `~/.nock-brain/venv` with numpy + tokenizers (system Python is never
+  touched), fetches the checksum-pinned ~30MB potion-base-8M embedding model,
+  backfills the vector sidecar, and touches `~/.nock-brain/semantic-on`.
+  Disable any time with `rm ~/.nock-brain/semantic-on`.
 
 Restart Claude Code after install.
 
@@ -40,6 +45,9 @@ Restart Claude Code after install.
 - Claude Code (for the auto-injection hook)
 - Session transcripts in markdown format (from [memsearch](https://github.com/zilliztech/memsearch) or your own)
 - Optional raw Claude Code JSONL transcripts from `~/.claude/projects/**/*.jsonl`
+- Optional, for semantic recall: numpy + tokenizers (installed into
+  `~/.nock-brain/venv` by `install.sh --semantic`; no API keys, no services —
+  embedding inference is local and the hook falls back to flat BM25 without it)
 
 ## Usage
 

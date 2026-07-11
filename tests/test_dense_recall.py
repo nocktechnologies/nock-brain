@@ -196,3 +196,15 @@ def test_insight_lead_cap_applies_only_when_semantic(br, semantic_env,
     on2 = br.budget_recall(QUERY, fp, budget=4000, semantic=True,
                            insights_file=ip)
     assert on2.count("pricing insight number") == 2
+
+
+def test_embed_query_text_strips_intent_scaffolding(br):
+    f = br._embed_query_text
+    assert f("what did we decide about voice transcription mixing up agent names") == \
+        "voice transcription mixing up agent names"
+    assert f("do you remember the voice transcription mixing up agent names") == \
+        "voice transcription mixing up agent names"
+    # original word forms survive (no plural stripping — "names" stays "names")
+    assert "names" in f("agent names")
+    # all-scaffolding query falls back to the raw text rather than empty
+    assert f("what did we decide about") == "what did we decide about"
