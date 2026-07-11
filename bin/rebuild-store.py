@@ -26,6 +26,11 @@ Usage:
     python3 bin/rebuild-store.py --source ~/.claude/projects --source /other
     python3 bin/rebuild-store.py --print-schedule     # print the live cron schedule
 """
+# Deferred annotations keep this importable on Python 3.9 (stock macOS
+# /usr/bin/python3, which non-interactive shells resolve): PEP 604 unions
+# in signatures are a def-time TypeError before 3.10.
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json

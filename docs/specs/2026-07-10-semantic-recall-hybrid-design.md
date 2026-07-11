@@ -232,3 +232,41 @@ fused facts reach injection). Default stays 5.
 verified-target query shows Class-A burial. Remaining work is Phase 4
 (installer wiring: tokenizers dep on the box, default-on decision after
 dogfood burn-in — flag stays off by default until then).
+
+## Phase 4 Record (2026-07-11) — installer, box enablement, burn-in start
+
+Shipped: `install.sh --semantic` (opt-in; interactive prompt otherwise)
+creates `~/.nock-brain/venv` with numpy + tokenizers + cryptography — system
+Python is never mutated — fetches the pinned model, backfills the sidecar,
+and touches `~/.nock-brain/semantic-on`. The hook prefers the venv
+interpreter when present and exports NOCKBRAIN_SEMANTIC=1 when the marker
+exists (`rm` it to disable). README/SKILL.md document the tier.
+
+Found and fixed during the live install:
+- **13 bin/ scripts crashed under stock macOS python3 (3.9)** on def-time
+  PEP 604 unions — install.sh runs `python3` from a NON-interactive shell,
+  which resolves /usr/bin/python3 even when interactive shells find a newer
+  one. All bin/ scripts now defer annotations, enforced by an
+  installer-wide extension of test_python_floor.py (was hook-closure-only).
+- **Static-embedding query dilution**: "what did we decide about X" ranked
+  X's best fact at dense 28 vs 5 for bare "X" (mean pooling weights every
+  token equally). Fix: strip lexical stopwords + recall-intent scaffolding
+  (decide/about/remember/...) before encoding, keeping raw word forms
+  (plural-stripping was measured to hurt). Reserved slots raised 3 -> 5
+  (spike-verified harmless) to absorb residual phrasing variance.
+- numpy 2.0-on-Accelerate emits spurious matmul warnings (results verified
+  element-exact vs float64 einsum); suppressed at the one call site.
+
+Live verification on this store (2,509 facts after the installer's own
+extraction merged 29): curated suite still 8/8; end-to-end hook probes
+recall the zero-overlap Deepgram fact for both "do you remember..." and
+"what did we decide about..." phrasings. Hook wall time 1.7-2.4s on
+recall-triggering prompts — ~0.8s of that is fact-attestation verification,
+active for the first time because the venv provides cryptography (tracked:
+cache verification results; separately: extract-facts emits schema-invalid
+facts that loaders skip — 29 affected).
+
+**Burn-in started 2026-07-11 on Kevin's Mac** (hook wired into
+~/.claude/settings.json by the installer; backup written alongside).
+Repo default for NOCKBRAIN_SEMANTIC stays OFF; revisit the default and
+fleet rollout (mar-hq, mira-brain) after ~a week of dogfood.

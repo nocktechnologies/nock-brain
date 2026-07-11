@@ -20,6 +20,11 @@ Mirrors the gated review-queue pattern in review-promotions.py (candidates as
 JSON + markdown with explicit actions), but for fact diffs rather than doc
 promotions.
 """
+# Deferred annotations keep this importable on Python 3.9 (stock macOS
+# /usr/bin/python3, which non-interactive shells resolve): PEP 604 unions
+# in signatures are a def-time TypeError before 3.10.
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import sys
