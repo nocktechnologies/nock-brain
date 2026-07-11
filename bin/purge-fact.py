@@ -13,6 +13,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
+from _embed import DEFAULT_SIDECAR, EmbedUnavailable, load_sidecar, save_sidecar
 from _facts import load_facts
 from _store import secure_write_json, secure_write_text
 
@@ -87,6 +88,45 @@ def purge_text_tree(root: Path, patterns: list[str]) -> tuple[dict[Path, str], i
     return rewrites, removed
 
 
+def purge_sidecar(path: Path, removed_ids: set[str], apply: bool) -> tuple[str, int]:
+    """Vector purge parity: embeddings are content-derived, so a purged fact
+    may not leave its vector behind. Surgical row removal when numpy is
+    available; when it is not, fail SAFE by deleting the whole sidecar (it is
+    derived data — re-embedding takes seconds) rather than skipping."""
+    if not path.exists() or not removed_ids:
+        return "", 0
+    try:
+        sidecar = load_sidecar(path)
+    except EmbedUnavailable:
+        if apply:
+            path.unlink()
+        return (
+            f"numpy unavailable for surgical vector purge; "
+            f"{'deleted' if apply else 'would delete'} entire sidecar {path} "
+            f"(derived data; rerun embed-facts.py to rebuild)"
+        ), -1
+    if sidecar is None:
+        # Unreadable/corrupt sidecar: treat like the no-numpy case.
+        if apply:
+            path.unlink()
+        return (
+            f"unreadable sidecar; "
+            f"{'deleted' if apply else 'would delete'} {path}"
+        ), -1
+    keep = [i for i, fact_id in enumerate(sidecar["ids"])
+            if fact_id not in removed_ids]
+    removed = len(sidecar["ids"]) - len(keep)
+    if removed and apply:
+        save_sidecar(
+            path,
+            [sidecar["ids"][i] for i in keep],
+            [sidecar["hashes"][i] for i in keep],
+            sidecar["model"],
+            sidecar["mat"][keep],
+        )
+    return "", removed
+
+
 def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Purge fact material from local NockBrain stores")
     parser.add_argument("fact_id", nargs="?", default="")
@@ -95,6 +135,7 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--events", type=Path, default=DEFAULT_ROOT / "events.jsonl")
     parser.add_argument("--notes-dir", type=Path, default=DEFAULT_ROOT / "sessions")
     parser.add_argument("--vault", type=Path, default=DEFAULT_ROOT / "vault")
+    parser.add_argument("--sidecar", type=Path, default=DEFAULT_SIDECAR)
     parser.add_argument("--apply", action="store_true", help="Rewrite files; otherwise dry-run only")
     args = parser.parse_args(argv)
 
@@ -112,12 +153,19 @@ def run(argv: list[str] | None = None) -> int:
     kept_events, removed_events = purge_events(args.events, event_ids, patterns)
     note_rewrites, removed_note_lines = purge_text_tree(args.notes_dir, patterns)
     vault_rewrites, removed_vault_lines = purge_text_tree(args.vault, patterns)
+    removed_ids = {str(fact.get("id")) for fact in removed_fact_records
+                   if fact.get("id")}
+    sidecar_note, removed_vectors = purge_sidecar(
+        args.sidecar, removed_ids, args.apply)
 
     print(
         f"{'would remove' if not args.apply else 'removed'} "
         f"{removed_facts} fact(s), {removed_events} event(s), "
-        f"{removed_note_lines} note line(s), {removed_vault_lines} vault line(s)"
+        f"{removed_note_lines} note line(s), {removed_vault_lines} vault line(s), "
+        f"{'all' if removed_vectors < 0 else removed_vectors} vector(s)"
     )
+    if sidecar_note:
+        print(sidecar_note, file=sys.stderr)
 
     if not args.apply:
         return 0
