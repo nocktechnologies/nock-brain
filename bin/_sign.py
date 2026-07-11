@@ -377,12 +377,37 @@ TAMPERED = "tampered"
 UNSIGNED = "unsigned"
 PARENT_SUSPECT = "parent-suspect"
 
+# Domain separation for verification-cache digests (distinct from _DOMAIN so a
+# cache digest can never be confused with signable material).
+_CACHE_DOMAIN = b"nockbrain-verify-cache-v1"
+
+
+def cache_digest(key: SigningKey, signature_hex: Any, payload: bytes) -> str:
+    """Digest naming one successful signature verification, for the recall hot
+    path's sidecar cache (_verify_cache). It binds everything the proof
+    depended on — algorithm, key, signature, and the exact signed payload
+    (which itself embeds the committed fact/source hashes and the CURRENT
+    parent hashes) — so any change to any of them yields a different digest,
+    a cache miss, and a real verification. The NUL-joined fields before the
+    payload are alg names, key fingerprints, and hex strings, none of which
+    can contain NUL, and the variable-length payload comes last, so the
+    encoding is unambiguous."""
+    material = b"\0".join([
+        _CACHE_DOMAIN,
+        key.alg.encode("utf-8"),
+        key.key_id.encode("utf-8"),
+        str(signature_hex).encode("utf-8"),
+        payload,
+    ])
+    return hashlib.sha256(material).hexdigest()
+
 
 def verify_fact(
     fact: dict[str, Any],
     key: SigningKey | None,
     *,
     facts_by_id: dict[str, dict[str, Any]] | None = None,
+    verified_cache=None,
 ) -> str:
     """Verify a single fact's attestation. Returns one of the status constants.
 
@@ -391,7 +416,14 @@ def verify_fact(
       signed hashes, or the signature does not verify under the key.
     - PARENT_SUSPECT: the fact itself is intact, but a parent fact's current
       core no longer matches what the child committed to (Merkle break).
-    - VALID: signature verifies and all committed hashes match."""
+    - VALID: signature verifies and all committed hashes match.
+
+    ``verified_cache`` (a _verify_cache.VerifiedSignatureCache, or anything
+    with hit/add) short-circuits ONLY the public-key signature operation, for
+    (key, signature, payload) triples this store has already proven VALID. The
+    committed-hash comparisons below run unconditionally either way, so a
+    tampered fact is still caught with a warm cache; only VALID results are
+    ever recorded."""
     facts_by_id = facts_by_id or {}
     att = fact.get("attestation")
     if not isinstance(att, dict) or not att.get("signature"):
@@ -420,7 +452,14 @@ def verify_fact(
     if key.alg != att.get("alg"):
         # Algorithm mismatch between key and attestation -> cannot have produced it.
         return TAMPERED
+    digest = None
+    if verified_cache is not None:
+        digest = cache_digest(key, att["signature"], payload_now)
+        if verified_cache.hit(digest):
+            return VALID
     if key.verify_bytes(payload_now, att["signature"]):
+        if digest is not None:
+            verified_cache.add(digest)
         return VALID
 
     # 3. Signature failed even though the fact's OWN committed hashes still match
