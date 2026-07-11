@@ -151,7 +151,38 @@ def test_graph_neighbors_rank_below_direct_hits(budget_recall, tmp_path):
         )
 
 
-def test_graph_expansion_filters_neighbors_for_multi_subject_queries(budget_recall, tmp_path):
+def test_multi_word_query_surfaces_zero_overlap_neighbor(budget_recall, tmp_path):
+    # Regression (2026-07-10): the old hardcoded >=2-shared-terms gate filtered
+    # every possible neighbor of a >=3-term query (a fact sharing >=2 terms is
+    # already a BM25 seed), silently disabling expansion for natural questions.
+    # By default a zero-overlap concept neighbor must surface.
+    facts = [
+        fact("pricing tier decision locked at the command seatbelt anchor",
+             id="seed", source_file="s.jsonl", session="s1"),
+        fact("the seatbelt rule was finalized in review", id="neighbor",
+             source_file="s.jsonl", session="s2"),
+    ]
+    fp = _write(tmp_path, facts)
+
+    query = "pricing tier decision"  # 3 signal terms -> long-query path
+    assert len(budget_recall._query_terms(query)) >= 3
+
+    on = budget_recall.budget_recall(query, fp, budget=1000,
+                                     graph_expand=True, now=NOW)
+    assert "pricing tier decision locked" in on
+    assert "seatbelt rule was finalized" in on, (
+        "zero-overlap neighbor must surface via graph on a multi-word query"
+    )
+
+    off = budget_recall.budget_recall(query, fp, budget=1000,
+                                      graph_expand=False, now=NOW)
+    assert "seatbelt rule was finalized" not in off
+
+
+def test_min_shared_terms_gate_filters_neighbors_when_set(budget_recall, tmp_path, monkeypatch):
+    # NOCKBRAIN_GRAPH_MIN_SHARED_TERMS=1 restores an anti-drift guard for
+    # multi-subject queries: a neighbor touching none of the query's signal
+    # terms is dropped, while the flat seed is unaffected.
     facts = [
         fact("NockLock pricing uses the shared seatbelt anchor", id="seed",
              source_file="s.jsonl", session="s1"),
@@ -159,17 +190,18 @@ def test_graph_expansion_filters_neighbors_for_multi_subject_queries(budget_reca
              source_file="s.jsonl", session="s2"),
     ]
     fp = _write(tmp_path, facts)
+    query = "remind me what NockLock pricing is and who is on the consumer team"
 
-    out = budget_recall.budget_recall(
-        "remind me what NockLock pricing is and who is on the consumer team",
-        fp,
-        budget=1000,
-        graph_expand=True,
-        now=NOW,
-    )
+    monkeypatch.setenv("NOCKBRAIN_GRAPH_MIN_SHARED_TERMS", "1")
+    gated = budget_recall.budget_recall(query, fp, budget=1000,
+                                        graph_expand=True, now=NOW)
+    assert "NockLock pricing uses" in gated
+    assert "implementation note" not in gated
 
-    assert "NockLock pricing uses" in out
-    assert "implementation note" not in out
+    monkeypatch.delenv("NOCKBRAIN_GRAPH_MIN_SHARED_TERMS", raising=False)
+    ungated = budget_recall.budget_recall(query, fp, budget=1000,
+                                          graph_expand=True, now=NOW)
+    assert "implementation note" in ungated
 
 
 def test_graph_expansion_respects_budget(budget_recall, tmp_path):

@@ -10,7 +10,9 @@ and SUPPORTS edges (session -> fact) to find facts that neighbor a flat BM25 hit
 without sharing any query term. Those neighbors are weighted strictly BELOW the
 weakest flat hit, re-using the SAME confidence / recency / supersession gates as
 `search()`, and the seeds are always emitted first in their original order so
-expansion is strictly additive.
+expansion is strictly additive. An optional NOCKBRAIN_GRAPH_MIN_SHARED_TERMS
+gate (default off) can additionally require neighbors of long queries to touch
+at least N query terms.
 """
 from __future__ import annotations
 
@@ -47,6 +49,16 @@ def _load_export_graph():
 DEFAULT_GRAPH_WEIGHT = 0.30
 DEFAULT_SESSION_WEIGHT = 0.15
 DEFAULT_MAX_NEIGHBORS = 20
+# Optional anti-drift gate for long (>=3 signal-term) queries: a neighbor must
+# share at least this many query terms or it is dropped. Default 0 = no gate —
+# the module exists to surface zero-overlap neighbors. 1 is the meaningful
+# guard setting (seeds already require >=2 matched terms, so 1 admits only
+# graph-connected facts that at least touch the query's subject). Values >=2
+# are vacuous: any fact sharing >=2 terms of a >=3-term query is already a
+# BM25 seed, so the gate would filter every possible neighbor — this was the
+# hardcoded behavior before 2026-07-10 and made expansion a silent no-op for
+# every natural multi-word question.
+DEFAULT_MIN_SHARED_TERMS = 0
 
 
 def _env_float(name: str, default: float) -> float:
@@ -87,6 +99,9 @@ def expand(all_facts, seeds, include_superseded, now, *,
     graph_weight = _env_float("NOCKBRAIN_GRAPH_WEIGHT", DEFAULT_GRAPH_WEIGHT)
     session_weight = _env_float("NOCKBRAIN_GRAPH_SESSION", DEFAULT_SESSION_WEIGHT)
     max_neighbors = _env_int("NOCKBRAIN_GRAPH_MAX_NEIGHBORS", DEFAULT_MAX_NEIGHBORS)
+    min_shared_terms = _env_int(
+        "NOCKBRAIN_GRAPH_MIN_SHARED_TERMS", DEFAULT_MIN_SHARED_TERMS
+    )
     session_enabled = session_weight > 0
 
     eg = _load_export_graph()
@@ -165,8 +180,10 @@ def expand(all_facts, seeds, include_superseded, now, *,
             continue
         if f.get("confidence", 0) < min_confidence:
             continue
-        if query_terms and len(query_terms) >= 3 and tokenize is not None:
-            if len(set(tokenize(f.get("content", ""))) & set(query_terms)) < 2:
+        if (min_shared_terms > 0 and query_terms and len(query_terms) >= 3
+                and tokenize is not None):
+            shared = set(tokenize(f.get("content", ""))) & set(query_terms)
+            if len(shared) < min_shared_terms:
                 continue
         graph_score = (
             base
