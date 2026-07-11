@@ -206,3 +206,29 @@ binds: MiniLM-ONNX (best M4 dense rank), or quantized nomic (unexplored).
 256-dim float32 sidecar for 2,480 facts: ~2.5MB. Full re-embed of the store
 with potion-raw: seconds — hash-invalidation can be coarse without pain, and
 model swaps are cheap enough to re-embed on upgrade rather than migrate.
+
+## Phase 2 Acceptance (2026-07-11)
+
+Hybrid fusion implemented in budget-recall behind `NOCKBRAIN_SEMANTIC` (or
+`--semantic`) with all four Phase 0 amendments: filter-only dense gates,
+reserved top-3 dense slots exempt from the date diversity cap, insight lead
+capped at 5 (`NOCKBRAIN_INSIGHT_LEAD`), and fact-id ground truth
+(`docs/evals/curated-recall-suite.json`). The eval now drives the real
+`select_recall()` pipeline, not a replica.
+
+Measured on the live 2,480-fact store: curated suite **baseline 6/8 ->
+semantic 8/8** (verified-target queries 5/5, controls 3/3) — acceptance was
+"all verified-target queries minus at most one". The flagship zero-overlap
+paraphrase (S1, Deepgram/STT) goes miss -> hit via its reserved slot; S2
+goes miss -> rank 4. Phase 0 suite for continuity: 5/9 -> 6/9 (M1/M3 remain
+no-target artifacts; semantic recall is correct not to surface them).
+In-process recall latency 0.1-0.7s per query with the mmap'd model.
+
+Insight-cap micro-eval: 8/8 with the cap on or off — the reserved-slot
+guarantee carries correctness; the cap's effect is budget allocation (more
+fused facts reach injection). Default stays 5.
+
+**Phase 3 (cross-encoder rerank) is NOT triggered:** post-fusion, no
+verified-target query shows Class-A burial. Remaining work is Phase 4
+(installer wiring: tokenizers dep on the box, default-on decision after
+dogfood burn-in — flag stays off by default until then).
