@@ -144,3 +144,65 @@ after facts prove out — insights are few and BM25-findable today).
 predates this spec and measured the problem). CI stays green with no model
 files: unit tests use a stub encoder; the eval is an offline tool run against
 live stores, not a CI job.
+
+## Phase 0 Decision Record (2026-07-11)
+
+Spike run against the live 2,480-fact store; all three candidates embedded
+the full store and ran the eval suite through the exact production selection
+path. Harness: scratchpad `spike_embed.py` / `spike_eval.py` / `spike_cold.py`
+(fresh-process cold starts, 3-5 runs each, Apple Silicon).
+
+### Model decision: potion-base-8M as RAW static embeddings
+
+| Criterion | potion-raw | MiniLM-L6 ONNX | nomic-v1.5 @384 ONNX |
+|---|---|---|---|
+| M-suite hit@injection (amended pipeline, k=3) | **3/6** | 2/6 | 2/6 |
+| Controls | 3/3 | 3/3 | 3/3 |
+| Dense rank, M2 paraphrase probe | 3 | 5 | 4 |
+| Cold start p50 (fresh process) | **~430ms** | ~710ms | 1.6s first / ~370ms page-warm |
+| Store backfill (2,480 facts) | **1.5s** | 4.5min | 18.8min |
+| Runtime deps beyond stdlib | **numpy + tokenizers** | + onnxruntime | + onnxruntime |
+| Model assets | **~30MB** | ~98MB | ~523MB |
+
+Retrieval quality was statistically indistinguishable across all three on
+this corpus — the binding constraint is corpus noise (1,500-char operational
+blobs where the answer token is incidental), not model capacity. With quality
+tied, potion wins every operational criterion. "Raw" matters: loading via the
+model2vec library cost 0.7-2.1s; the model is just a token-embedding matrix,
+so runtime encode is `tokenizer.json` + numpy lookup (skip [CLS]/[SEP],
+mean-pool, L2-normalize — verified cosine 1.0 parity against model2vec).
+Install converts the pinned safetensors to `.npy` once; model2vec is at most
+an install-time dep, never a runtime one. Fallback if a quality ceiling ever
+binds: MiniLM-ONNX (best M4 dense rank), or quantized nomic (unexplored).
+
+### Design amendments from the spike (bind on Phase 2)
+
+1. **D1 amended — dense gates are FILTER-only.** Multiplying cosine by
+   recency/confidence destroys paraphrase recall: cosine lives in a ~0.2-0.6
+   band, so a 0.44 recency factor buried a perfect-paraphrase hit (the
+   Deepgram/STT fact, raw dense rank 5) below recent noise. Dense candidates
+   keep the superseded/validity/min-confidence *filters* only; recency stays
+   a lexical-side and selection-time concern.
+2. **D1 amended — reserved dense slots.** RRF alone under-serves strong
+   dense hits on noisy stores: M2's dense-rank-3 hit fused to 24 (generic
+   both-list facts collect two RRF terms), then the date diversity cap
+   demoted it to 66 (it was the 9th fact from the 2026-05-19 bulk-import
+   date). Guarantee the top-3 dense-only facts a place in the injected set
+   (displacing the tail, exempt from the date cap). Measured: +1 M-suite on
+   every model; the diversity cap must not apply to reserved slots.
+3. **Insight lead needs a cap.** 20 insights prepended on one eval query
+   consumed most of the 800-token budget before any fused fact. Phase 2
+   should cap the insight lead (e.g. top 5) — micro-eval when implementing.
+4. **Eval suite curation.** Two M-queries (M1 payments/stripe, M3
+   tts-quota/elevenlabs) have NO genuinely on-topic fact in the store — the
+   token-bearing facts are operational blobs that mention the token
+   incidentally. Token-presence ground truth mislabels these; semantic
+   retrieval is *correct* not to surface them. Phase 2 acceptance re-bases
+   on a curated suite (ground truth by fact id, targets verified on-topic):
+   >=5/6 becomes "all queries with a verified on-topic target, minus at
+   most one".
+
+### Measured store costs (for Phase 1)
+256-dim float32 sidecar for 2,480 facts: ~2.5MB. Full re-embed of the store
+with potion-raw: seconds — hash-invalidation can be coarse without pain, and
+model swaps are cheap enough to re-embed on upgrade rather than migrate.
