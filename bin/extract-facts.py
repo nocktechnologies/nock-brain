@@ -6,7 +6,9 @@ decisions, corrections, directives, and architecture facts, and writes
 structured JSON.
 
 Each fact carries: id, kind, scope, status, content, source_file,
-source_date, session_anchor, confidence, created_at.
+source_date, session_anchor, confidence, created_at, and an evidence
+anchor to the transcript line (required by _facts.REQUIRED_FACT_FIELDS —
+a fact without it is skipped by every loader downstream).
 
 Usage:
     python3 extract-facts.py                         # defaults
@@ -134,7 +136,7 @@ def parse_file(filepath: Path, since_date: str | None = None) -> list[dict]:
     current_session = ""
     current_anchor = ""
 
-    for line in text.splitlines():
+    for lineno, line in enumerate(text.splitlines(), start=1):
         if line.startswith("## Session"):
             current_session = line.replace("## ", "").strip()
         elif line.startswith("<!-- session:"):
@@ -160,6 +162,13 @@ def parse_file(filepath: Path, since_date: str | None = None) -> list[dict]:
                     "session": current_session,
                     "session_anchor": current_anchor[:200] if current_anchor else "",
                     "created_at": datetime.now(timezone.utc).isoformat(),
+                    # Same anchor shape as refine-sessions.py's event_evidence;
+                    # the markdown path has no evidence-event layer, so no id.
+                    "evidence": [{
+                        "event_id": "",
+                        "path": str(filepath),
+                        "line": lineno,
+                    }],
                     **meta,
                 }
                 facts.append(fact)
