@@ -10,6 +10,11 @@ Usage:
     python3 budget-recall.py --budget 1500 --include-superseded "pricing history"
     python3 budget-recall.py --strict-verify "..."   # only signed+valid facts
 """
+# Deferred annotations keep this script runnable on Python 3.9 (stock macOS
+# /usr/bin/python3): the recall hook resolves plain `python3` from PATH, and
+# PEP 604 unions in def signatures are a def-time TypeError before 3.10.
+from __future__ import annotations
+
 import argparse
 import json
 import math
