@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Export NockBrain facts as a Graphify-compatible conversation-memory graph."""
+from __future__ import annotations
+
 import argparse
 import json
 import re

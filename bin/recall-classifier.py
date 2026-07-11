@@ -9,6 +9,8 @@ Usage:
     python3 recall-classifier.py "have we seen this bug before"
     python3 recall-classifier.py --test
 """
+from __future__ import annotations
+
 import re
 import sys
 

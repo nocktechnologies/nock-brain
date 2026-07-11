@@ -34,7 +34,9 @@ Restart Claude Code after install.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.10+ for the full toolchain. The auto-injection hook itself runs on
+  the stock macOS `python3` (3.9): every module it reaches is kept
+  3.9-compatible, enforced by `tests/test_python_floor.py`.
 - Claude Code (for the auto-injection hook)
 - Session transcripts in markdown format (from [memsearch](https://github.com/zilliztech/memsearch) or your own)
 - Optional raw Claude Code JSONL transcripts from `~/.claude/projects/**/*.jsonl`
@@ -204,7 +206,14 @@ nock-brain/
 
 ## Development
 
-The bin/ scripts are dependency-free (Python 3.11+ stdlib only). Run the tests:
+The bin/ scripts are dependency-free (Python 3.10+, stdlib only) — with one
+floor exception: `hooks/memory-inject.sh` runs whatever `python3` is on PATH,
+which on stock macOS is Python 3.9. Every module reachable from that hook
+(`recall-classifier`, `budget-recall` and their imports) must therefore stay
+importable on 3.9 — in particular, carry `from __future__ import annotations`
+so PEP 604 unions in signatures are never evaluated at import time.
+`tests/test_python_floor.py` enforces both rules and pins the reachable set.
+Run the tests:
 
 ```bash
 pip install pytest
