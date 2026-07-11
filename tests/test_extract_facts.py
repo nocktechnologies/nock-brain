@@ -1,6 +1,7 @@
 """Tests for fact extraction — the hardest, least-tested part: turning transcript
 bullets into structured facts, classifying tagged + inferred lines, skipping
 operational noise, and deduping near-identical content."""
+import json
 
 
 def test_classify_bullet_tagged(extract_facts):
@@ -87,6 +88,29 @@ def test_parse_file_scrubs_secret_bullets_on_v1_path(extract_facts, tmp_path):
     assert len(facts) == 1
     assert secret not in facts[0]["content"]
     assert "[REDACTED_SECRET]" in facts[0]["content"]
+
+
+def test_parse_file_facts_round_trip_load_facts(extract_facts, facts_lib, tmp_path, capsys):
+    # Regression: extractor facts used to omit `evidence`, so load_facts
+    # (REQUIRED_FACT_FIELDS) silently skipped every freshly extracted fact
+    # and none of them reached recall or embedding.
+    md = tmp_path / "2026-07-11.md"
+    md.write_text(
+        "## Session 10:00\n"
+        "- [DECISION] Kevin chose evidence anchors for extractor facts\n"
+    )
+    facts = extract_facts.parse_file(md)
+    assert facts
+
+    facts_file = tmp_path / "facts.json"
+    facts_file.write_text(json.dumps(facts, default=str))
+    loaded = facts_lib.load_facts(facts_file)
+
+    assert [f["id"] for f in loaded] == [f["id"] for f in facts]
+    assert "skipped" not in capsys.readouterr().err
+    assert loaded[0]["evidence"] == [
+        {"event_id": "", "path": str(md), "line": 2}
+    ]
 
 
 def test_parse_file_respects_since(extract_facts, tmp_path):
