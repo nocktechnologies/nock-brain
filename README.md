@@ -215,8 +215,13 @@ nock-brain/
 ## Development
 
 The bin/ scripts are dependency-free (Python 3.10+, stdlib only) — with one
-floor exception: `hooks/memory-inject.sh` runs whatever `python3` is on PATH,
-which on stock macOS is Python 3.9. Every module reachable from that hook
+floor exception: `hooks/memory-inject.sh` prefers `~/.nock-brain/venv/bin/python3`
+(created by `install.sh --semantic` from stock python3) and otherwise runs
+whatever `python3` is on PATH, which on stock macOS is Python 3.9. The
+semantic tools (`embed-facts.py`, `fetch-embed-model.py`) should be run with
+that venv interpreter too — bare `python3` may resolve via PATH order or a
+shell alias to a Homebrew build without tokenizers. Every module reachable
+from the hook
 (`recall-classifier`, `budget-recall` and their imports) must therefore stay
 importable on 3.9 — in particular, carry `from __future__ import annotations`
 so PEP 604 unions in signatures are never evaluated at import time.
