@@ -461,7 +461,8 @@ def _resolve_max_per_date(explicit: "int | None" = None) -> int:
     return DEFAULT_MAX_PER_DATE
 
 
-def _apply_date_diversity_cap(results: list[dict], max_per_date: int) -> list[dict]:
+def _apply_date_diversity_cap(results: list[dict], max_per_date: int,
+                              exempt: "frozenset | set | None" = None) -> list[dict]:
     """Post-scoring selection constraint — NOT a re-score and NOT a filter.
 
     Cap how many facts sharing the SAME source_date may appear in the front of
@@ -473,13 +474,23 @@ def _apply_date_diversity_cap(results: list[dict], max_per_date: int) -> list[di
     top-K of a generic/recency query while a genuinely top-scored same-date fact
     still survives.
 
+    `exempt` fact ids (the semantic tier's reserved dense slots) bypass the cap
+    entirely: the Phase 0 spike measured the cap demoting the semantically best
+    fact because it was the 9th from a bulk-import date. Exempt facts neither
+    count toward a date's quota nor get deferred. Default None/empty is the
+    exact pre-semantic behavior.
+
     max_per_date <= 0 disables the cap (returns the list unchanged)."""
     if max_per_date <= 0 or len(results) <= max_per_date:
         return results
+    exempt_ids = exempt or frozenset()
     seen: Counter = Counter()
     kept: list[dict] = []
     deferred: list[dict] = []
     for f in results:
+        if f.get("id") in exempt_ids:
+            kept.append(f)
+            continue
         key = str(f.get("source_date", "unknown"))
         if seen[key] < max_per_date:
             seen[key] += 1
@@ -625,7 +636,76 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
                   include_superseded: bool = False, insights_file: Path | None = None,
                   now: datetime | None = None, graph_expand: bool = False,
                   max_per_date: "int | None" = None,
-                  strict_verify: bool = False) -> str:
+                  strict_verify: bool = False, semantic: bool = False) -> str:
+    selection = select_recall(
+        query, facts_file, budget, include_superseded,
+        insights_file=insights_file, now=now, graph_expand=graph_expand,
+        max_per_date=max_per_date, strict_verify=strict_verify,
+        semantic=semantic,
+    )
+    if selection is None:
+        return ""
+    results = selection["results"]
+    output_lines = [f"Memory recall ({len(results)} matches, budget {budget} tokens):"]
+    for f in selection["included"]:
+        output_lines.append(format_fact(f, selection["query_terms"]))
+    remaining = len(results) - len(selection["included"])
+    if selection["truncated"] and remaining > 0:
+        output_lines.append(f"[...{remaining} more results truncated by budget]")
+    output_lines.append(
+        f"[{len(selection['included'])} item(s), "
+        f"~{selection['tokens_used']} tokens]")
+    return "\n\n".join(output_lines)
+
+
+# Default cap on how many synthesized insights may lead a SEMANTIC recall
+# result. Measured in the Phase 0 spike: 20 insights prepended on one query
+# consumed most of the 800-token budget before any fused fact. Applies only
+# when the semantic tier is on, so the flag-off path stays byte-identical.
+# Env-tunable; <= 0 disables the cap.
+DEFAULT_INSIGHT_LEAD_CAP = 5
+
+
+def _resolve_insight_lead_cap() -> int:
+    raw = os.environ.get("NOCKBRAIN_INSIGHT_LEAD", "")
+    try:
+        return int(raw) if raw.strip() else DEFAULT_INSIGHT_LEAD_CAP
+    except ValueError:
+        return DEFAULT_INSIGHT_LEAD_CAP
+
+
+def _maybe_dense_fuse(all_facts: list[dict], seeds: list[dict], query: str,
+                      include_superseded: bool, now: datetime,
+                      semantic: bool) -> "tuple[list[dict], frozenset]":
+    """Gate for dense (semantic) fusion. When `semantic` is False this is a
+    PURE pass-through — same list object, no imports, byte-identical off-path
+    (the _maybe_graph_expand pattern). When True, _dense_recall.fuse() RRF-
+    merges the BM25 seeds with raw-cosine candidates from the vector sidecar
+    and nominates reserved dense slots; any unavailability (deps, model,
+    sidecar) degrades silently back to the seeds — BM25 is the floor."""
+    if not semantic:
+        return seeds, frozenset()
+    import _dense_recall  # local import: never loaded on the off-path
+    return _dense_recall.fuse(
+        all_facts, seeds, query, include_superseded, now,
+        min_confidence=MIN_CONFIDENCE,
+        currently_valid=fact_currently_valid,
+    )
+
+
+def select_recall(query: str, facts_file: "Path | None",
+                  budget: int = DEFAULT_BUDGET,
+                  include_superseded: bool = False,
+                  insights_file: "Path | None" = None,
+                  now: "datetime | None" = None, graph_expand: bool = False,
+                  max_per_date: "int | None" = None,
+                  strict_verify: bool = False,
+                  semantic: bool = False) -> "dict | None":
+    """Run the full selection pipeline and return the facts that would be
+    injected, as dicts: {results, included, tokens_used, truncated,
+    query_terms, reserved_ids}. budget_recall() renders this; the offline
+    eval consumes it directly so benchmarks measure production code, not a
+    replica. Returns None when nothing matches."""
     ref_now = _resolve_now(now)
     query_terms = _query_terms(query)
     min_matches = _default_recall_min_matches(query_terms)
@@ -633,12 +713,19 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
     if strict_verify and verify_key is None:
         print("budget-recall: --strict-verify requested but no signing key "
               "found; attestation verification skipped", file=sys.stderr)
+    reserved_ids: frozenset = frozenset()
     if facts_file:
         all_facts = _load(facts_file, verify_key=verify_key,
                           strict_verify=strict_verify)
         fact_results = search(
             all_facts, query, include_superseded,
             now=ref_now, min_matched_terms=min_matches,
+        )
+        # Dense fusion first (spec D1), graph expansion anchors on the fused
+        # list — with on-topic dense seeds it enriches rather than drifts.
+        fact_results, reserved_ids = _maybe_dense_fuse(
+            all_facts, fact_results, query, include_superseded, ref_now,
+            semantic,
         )
         fact_results = _maybe_graph_expand(
             all_facts, fact_results, query, include_superseded, ref_now, graph_expand
@@ -654,6 +741,10 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
         )
         if insights_file else []
     )
+    if semantic:
+        lead_cap = _resolve_insight_lead_cap()
+        if lead_cap > 0:
+            insight_results = insight_results[:lead_cap]
 
     # Consolidated insights lead; drop the raw facts an insight already covers so
     # recall shows the synthesis, not the synthesis plus its own sources.
@@ -662,31 +753,73 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
 
     results = insight_results + fact_results
     if not results:
-        return ""
+        return None
 
     # Diversity cap (post-scoring): keep any single source_date's import from
     # crowding the top of the budget-bounded result. Applied after insight-lead
-    # ordering and source dedup, before budget truncation.
-    results = _apply_date_diversity_cap(results, _resolve_max_per_date(max_per_date))
+    # ordering and source dedup, before budget truncation. Reserved dense
+    # slots are exempt (Phase 0: the cap demoted the best semantic hit).
+    results = _apply_date_diversity_cap(
+        results, _resolve_max_per_date(max_per_date), exempt=reserved_ids)
 
-    output_lines = [f"Memory recall ({len(results)} matches, budget {budget} tokens):"]
-    tokens_used = estimate_tokens(output_lines[0])
-    included = 0
+    header = f"Memory recall ({len(results)} matches, budget {budget} tokens):"
+    tokens_used = estimate_tokens(header)
+    included: list[dict] = []
+    truncated = False
 
-    for f in results:
-        formatted = format_fact(f, query_terms)
-        fact_tokens = estimate_tokens(formatted)
-        if tokens_used + fact_tokens > budget:
-            remaining = len(results) - included
-            if remaining > 0:
-                output_lines.append(f"[...{remaining} more results truncated by budget]")
-            break
-        output_lines.append(formatted)
-        tokens_used += fact_tokens
-        included += 1
+    if not reserved_ids:
+        # Exact pre-semantic truncation: greedy in order, stop at overflow.
+        for f in results:
+            fact_tokens = estimate_tokens(format_fact(f, query_terms))
+            if tokens_used + fact_tokens > budget:
+                truncated = True
+                break
+            included.append(f)
+            tokens_used += fact_tokens
+    else:
+        # Reserved slots are guaranteed: precommit their token cost, then fill
+        # the remaining budget greedily. A reserved fact past the truncation
+        # point is appended at the tail (it displaced budget, not order).
+        committed: list[dict] = []
+        reserved_cost = 0
+        for f in results:
+            if f.get("id") not in reserved_ids:
+                continue
+            cost = estimate_tokens(format_fact(f, query_terms))
+            if tokens_used + reserved_cost + cost > budget:
+                break  # budget cannot hold every reserved slot; keep what fits
+            committed.append(f)
+            reserved_cost += cost
+        committed_ids = {f.get("id") for f in committed}
+        tokens_used += reserved_cost
+        emitted: set = set()
+        for f in results:
+            fid = f.get("id")
+            if fid in committed_ids:
+                if fid not in emitted:
+                    included.append(f)
+                    emitted.add(fid)
+                continue
+            fact_tokens = estimate_tokens(format_fact(f, query_terms))
+            if tokens_used + fact_tokens > budget:
+                truncated = True
+                break
+            included.append(f)
+            tokens_used += fact_tokens
+        if truncated:
+            for f in committed:
+                if f.get("id") not in emitted:
+                    included.append(f)
+                    emitted.add(f.get("id"))
 
-    output_lines.append(f"[{included} item(s), ~{tokens_used} tokens]")
-    return "\n\n".join(output_lines)
+    return {
+        "results": results,
+        "included": included,
+        "tokens_used": tokens_used,
+        "truncated": truncated,
+        "query_terms": query_terms,
+        "reserved_ids": reserved_ids,
+    }
 
 
 def main():
@@ -700,6 +833,11 @@ def main():
     parser.add_argument("--graph", action="store_true",
                         help="Enable graph-augmented recall (default off; also "
                              "via NOCKBRAIN_GRAPH_RECALL=1)")
+    parser.add_argument("--semantic", action="store_true",
+                        help="Enable hybrid semantic recall over the vector "
+                             "sidecar (default off; also via "
+                             "NOCKBRAIN_SEMANTIC=1; degrades to flat BM25 "
+                             "when deps/model/sidecar are missing)")
     parser.add_argument("--max-per-date", type=int, default=None,
                         help="Cap facts sharing one source_date in the result "
                              "(default 4; 0 disables; also via "
@@ -715,10 +853,11 @@ def main():
     query_str = " ".join(args.query)
     graph_expand = args.graph or _env_truthy("NOCKBRAIN_GRAPH_RECALL")
     strict_verify = args.strict_verify or _env_truthy("NOCKBRAIN_STRICT_VERIFY")
+    semantic = args.semantic or _env_truthy("NOCKBRAIN_SEMANTIC")
     result = budget_recall(query_str, args.facts, budget, args.include_superseded,
                            insights_file=args.insights, graph_expand=graph_expand,
                            max_per_date=args.max_per_date,
-                           strict_verify=strict_verify)
+                           strict_verify=strict_verify, semantic=semantic)
 
     if result:
         print(result)
