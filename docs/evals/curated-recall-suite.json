@@ -1,0 +1,10 @@
+[
+  ["S1", "voice transcription mixing up agent names", "id:462382c5026f"],
+  ["S2", "cost monitor released with a defect", "id:edfddf626821"],
+  ["S3", "CI minutes exploding because secret scans fire on every commit", "id:c91cf2d730fe"],
+  ["S4", "agent liveness monitoring", "token:heartbeat"],
+  ["S5", "hosting platform downtime incident", "token:railway"],
+  ["C1", "gitleaks scan status", "token:gitleaks"],
+  ["C2", "railway outage recovery", "token:railway"],
+  ["C3", "deepgram transcription bug", "token:deepgram"]
+]

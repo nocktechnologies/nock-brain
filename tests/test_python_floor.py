@@ -73,6 +73,8 @@ def test_hook_reachable_closure_is_acknowledged():
     reachable from the hook must be added here — and at that moment, checked
     against the 3.9 floor documented in the README's Development section."""
     assert [p.name for p in hook_reachable_modules()] == [
+        "_dense_recall.py",
+        "_embed.py",
         "_facts.py",
         "_graph_recall.py",
         "_sign.py",
