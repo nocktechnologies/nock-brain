@@ -198,6 +198,51 @@ def test_insight_lead_cap_applies_only_when_semantic(br, semantic_env,
     assert on2.count("pricing insight number") == 2
 
 
+def test_nonfinite_sidecar_rows_never_outrank_real_hits(br, embed_mod,
+                                                        semantic_env,
+                                                        tmp_path, capsys):
+    """Extreme-norm sidecar rows (float32-cast overflow -> inf sims) must be
+    skipped, not ranked. A +inf cosine would otherwise sort FIRST under the
+    matmul's errstate guard and silently hijack a reserved slot."""
+    _, sidecar = semantic_env
+    corrupt = fact("bad", "corrupt embedding row")
+    facts = [fact("lex", LEX_FACT), fact("tgt", TARGET), corrupt]
+    fp = write_facts(tmp_path, facts)
+
+    enc = CraftedEncoder()
+    mat = enc.encode([str(f["content"]) for f in facts]).astype(numpy.float64)
+    # Extreme norm in the query dimension: save_sidecar's float32 cast turns
+    # this into +inf, so its dot with the query is +inf (rank 0 unfixed).
+    mat[2] = [1e300, 0.0, 0.0, 0.0]
+    with numpy.errstate(all="ignore"):  # the overflow-on-cast is the point
+        embed_mod.save_sidecar(
+            sidecar,
+            [f["id"] for f in facts],
+            [embed_mod.content_hash(f["content"]) for f in facts],
+            enc.model_id, mat,
+        )
+    loaded = embed_mod.load_sidecar(sidecar, expect_model=enc.model_id)
+    assert numpy.isinf(loaded["mat"][2]).any(), (
+        "precondition: the float32 cast must have minted inf"
+    )
+
+    dense_mod = _load("_dense_recall")
+    now = br._resolve_now(None)
+    seeds = br.search(facts, QUERY, now=now)
+    fused, reserved = dense_mod.fuse(
+        facts, seeds, QUERY, False, now, min_confidence=0.0)
+
+    assert "bad" not in reserved, "corrupt row must not claim a reserved slot"
+    fused_ids = [f["id"] for f in fused]
+    assert "bad" not in fused_ids, (
+        "a non-finite similarity row must be excluded from dense ranking"
+    )
+    assert "tgt" in reserved, (
+        "the genuine paraphrase target still wins the top dense slot"
+    )
+    assert "skipped 1 non-finite" in capsys.readouterr().err
+
+
 def test_embed_query_text_strips_intent_scaffolding(br):
     f = br._embed_query_text
     assert f("what did we decide about voice transcription mixing up agent names") == \

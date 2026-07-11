@@ -86,12 +86,23 @@ def fuse(all_facts: list, seeds: list, query: str, include_superseded: bool,
 
     query_vec = encoder.encode([_embed.embed_text(embed_query or query)])[0]
     # np.errstate: numpy 2.0 on macOS Accelerate emits spurious divide/
-    # overflow/invalid warnings from this matmul; results were verified
-    # element-exact against a float64 einsum (max diff 3e-8), and the
-    # warnings would otherwise append to the hook error log on every prompt.
+    # overflow/invalid warnings from this matmul (fixed upstream by 2.4);
+    # results were verified element-exact against a float64 einsum (max diff
+    # 6e-8), and the warnings would otherwise append to the hook error log on
+    # every prompt.
     with np.errstate(all="ignore"):
         sims = sidecar["mat"] @ query_vec
-    order = np.argsort(-sims)
+    # Cosine of valid normalized vectors is always finite, so a non-finite
+    # sim marks a corrupt sidecar row (e.g. inf minted by load_sidecar's
+    # float32 cast) that errstate above would otherwise hide. A +inf sim
+    # would rank FIRST and hijack a reserved slot on every prompt — sort
+    # corrupt rows past every finite one and stop before reaching them.
+    finite = np.isfinite(sims)
+    if not finite.all():
+        print(f"semantic recall: skipped {int((~finite).sum())} non-finite "
+              "similarity row(s) (corrupt sidecar? re-run bin/embed-facts.py)",
+              file=sys.stderr)
+    order = np.argsort(np.where(finite, -sims, np.inf))
 
     by_id = {}
     for f in all_facts:
@@ -101,6 +112,8 @@ def fuse(all_facts: list, seeds: list, query: str, include_superseded: bool,
 
     dense: list = []
     for idx in order:
+        if not finite[idx]:
+            break  # corrupt rows all sort last; nothing usable beyond
         fact_id = sidecar["ids"][idx]
         fact = by_id.get(fact_id)
         if fact is None:
