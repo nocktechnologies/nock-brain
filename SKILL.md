@@ -22,10 +22,17 @@ Memory layer for Claude Code. Extracts facts from session transcripts, classifie
 | `budget-recall.py` | Retrieve facts within token budget | Automatically via hook |
 | `query-facts.py` | Search facts manually | When exploring what's stored |
 | `supersede-fact.py` | Mark outdated decisions | When direction changes |
+| `fetch-embed-model.py` | Install the pinned embedding model | Once, when enabling semantic recall |
+| `embed-facts.py` | Build/update the vector sidecar | After extraction; `--backfill` on first enable |
+| `eval-graph-recall.py` | Benchmark flat vs hybrid recall on the live store | When tuning recall quality |
 
 ## Auto-injection
 
 If the `memory-inject.sh` hook is installed, recall happens transparently on prompts that match trigger patterns (past references, decision recall, entity lookups, thread followups). Operational prompts are filtered out.
+
+## Semantic recall (optional)
+
+Hybrid retrieval: BM25 keyword ranking fused (RRF) with cosine similarity over locally computed embeddings, so "payment processing" can find the Stripe fact it shares no words with. Enable with `bash install.sh --semantic` — creates `~/.nock-brain/venv` (numpy + tokenizers; system Python untouched), fetches the pinned ~30MB potion-base-8M model, backfills `~/.nock-brain/embeddings.npz`, and touches `~/.nock-brain/semantic-on`. Disable any time with `rm ~/.nock-brain/semantic-on`. Recall silently degrades to flat BM25 whenever the tier can't run — no external services, no API calls, ever.
 
 ## Manual recall
 

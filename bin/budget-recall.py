@@ -674,6 +674,31 @@ def _resolve_insight_lead_cap() -> int:
         return DEFAULT_INSIGHT_LEAD_CAP
 
 
+# Recall-intent scaffolding to strip from the query before EMBEDDING it (the
+# lexical side already drops QUERY_STOPWORDS). These words signal *that*
+# recall is wanted, not *what* to recall, and a static mean-pooled embedding
+# is diluted by every generic token: measured live, "what did we decide about
+# X" ranked X's best fact at dense 28 where bare "X" ranked it 5. Word forms
+# are kept raw otherwise — plural-stripping "names"->"name" was measured to
+# hurt (different token vector).
+EMBED_INTENT_WORDS = {
+    "about", "regarding", "decide", "decided", "decision", "decisions",
+    "discuss", "discussed", "talked", "mentioned", "asked", "remember",
+    "remembered", "recall", "happened",
+}
+
+
+def _embed_query_text(query: str) -> str:
+    """Query text for the dense encoder: original word forms, minus lexical
+    stopwords and recall-intent scaffolding. Falls back to the raw query when
+    filtering would leave nothing."""
+    words = re.findall(r"[A-Za-z0-9]+", query)
+    kept = [w for w in words
+            if w.lower() not in QUERY_STOPWORDS
+            and w.lower() not in EMBED_INTENT_WORDS]
+    return " ".join(kept) if kept else query
+
+
 def _maybe_dense_fuse(all_facts: list[dict], seeds: list[dict], query: str,
                       include_superseded: bool, now: datetime,
                       semantic: bool) -> "tuple[list[dict], frozenset]":
@@ -690,6 +715,7 @@ def _maybe_dense_fuse(all_facts: list[dict], seeds: list[dict], query: str,
         all_facts, seeds, query, include_superseded, now,
         min_confidence=MIN_CONFIDENCE,
         currently_valid=fact_currently_valid,
+        embed_query=_embed_query_text(query),
     )
 
 

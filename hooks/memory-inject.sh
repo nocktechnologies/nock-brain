@@ -17,7 +17,22 @@ BRAIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLASSIFIER="${BRAIN_ROOT}/bin/recall-classifier.py"
 BUDGET_RECALL="${BRAIN_ROOT}/bin/budget-recall.py"
 
-PROMPT=$(printf '%s' "$INPUT" | python3 -c "
+# Prefer the semantic-tier venv when the installer created one — numpy and
+# tokenizers live there so system Python is never mutated. Absent venv means
+# plain python3, exactly the pre-semantic behavior.
+PY="python3"
+if [[ -x "${HOME}/.nock-brain/venv/bin/python3" ]]; then
+    PY="${HOME}/.nock-brain/venv/bin/python3"
+fi
+
+# Opt-in semantic recall via an on-disk marker (survives whatever env Claude
+# Code invokes hooks with). `rm ~/.nock-brain/semantic-on` disables it; recall
+# silently degrades to flat BM25 whenever the tier can't run anyway.
+if [[ -f "${HOME}/.nock-brain/semantic-on" ]]; then
+    export NOCKBRAIN_SEMANTIC=1
+fi
+
+PROMPT=$(printf '%s' "$INPUT" | "$PY" -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -48,7 +63,7 @@ ERROR_LOG="${HOME}/.nock-brain/hook-errors.log"
 ( umask 077; touch "$ERROR_LOG" ) 2>/dev/null
 chmod 600 "$ERROR_LOG" 2>/dev/null
 
-RESULT=$(printf '%s' "$PROMPT" | python3 "$CLASSIFIER" 2>>"$ERROR_LOG")
+RESULT=$(printf '%s' "$PROMPT" | "$PY" "$CLASSIFIER" 2>>"$ERROR_LOG")
 EXIT_CODE=$?
 
 if [[ $EXIT_CODE -ne 0 ]]; then
@@ -56,13 +71,13 @@ if [[ $EXIT_CODE -ne 0 ]]; then
     exit 0
 fi
 
-RECALL=$(python3 "$BUDGET_RECALL" --budget 800 --facts "$FACTS_FILE" -- "$PROMPT" 2>>"$ERROR_LOG")
+RECALL=$("$PY" "$BUDGET_RECALL" --budget 800 --facts "$FACTS_FILE" -- "$PROMPT" 2>>"$ERROR_LOG")
 if [[ -z "$RECALL" ]] || [[ "$RECALL" == "No matching facts found." ]]; then
     echo '{}'
     exit 0
 fi
 
-python3 -c "
+"$PY" -c "
 import json, sys
 recall = sys.stdin.read()
 if recall.strip():

@@ -21,6 +21,11 @@ Usage:
     python3 brain-think.py --json "vps root access mar gateway"
     python3 brain-think.py --facts /path/to/facts.json --max-cite 8 "boardroom"
 """
+# Deferred annotations keep this importable on Python 3.9 (stock macOS
+# /usr/bin/python3, which non-interactive shells resolve): PEP 604 unions
+# in signatures are a def-time TypeError before 3.10.
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import json

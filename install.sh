@@ -8,6 +8,20 @@ BRAIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SETTINGS_FILE="${HOME}/.claude/settings.json"
 FACTS_DIR="${HOME}/.nock-brain"
 
+# Optional semantic tier (hybrid embedding recall). Explicit flags win; with
+# no flag an interactive run asks, a non-interactive run skips with a hint.
+SEMANTIC="ask"
+for arg in "$@"; do
+    case "$arg" in
+        --semantic) SEMANTIC="yes" ;;
+        --no-semantic) SEMANTIC="no" ;;
+        *) echo "Unknown option: $arg (supported: --semantic, --no-semantic)" >&2; exit 1 ;;
+    esac
+done
+if [[ "${NOCKBRAIN_INSTALL_SEMANTIC:-}" == "1" ]]; then
+    SEMANTIC="yes"
+fi
+
 if [[ "$BRAIN_DIR" == *\"* || "$BRAIN_DIR" == *"'"* || "$BRAIN_DIR" == *'$'* || "$BRAIN_DIR" == *\`* || "$BRAIN_DIR" == *$'\n'* ]]; then
     echo "Unsafe nock-brain path: ${BRAIN_DIR}" >&2
     exit 1
@@ -122,6 +136,51 @@ print("      " + json.dumps(payload, separators=(",", ":")))
 PY
 fi
 
+# Semantic tier: a dedicated venv holds numpy + tokenizers (system Python is
+# never touched), then the pinned model is fetched and the store backfilled.
+# Everything is opt-in and reversible: `rm ~/.nock-brain/semantic-on` turns it
+# off, and recall degrades to flat BM25 whenever the tier can't run.
+if [[ "$SEMANTIC" == "ask" ]] && [[ -t 0 ]]; then
+    read -r -p "Enable semantic recall (downloads a ~30MB embedding model)? [y/N] " REPLY
+    [[ "$REPLY" =~ ^[Yy] ]] && SEMANTIC="yes" || SEMANTIC="no"
+fi
+if [[ "$SEMANTIC" == "yes" ]]; then
+    echo ""
+    echo "Semantic tier"
+    echo "-------------"
+    VENV_DIR="${FACTS_DIR}/venv"
+    if (
+        set -e
+        if ! [[ -x "${VENV_DIR}/bin/python3" ]]; then
+            echo "  Creating venv at ${VENV_DIR}"
+            python3 -m venv "$VENV_DIR"
+        fi
+        echo "  Installing numpy + tokenizers + cryptography into the venv"
+        # cryptography: the recall hot path verifies fact attestations (OWASP
+        # F5) when a signing key exists — without it the venv would silently
+        # skip verification that a system python with cryptography performs.
+        "${VENV_DIR}/bin/pip" install --quiet --disable-pip-version-check numpy tokenizers cryptography
+        echo "  Fetching pinned embedding model"
+        "${VENV_DIR}/bin/python3" "$BRAIN_DIR/bin/fetch-embed-model.py"
+        if [[ -f "${FACTS_DIR}/facts.json" ]]; then
+            echo "  Backfilling vector sidecar"
+            "${VENV_DIR}/bin/python3" "$BRAIN_DIR/bin/embed-facts.py" --backfill
+        else
+            echo "  No facts.json yet — run bin/embed-facts.py after first extraction"
+        fi
+        ( umask 077; touch "${FACTS_DIR}/semantic-on" )
+    ); then
+        echo "  Semantic recall ENABLED (disable: rm ${FACTS_DIR}/semantic-on)"
+    else
+        echo "  Semantic setup failed — recall stays flat BM25." >&2
+        echo "  Retry later with: bash ${BRAIN_DIR}/install.sh --semantic" >&2
+    fi
+elif [[ "$SEMANTIC" == "ask" ]]; then
+    echo ""
+    echo "Semantic recall not configured (non-interactive run)."
+    echo "Enable later with: bash ${BRAIN_DIR}/install.sh --semantic"
+fi
+
 echo ""
 echo "Done. Restart Claude Code for the hook to take effect."
 echo ""
@@ -137,3 +196,6 @@ echo "  Query facts:     python3 ${BRAIN_DIR}/bin/query-facts.py 'your query'"
 echo "  Budget recall:   python3 ${BRAIN_DIR}/bin/budget-recall.py 'your query'"
 echo "  Purge fact:      python3 ${BRAIN_DIR}/bin/purge-fact.py <fact_id-or-pattern> --apply"
 echo "  Test classifier: python3 ${BRAIN_DIR}/bin/recall-classifier.py --test"
+echo "  Embed model:     python3 ${BRAIN_DIR}/bin/fetch-embed-model.py"
+echo "  Embed facts:     python3 ${BRAIN_DIR}/bin/embed-facts.py [--backfill]"
+echo "  Recall eval:     python3 ${BRAIN_DIR}/bin/eval-graph-recall.py --queries ${BRAIN_DIR}/docs/evals/curated-recall-suite.json"

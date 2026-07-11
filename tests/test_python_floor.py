@@ -134,3 +134,61 @@ sys.exit(1 if failures else 0)
         f"hook hot-path modules failed to import under {STOCK_PYTHON} "
         f"({version}):\n{result.stdout}{result.stderr}"
     )
+
+
+# --- Installer-wide floor (2026-07-11) --------------------------------------
+# The hook closure above was not enough: install.sh runs `python3` from a
+# NON-interactive shell, which on stock macOS resolves /usr/bin/python3 (3.9)
+# even when an interactive shell would find Homebrew's newer one. The live
+# Phase 4 install crashed in extract-facts.py on a def-time PEP 604 union —
+# 13 bin/ scripts had the same latent break. Every bin/ script must therefore
+# defer annotations and import under the stock interpreter.
+
+ALL_BIN_MODULES = sorted(BIN.glob("*.py"))
+
+
+@pytest.mark.parametrize("path", ALL_BIN_MODULES, ids=lambda p: p.name)
+def test_every_bin_module_defers_annotation_evaluation(path):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    has_future_annotations = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "__future__"
+        and any(alias.name == "annotations" for alias in node.names)
+        for node in tree.body
+    )
+    assert has_future_annotations, (
+        f"{path.name} may run under stock macOS python3 (3.9) via install.sh "
+        f"or a hook: it needs `from __future__ import annotations`"
+    )
+
+
+@pytest.mark.skipif(
+    not STOCK_PYTHON.exists(), reason="no /usr/bin/python3 on this machine"
+)
+def test_every_bin_module_imports_under_stock_python3():
+    driver = """
+import importlib.util, sys
+sys.path.insert(0, sys.argv[1])
+failures = []
+for arg in sys.argv[2:]:
+    name = arg.rsplit("/", 1)[-1][:-3].replace("-", "_")
+    try:
+        spec = importlib.util.spec_from_file_location(name, arg)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        failures.append(f"{arg}: {type(exc).__name__}: {exc}")
+print("\\n".join(failures))
+sys.exit(1 if failures else 0)
+"""
+    result = subprocess.run(
+        [str(STOCK_PYTHON), "-c", driver, str(BIN)]
+        + [str(p) for p in ALL_BIN_MODULES],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, (
+        "bin/ module(s) failed to import under stock python3:\n"
+        + result.stdout + result.stderr
+    )
