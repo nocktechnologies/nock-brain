@@ -1,4 +1,9 @@
 """Shared fact-store validation and loading helpers."""
+# Deferred annotations keep this module importable on Python 3.9 (stock macOS
+# /usr/bin/python3): the recall hook resolves plain `python3` from PATH, and
+# PEP 604 unions in def signatures are a def-time TypeError before 3.10.
+from __future__ import annotations
+
 import json
 import sys
 from datetime import datetime, timezone
