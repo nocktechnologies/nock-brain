@@ -38,10 +38,15 @@ if str(BIN_DIR) not in sys.path:
 
 DEFAULT_RRF_K = 60
 DEFAULT_DENSE_TOP = 40
-# 5, not 3: the Phase 0 spike measured k=5 as harmless (same hit rate, two
-# more ~80-token facts of budget), and live phrasing variance moves a target's
-# dense rank by a few places — rank 5 must still be guaranteed injection.
-DEFAULT_RESERVED_SLOTS = 5
+# 3, per the 2026-07-11 two-store sweep (k in {0,1,2,3,5,7} on the 2.5k-fact
+# Mac store and Mira's 1.8k-fact store): k=3 attains the maximum hit rate on
+# both (8/8 and 7/9), k<3 loses the Mac store's flagship zero-overlap
+# paraphrase (its dense-only rank is 3), and k>3 buys nothing while
+# precommitting ~2 more facts of token budget that displaces the lexical
+# tail. The one observed semantic regression (Mira S5) is caused by RRF
+# composition itself — it persists at k=0 and at every NOCKBRAIN_RRF_K
+# tested — so bigger/smaller reservations cannot fix it.
+DEFAULT_RESERVED_SLOTS = 3
 
 
 def _env_int(name: str, default: int) -> int:
