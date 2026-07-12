@@ -270,3 +270,26 @@ facts that loaders skip — 29 affected).
 ~/.claude/settings.json by the installer; backup written alongside).
 Repo default for NOCKBRAIN_SEMANTIC stays OFF; revisit the default and
 fleet rollout (mar-hq, mira-brain) after ~a week of dogfood.
+
+## Reserved-Slot Tuning Sweep (2026-07-11)
+
+Two-store sweep of NOCKBRAIN_RESERVED_SLOTS in {0,1,2,3,5,7} (Kevin's Mac
+store, 2,509 facts, curated suite; Mira's store, 1,763 facts, her suite —
+her numbers independently reproduced cell-exact on the Mac first), plus
+NOCKBRAIN_RRF_K in {30,60,120,240} on Mira's store.
+
+- **Default changed 5 -> 3.** k=3 attains the maximum semantic hit rate on
+  both stores (8/8 and 7/9); k<3 loses the Mac flagship paraphrase (dense
+  rank exactly 3); k>3 adds nothing and precommits budget that displaces
+  the lexical tail.
+- **Mira's S5 regression is NOT slot displacement** (earlier hypothesis
+  corrected): it persists at k=0 and at every rrf_k tested. Mechanism: RRF
+  dual-membership crowding — dense candidates and facts present in both
+  lists outrank her lex-rank-6 target (fused rank 18) past the injection
+  cut. The only remaining lever, down-weighting the dense list, would
+  sacrifice S4 (her one semantic win, dense-driven) — zero-sum on her
+  store, so weighted fusion stays unbuilt per D1's "only if the eval
+  demands it".
+- Net burn-in picture across stores: noisy large store +2, clean store ±0
+  (one win, one loss, both measured and understood). Supports per-brain
+  opt-in over a fleet-wide default flip.
