@@ -161,11 +161,29 @@ class SigningKey:
                 encoding=serialization.Encoding.Raw,
                 format=serialization.PublicFormat.Raw,
             )
+            self._pub_bytes = pub_bytes
             self.key_id = key_fingerprint(pub_bytes, alg)
         else:
+            self._pub_bytes = None
             # Fingerprint a hash of the secret, not the secret, so key_id is safe
             # to embed in every attestation.
             self.key_id = key_fingerprint(hashlib.sha256(hmac_secret).digest(), alg)
+
+    def cache_key_material(self) -> bytes:
+        """Secret bytes that key the verification-cache MAC (see cache_digest).
+
+        For HMAC it is the shared secret; for Ed25519 it is the raw public-key
+        bytes. This is exactly the material an attacker must be able to READ to
+        recompute a cache digest — the same key-file read access that the store
+        directory does not by itself grant when the key lives on a protected
+        path (NOCKBRAIN_SIGNING_PUB/KEY). key_id alone does NOT suffice: it is a
+        truncated one-way fingerprint that is public in every attestation, so
+        keying on it would leave the cache forgeable from facts.json alone.
+        Never the Ed25519 private key — the verify-only recall path never has
+        it, and the public bytes are unrecoverable from signatures."""
+        if self.alg == ALG_ED25519:
+            return self._pub_bytes
+        return self._hmac_secret
 
     # -- signing/verifying primitives --
     def sign_bytes(self, payload: bytes) -> str:
@@ -377,12 +395,69 @@ TAMPERED = "tampered"
 UNSIGNED = "unsigned"
 PARENT_SUSPECT = "parent-suspect"
 
+# Domain separation for verification-cache digests (distinct from _DOMAIN so a
+# cache digest can never be confused with signable material). The version
+# suffix is bumped whenever the digest scheme changes so stale sidecars are
+# rejected wholesale by _verify_cache.CACHE_VERSION; v2 switched the digest
+# from a plain sha256 of public inputs to an HMAC keyed under the verifying key
+# material (see cache_digest) to close a sidecar-forgery bypass.
+_CACHE_DOMAIN = b"nockbrain-verify-cache-v2"
+
+
+def is_cacheable_signature(signature_hex: Any) -> bool:
+    """True iff ``signature_hex`` is a hex string verify_bytes could parse.
+
+    Gate for the cache path: a non-str or non-hex signature (attacker-writable
+    facts.json can carry either — a JSON number, a list, or a string with a
+    lone surrogate/NUL) must skip caching and fall straight through to
+    verify_bytes, which returns False -> TAMPERED. Mirrors verify_bytes'
+    ``bytes.fromhex`` exactly, so a signature is cacheable iff it is verifiable,
+    and cache_digest never sees bytes that would crash ``.encode`` or make its
+    field encoding ambiguous."""
+    if not isinstance(signature_hex, str):
+        return False
+    try:
+        bytes.fromhex(signature_hex)
+        return True
+    except ValueError:
+        return False
+
+
+def cache_digest(key: SigningKey, signature_hex: str, payload: bytes) -> str:
+    """Digest naming one successful signature verification, for the recall hot
+    path's sidecar cache (_verify_cache). It binds everything the proof
+    depended on — algorithm, key, signature, and the exact signed payload
+    (which itself embeds the committed fact/source hashes and the CURRENT
+    parent hashes) — so any change to any of them yields a different digest,
+    a cache miss, and a real verification.
+
+    It is an HMAC keyed under ``key.cache_key_material()`` (NOT a bare hash of
+    public inputs): a sidecar is attacker-writable, and every non-keyed input
+    here (alg, the public key_id fingerprint, the signature, the payload) is
+    computable by anyone who can read facts.json. Keying the digest under the
+    verifying key material means a forged sidecar entry cannot mint a VALID
+    result without read access to the key file — restoring the intended
+    'forging the cache needs the same access as replacing the key' property
+    even when the key sits on a protected path. ``signature_hex`` is a
+    caller-validated hex string (see is_cacheable_signature), so the NUL-joined
+    field encoding is unambiguous (hex/alg/fingerprint bytes contain no NUL and
+    the variable-length payload comes last)."""
+    preimage = b"\0".join([
+        _CACHE_DOMAIN,
+        key.alg.encode("utf-8"),
+        key.key_id.encode("utf-8"),
+        signature_hex.encode("utf-8"),
+        payload,
+    ])
+    return hmac.new(key.cache_key_material(), preimage, hashlib.sha256).hexdigest()
+
 
 def verify_fact(
     fact: dict[str, Any],
     key: SigningKey | None,
     *,
     facts_by_id: dict[str, dict[str, Any]] | None = None,
+    verified_cache=None,
 ) -> str:
     """Verify a single fact's attestation. Returns one of the status constants.
 
@@ -391,7 +466,14 @@ def verify_fact(
       signed hashes, or the signature does not verify under the key.
     - PARENT_SUSPECT: the fact itself is intact, but a parent fact's current
       core no longer matches what the child committed to (Merkle break).
-    - VALID: signature verifies and all committed hashes match."""
+    - VALID: signature verifies and all committed hashes match.
+
+    ``verified_cache`` (a _verify_cache.VerifiedSignatureCache, or anything
+    with hit/add) short-circuits ONLY the public-key signature operation, for
+    (key, signature, payload) triples this store has already proven VALID. The
+    committed-hash comparisons below run unconditionally either way, so a
+    tampered fact is still caught with a warm cache; only VALID results are
+    ever recorded."""
     facts_by_id = facts_by_id or {}
     att = fact.get("attestation")
     if not isinstance(att, dict) or not att.get("signature"):
@@ -420,7 +502,14 @@ def verify_fact(
     if key.alg != att.get("alg"):
         # Algorithm mismatch between key and attestation -> cannot have produced it.
         return TAMPERED
+    digest = None
+    if verified_cache is not None and is_cacheable_signature(att["signature"]):
+        digest = cache_digest(key, att["signature"], payload_now)
+        if verified_cache.hit(digest):
+            return VALID
     if key.verify_bytes(payload_now, att["signature"]):
+        if digest is not None:
+            verified_cache.add(digest)
         return VALID
 
     # 3. Signature failed even though the fact's OWN committed hashes still match
