@@ -12,6 +12,13 @@ tests pin its contract:
   sidecar's freshness stat;
 - --strict-verify semantics are unchanged: the cache only accelerates the
   VALID determination, never alters a status;
+- a forged sidecar cannot bypass verification: the digest is an HMAC keyed
+  under key material an attacker without the key file cannot reproduce, so a
+  planted digest never hits (even under --strict-verify);
+- hostile/corrupt or non-hex inputs fail closed to a full verification pass and
+  NEVER crash recall — a pathologically nested sidecar (RecursionError), an
+  oversized one, a non-hex signature (surrogate), or a save error all degrade
+  gracefully;
 - any cache doubt (corrupt sidecar, missing key) fails closed to a full
   verification pass, never to skipped verification.
 """
@@ -270,3 +277,112 @@ def test_rotated_key_discards_cache(
     assert verify_calls["n"] == 1  # cache rejected, real verification ran
     assert "approved" not in out
     assert "excluded 1 tampered" in err
+
+
+# --- forged sidecar cannot bypass verification (the key-material MAC) ----------
+def test_forged_digest_cannot_bypass_strict_verify(
+        budget_recall, sign_lib, signing_key, tmp_path, capsys):
+    """The strongest attack: an adversary who can read facts.json and write its
+    directory but does NOT hold the signing key. They plant a poisoned fact with
+    recomputed committed hashes (so it self-hashes clean), an arbitrary
+    signature, and a forged sidecar digest, matching the freshness stat. Because
+    cache_digest is an HMAC keyed under key material the attacker cannot read,
+    no digest they write can hit — the poison fails real verification and is
+    excluded even under --strict-verify."""
+    good = signable_fact("f-good", "ed25519 rollout was approved for signing")
+    sign_lib.sign_fact(good, signing_key)
+    key_id = good["attestation"]["key_id"]
+    alg = good["attestation"]["alg"]
+
+    poison = signable_fact("f-poison", "ed25519 rollout budget is one million dollars")
+    poison["attestation"] = {
+        "fact_id": "f-poison",
+        "canonical_fact_hash": sign_lib.canonical_fact_hash(poison),
+        "source_hash": sign_lib.source_hash(poison),
+        "alg": alg, "key_id": key_id, "signature": "deadbeef",
+        "parent_fact_ids": [], "signed_at": "2026-01-01T00:00:00+00:00",
+    }
+    facts_file = write_facts(tmp_path, [good, poison])
+
+    # Attacker forges the sidecar. Even given the OLD public-only digest formula
+    # (sha256 of alg/key_id/signature/payload), no entry can match the HMAC the
+    # verifier now computes, so any planted digest is dead weight.
+    st = facts_file.stat()
+    sidecar_for(facts_file).write_text(json.dumps({
+        "version": 2, "alg": alg, "key_id": key_id,
+        "store": {"mtime_ns": st.st_mtime_ns, "size": st.st_size},
+        "digests": ["0" * 64, "f" * 64],  # attacker's best guesses
+    }), encoding="utf-8")
+
+    out = budget_recall.budget_recall("ed25519 rollout budget", facts_file,
+                                      strict_verify=True)
+    err = capsys.readouterr().err
+    assert "one million dollars" not in out  # forgery did not bypass
+    assert "approved for signing" in out
+    assert "excluded 1 tampered" in err
+
+
+# --- hostile / non-hex inputs fail closed, never crash recall -----------------
+def test_deeply_nested_sidecar_does_not_crash_recall(
+        budget_recall, sign_lib, signing_key, tmp_path):
+    """A corrupt/hostile sidecar whose JSON is pathologically nested makes
+    json.loads raise RecursionError (a RuntimeError, not ValueError). It must
+    fail closed to full verification, not escape and crash the recall hook."""
+    facts = [signable_fact("f-1", "ed25519 rollout was approved")]
+    sign_lib.sign_facts(facts, signing_key)
+    facts_file = write_facts(tmp_path, facts)
+    sidecar_for(facts_file).write_text("[" * 20000 + "]" * 20000, encoding="utf-8")
+
+    out = budget_recall.budget_recall("ed25519 rollout", facts_file)
+    assert "approved" in out  # recall still works; no traceback
+    # The untrustworthy sidecar was replaced with a valid one.
+    json.loads(sidecar_for(facts_file).read_text(encoding="utf-8"))
+
+
+def test_oversized_sidecar_is_refused(
+        budget_recall, sign_lib, signing_key, tmp_path, monkeypatch):
+    """A well-formed but implausibly large sidecar is refused unread (guards the
+    hook budget and MemoryError), degrading to full verification."""
+    vc = importlib.import_module("_verify_cache")
+    monkeypatch.setattr(vc, "MAX_SIDECAR_BYTES", 512)
+    facts = [signable_fact("f-1", "ed25519 rollout was approved")]
+    sign_lib.sign_facts(facts, signing_key)
+    facts_file = write_facts(tmp_path, facts)
+    sidecar_for(facts_file).write_text(
+        json.dumps({"version": 2, "digests": ["a" * 64] * 1000}), encoding="utf-8")
+
+    out = budget_recall.budget_recall("ed25519 rollout", facts_file)
+    assert "approved" in out  # oversized sidecar ignored, recall works
+
+
+def test_non_hex_signature_is_tampered_not_a_crash(
+        budget_recall, sign_lib, signing_key, tmp_path, capsys):
+    """A fact whose attestation signature is a non-hex string (here a lone
+    surrogate, valid JSON) must be treated as TAMPERED — as it was before the
+    cache existed — not crash cache_digest's str.encode on the hot path."""
+    good = signable_fact("f-good", "ed25519 rollout was approved for signing")
+    evil = signable_fact("f-evil", "ed25519 rollout is fine honestly")
+    sign_lib.sign_facts([good, evil], signing_key)
+    evil["attestation"]["signature"] = "\ud800deadbeef"  # non-hex, lone surrogate
+    facts_file = tmp_path / "facts.json"
+    facts_file.write_text(json.dumps([good, evil]), encoding="utf-8",
+                          errors="surrogatepass")
+
+    out = budget_recall.budget_recall("ed25519 rollout", facts_file)
+    err = capsys.readouterr().err
+    assert "fine honestly" not in out  # excluded, not injected
+    assert "approved for signing" in out
+    assert "excluded 1 tampered" in err  # and no traceback surfaced
+
+
+def test_save_failure_does_not_raise(sign_lib, tmp_path, capsys, monkeypatch):
+    """save() must degrade to a stderr note, never raise — budget-recall calls
+    it unguarded on the hot path. Force a non-OSError from json.dump."""
+    vc = importlib.import_module("_verify_cache")
+    cache = vc.VerifiedSignatureCache(
+        tmp_path / "facts.json.verified-cache.json", "k", "ed25519",
+        {"mtime_ns": 1, "size": 1}, set(), dirty=True)
+    monkeypatch.setattr(vc.json, "dump",
+                        lambda *a, **k: (_ for _ in ()).throw(TypeError("boom")))
+    cache.save()  # must not raise
+    assert "could not save verification cache" in capsys.readouterr().err
