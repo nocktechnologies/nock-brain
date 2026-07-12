@@ -513,6 +513,14 @@ def _apply_date_diversity_cap(results: list[dict], max_per_date: int,
 # closed and keeps only VALID facts. No key on disk means verification is
 # skipped entirely (pre-signing behavior, and _sign/cryptography are never
 # imported, keeping the no-key hot path cost-free).
+#
+# Cost control: at ~160us per Ed25519 signature, full verification of a
+# 2,500-fact store adds ~0.4-0.8s to every recall — most of the hook's <2s
+# budget. A sidecar cache (_verify_cache) remembers already-proven signatures
+# per store, guarded by the store file's (mtime_ns, size), so a recall over an
+# unchanged store skips the signature operations but STILL recomputes and
+# compares every fact's committed content hashes — tampering is detected even
+# on a warm cache, and any cache doubt falls back to full verification.
 DEFAULT_SIGNING_KEY = Path.home() / ".nock-brain" / "signing-key"
 DEFAULT_SIGNING_PUB = Path.home() / ".nock-brain" / "signing-key.pub"
 
@@ -545,13 +553,17 @@ def _resolve_verify_key():
 
 
 def _verify_filter(facts: list[dict], verify_key, *, label: str,
-                   strict: bool = False) -> list[dict]:
+                   strict: bool = False, cache=None) -> list[dict]:
     """Enforce attestations on loaded facts (see block comment above).
 
     TAMPERED facts are always excluded. Default mode keeps UNSIGNED and
     PARENT_SUSPECT facts (backward compatible — their own content is unproven
     or intact respectively, not known-poisoned) and counts them in the stderr
-    warning; strict mode keeps only VALID. No key -> facts pass unchanged."""
+    warning; strict mode keeps only VALID. No key -> facts pass unchanged.
+
+    `cache` (a _verify_cache handle) lets verify_fact skip the signature
+    operation for already-proven facts; every status is computed identically
+    with or without it, so strict-mode semantics are unaffected."""
     if verify_key is None or not facts:
         return facts
     import _sign
@@ -559,7 +571,8 @@ def _verify_filter(facts: list[dict], verify_key, *, label: str,
     counts: Counter = Counter()
     kept: list[dict] = []
     for f in facts:
-        status = _sign.verify_fact(f, verify_key, facts_by_id=facts_by_id)
+        status = _sign.verify_fact(f, verify_key, facts_by_id=facts_by_id,
+                                   verified_cache=cache)
         counts[status] += 1
         if status == _sign.TAMPERED:
             continue
@@ -593,8 +606,19 @@ def format_fact(f: dict, query_terms: set[str] | None = None) -> str:
 
 
 def _load(path: Path, *, verify_key=None, strict_verify: bool = False) -> list[dict]:
+    cache = None
+    if verify_key is not None:
+        # Local import keeps the no-key hot path free of any cache cost. The
+        # cache handle captures the store's freshness stat BEFORE the store is
+        # read (see _verify_cache.load_for_store).
+        import _verify_cache
+        cache = _verify_cache.load_for_store(path, verify_key)
     facts = load_facts(path, required_fields=RECALL_ITEM_FIELDS)
-    return _verify_filter(facts, verify_key, label=str(path), strict=strict_verify)
+    kept = _verify_filter(facts, verify_key, label=str(path),
+                          strict=strict_verify, cache=cache)
+    if cache is not None:
+        cache.save()
+    return kept
 
 
 _TRUTHY = {"1", "true", "yes", "on"}
