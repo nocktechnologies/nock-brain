@@ -204,6 +204,40 @@ def test_memory_hook_logs_recall_errors_to_private_file(tmp_path):
     assert mode(err_log) == 0o600
 
 
+def test_memory_hook_prefers_installer_venv_python(tmp_path):
+    # The semantic tier's numpy + tokenizers live in ~/.nock-brain/venv; bare
+    # `python3` is PATH/alias-dependent (Homebrew builds ship without
+    # tokenizers), so the hook must run the venv interpreter when it exists —
+    # otherwise semantic recall silently degrades to BM25 on PATH reordering.
+    facts_dir = tmp_path / ".nock-brain"
+    facts_dir.mkdir()
+    (facts_dir / "facts.json").write_text(
+        json.dumps([fact("[DECISION] Kevin chose stage one memory recall")]),
+        encoding="utf-8",
+    )
+    marker = tmp_path / "venv-python-ran"
+    venv_bin = facts_dir / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    venv_python = venv_bin / "python3"
+    venv_python.write_text(
+        f'#!/bin/sh\ntouch "{marker}"\nexec python3 "$@"\n', encoding="utf-8"
+    )
+    venv_python.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(REPO / "hooks" / "memory-inject.sh")],
+        input=json.dumps({"prompt": "what did we decide about stage one memory recall"}),
+        text=True,
+        capture_output=True,
+        env={**os.environ, "HOME": str(tmp_path), "PYTHONDONTWRITEBYTECODE": "1"},
+        check=True,
+    )
+
+    assert marker.exists(), "hook ran PATH python3 despite an existing venv"
+    payload = json.loads(result.stdout)
+    assert "stage one memory recall" in payload["systemMessage"]
+
+
 def test_memory_hook_uses_printf_and_arg_separator():
     hook = (REPO / "hooks" / "memory-inject.sh").read_text(encoding="utf-8")
 

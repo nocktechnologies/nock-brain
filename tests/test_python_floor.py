@@ -1,7 +1,9 @@
 """Regression tests for the hook hot path's Python-version floor.
 
-hooks/memory-inject.sh invokes plain ``python3`` from PATH. On a stock macOS
-non-interactive shell that resolves to /usr/bin/python3 — Python 3.9. CI runs
+hooks/memory-inject.sh prefers ``~/.nock-brain/venv/bin/python3`` (a venv
+install.sh creates from stock python3) and falls back to plain ``python3``
+from PATH. On a stock macOS non-interactive shell both resolve to the
+/usr/bin/python3 interpreter — Python 3.9 — so 3.9 is the floor. CI runs
 3.11/3.12 only, so 3.10-only syntax that is evaluated at import time (unquoted
 PEP 604 unions in signatures, match statements, ...) passes the whole suite in
 CI and then crashes the recall hot path on a real Mac. That happened once:
@@ -13,8 +15,9 @@ Two layers pin the floor:
 - every bin/ module transitively reachable from the hook must carry
   ``from __future__ import annotations`` so annotation syntax is never
   evaluated at import time (enforceable on any interpreter, so CI catches it);
-- when /usr/bin/python3 exists (macOS: the interpreter the hook actually
-  runs), every reachable module must genuinely import under it.
+- when /usr/bin/python3 exists (macOS: the hook's fallback interpreter and
+  the base of the installer venv), every reachable module must genuinely
+  import under it.
 """
 import ast
 import subprocess

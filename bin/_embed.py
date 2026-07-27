@@ -44,6 +44,17 @@ class EmbedUnavailable(RuntimeError):
     CLI tools should surface the message."""
 
 
+def _deps_hint() -> str:
+    """Remediation hint for a missing numpy/tokenizers import. When the
+    canonical ~/.nock-brain/venv exists, point there instead of at pip:
+    bare `python3` is PATH/alias-dependent (Homebrew builds ship without
+    tokenizers), so "pip install" often targets the wrong interpreter."""
+    venv_python = Path.home() / ".nock-brain" / "venv" / "bin" / "python3"
+    if venv_python.exists():
+        return f"rerun with {venv_python}"
+    return "pip install numpy tokenizers"
+
+
 def embed_text(fact_content: Any) -> str:
     return str(fact_content or "")[:EMBED_MAX_CHARS]
 
@@ -97,7 +108,7 @@ class StaticEncoder:
         except ImportError as exc:  # pragma: no cover - environment-specific
             raise EmbedUnavailable(
                 "semantic tier needs numpy + tokenizers "
-                f"(pip install numpy tokenizers): {exc}"
+                f"({_deps_hint()}): {exc}"
             ) from exc
         self._np = np
         self._matrix = np.load(matrix_path, mmap_mode="r")
@@ -153,7 +164,8 @@ def load_sidecar(path: Path, expect_model: "str | None" = None):
     try:
         import numpy as np
     except ImportError as exc:  # pragma: no cover - environment-specific
-        raise EmbedUnavailable(f"reading {path} needs numpy: {exc}") from exc
+        raise EmbedUnavailable(
+            f"reading {path} needs numpy ({_deps_hint()}): {exc}") from exc
     try:
         with np.load(path, allow_pickle=False) as archive:
             sidecar = {

@@ -10,7 +10,12 @@ loader rejects a sidecar built by a different model) — with the raw static
 encoder a full re-embed of a few thousand facts takes seconds, so recovery
 is always "run this tool again".
 
+Run with the interpreter that has numpy + tokenizers — canonically the venv
+that `install.sh --semantic` creates. Bare `python3` is PATH/alias-dependent
+(Homebrew builds ship without tokenizers) and often lacks them.
+
 Usage:
+    ~/.nock-brain/venv/bin/python3 embed-facts.py   # canonical
     python3 embed-facts.py                 # incremental sync
     python3 embed-facts.py --backfill      # re-embed the whole store
     python3 embed-facts.py --facts ~/.nock-brain/facts.json
