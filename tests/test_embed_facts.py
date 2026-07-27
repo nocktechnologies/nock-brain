@@ -193,3 +193,17 @@ def test_missing_model_assets_error_cleanly(embed_facts, store, tmp_path,
     err = capsys.readouterr().err
     assert "no embedding model" in err and "fetch-embed-model" in err
     assert not sidecar.exists()
+
+
+def test_deps_hint_prefers_installer_venv(embed_mod, tmp_path, monkeypatch):
+    # A missing-deps error must point at the interpreter that actually has
+    # numpy + tokenizers (the installer venv) when one exists — "pip install"
+    # targets whatever `python3` resolves to, which is how the deps went
+    # missing in the first place.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert embed_mod._deps_hint() == "pip install numpy tokenizers"
+
+    venv_python = tmp_path / ".nock-brain" / "venv" / "bin" / "python3"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.touch()
+    assert embed_mod._deps_hint() == f"rerun with {venv_python}"

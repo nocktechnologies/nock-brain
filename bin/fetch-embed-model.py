@@ -13,7 +13,9 @@ Both source files are verified against pinned SHA-256 checksums before
 anything is written, so a hijacked download or tampered snapshot is rejected.
 The safetensors container is parsed with the stdlib (8-byte little-endian
 header length, JSON header, raw tensor bytes) — no safetensors/model2vec
-dependency; numpy is the only requirement.
+dependency; numpy is the only requirement. Run with an interpreter that has
+it — canonically ~/.nock-brain/venv/bin/python3 (created by
+`install.sh --semantic`); bare `python3` is PATH/alias-dependent.
 
 Usage:
     python3 fetch-embed-model.py                       # download + install
