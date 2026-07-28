@@ -20,8 +20,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-from _facts import load_facts
-from _store import secure_write_json
+from _storeback import resolve_store
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 
@@ -37,11 +36,12 @@ def main():
     parser.add_argument("--facts", type=Path, default=DEFAULT_FACTS)
     args = parser.parse_args()
 
-    if not args.facts.exists():
+    store = resolve_store(args.facts)
+    if not store.freshness_path.exists():
         print("No facts.json found.", file=sys.stderr)
         sys.exit(1)
 
-    facts = load_facts(args.facts)
+    facts = store.load_facts()
 
     if args.list_superseded:
         superseded = [f for f in facts if f.get("status") == "superseded"]
@@ -80,7 +80,7 @@ def main():
                     f["superseded_by"] = args.by
                 if args.reason:
                     f["supersession_reason"] = args.reason
-            secure_write_json(args.facts, facts, indent=2, default=str)
+            store.replace_all(facts)
             print(f"Marked {len(results)} facts as superseded.")
         return
 
@@ -107,7 +107,7 @@ def main():
     if args.reason:
         fact["supersession_reason"] = args.reason
 
-    secure_write_json(args.facts, facts, indent=2, default=str)
+    store.replace_all(facts)
     print(f"Fact {args.fact_id} marked as superseded.")
     print(f"  Was: [{fact.get('kind', 'fact')}] {str(fact.get('content', ''))[:120]}")
 

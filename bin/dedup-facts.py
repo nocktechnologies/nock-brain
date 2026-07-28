@@ -38,8 +38,9 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-from _facts import content_tokens, fact_currently_valid, jaccard, load_facts
+from _facts import content_tokens, fact_currently_valid, jaccard
 from _store import secure_mkdir, secure_write_json, secure_write_text
+from _storeback import resolve_store
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 DEFAULT_MIN_SIMILARITY = 0.85
@@ -233,11 +234,12 @@ def main() -> None:
     if not 0.0 < args.min_similarity <= 1.0:
         parser.error("--min-similarity must be in (0, 1]")
 
-    if not args.facts.exists():
+    store = resolve_store(args.facts)
+    if not store.freshness_path.exists():
         print("No facts.json found.", file=sys.stderr)
         sys.exit(1)
 
-    facts = load_facts(args.facts)
+    facts = store.load_facts()
     clusters = find_clusters(facts, min_similarity=args.min_similarity, kind=args.kind)
 
     if not clusters:
@@ -247,7 +249,7 @@ def main() -> None:
     duplicate_count = sum(len(c["duplicates"]) for c in clusters)
     if args.apply:
         marked = apply_clusters(clusters)
-        secure_write_json(args.facts, facts, indent=2, default=str)
+        store.replace_all(facts)
         print(f"Marked {marked} duplicate fact(s) superseded across {len(clusters)} cluster(s).")
         for c in clusters:
             print(f"  keep {c['canonical'].get('id', '')} [{c['kind']}] "

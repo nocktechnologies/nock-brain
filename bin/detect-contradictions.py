@@ -46,9 +46,10 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-from _facts import content_tokens, fact_currently_valid, load_facts
+from _facts import content_tokens, fact_currently_valid
 from _scrub import scrub_secrets
 from _store import secure_mkdir, secure_write_json, secure_write_text
+from _storeback import resolve_store
 from synthesize import DEFAULT_LLM_MODEL, DEFAULT_LLM_TIMEOUT, _call_claude
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
@@ -269,12 +270,13 @@ def main() -> None:
     if args.max_pairs < 1:
         parser.error("--max-pairs must be >= 1")
 
-    if not args.facts.exists():
+    store = resolve_store(args.facts)
+    if not store.freshness_path.exists():
         print("No facts.json found.", file=sys.stderr)
         sys.exit(1)
 
     kinds = tuple(k.strip() for k in args.kinds.split(",") if k.strip())
-    facts = load_facts(args.facts)
+    facts = store.load_facts()
     candidates = find_candidates(
         facts,
         min_overlap=args.min_overlap,
