@@ -22,6 +22,7 @@ Memory layer for Claude Code. Extracts facts from session transcripts, classifie
 | `budget-recall.py` | Retrieve facts within token budget | Automatically via hook |
 | `query-facts.py` | Search facts manually | When exploring what's stored |
 | `supersede-fact.py` | Mark outdated decisions | When direction changes |
+| `dedup-facts.py` | Collapse near-duplicate facts (propose → apply) | When one event was extracted many times |
 | `fetch-embed-model.py` | Install the pinned embedding model | Once, when enabling semantic recall |
 | `embed-facts.py` | Build/update the vector sidecar | After extraction; `--backfill` on first enable |
 | `eval-graph-recall.py` | Benchmark flat vs hybrid recall on the live store | When tuning recall quality |

@@ -120,3 +120,8 @@ def sign_lib():
 @pytest.fixture(scope="session")
 def consolidate_facts():
     return _load("consolidate-facts")
+
+
+@pytest.fixture(scope="session")
+def dedup_facts():
+    return _load("dedup-facts")
