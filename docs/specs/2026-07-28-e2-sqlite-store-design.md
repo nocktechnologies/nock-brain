@@ -55,10 +55,12 @@ CREATE TABLE facts (
   session_anchor      TEXT,
   created_at          TEXT,
   last_seen_at        TEXT,
-  evidence            TEXT NOT NULL DEFAULT '[]',  -- canonical JSON (signed anchor)
-  attestation         TEXT,                        -- verbatim JSON envelope
+  evidence            TEXT,                        -- canonical JSON when present (signed anchor)
+  attestation         TEXT,                        -- verbatim JSON envelope when present
   extra               TEXT NOT NULL DEFAULT '{}'   -- all unmodeled fields, lossless
 );
+-- (P2 refinement: evidence/attestation are nullable — a fact that never had a
+-- key must not gain one on reload; fabricated keys would be a fidelity bug.)
 CREATE INDEX facts_status_kind ON facts(status, kind);
 CREATE INDEX facts_superseded_by ON facts(superseded_by);
 
@@ -95,7 +97,7 @@ export_facts_json(dest_path)        # the derived audit artifact
 
 - `JsonStore` wraps today's `_facts.load_facts` + `_store.secure_write_json` — behavior-identical, the default.
 - `SqliteStore` implements the same contract on `brain.db` (stdlib `sqlite3` only).
-- **Selection:** `brain.db` present *and* `meta.schema_version` readable → SQLite; else JSON. `NOCKBRAIN_STORE=json|sqlite` overrides both ways (the reversible kill-switch, same doctrine as `NOCKBRAIN_LIVE_RECALL`).
+- **Selection (P2 refinement — presence alone never cuts over):** JSON is the default even when `brain.db` exists. SQLite engages only when *explicitly* selected: `NOCKBRAIN_STORE=sqlite`, or the `store-v2` marker file next to an existing `brain.db` (the deliberate cutover artifact from §8). `NOCKBRAIN_STORE=json` always forces JSON — the reversible kill-switch, same doctrine as `NOCKBRAIN_LIVE_RECALL`.
 
 Every `bin/` script that opens `facts.json` moves to the contract. The long tail (exports, purge, health, dedup, detect-contradictions, supersede) is mechanical; recall (`budget-recall`) is the carefully-parity-tested one.
 
@@ -131,7 +133,7 @@ Run on fleet-02 against the live store, both backends loaded side by side:
 1. **Recall parity:** `mira-recall-suite.json` (all 9) plus a generated fuzz set (≥200 queries sampled from fact contents): identical ranked id lists and identical injected-token counts from both backends. Not "close" — identical; the backends share the scoring code and differ only in IO.
 2. **Verification parity:** whole-store strict verify identical (`valid` counts equal, zero tampered/parent-suspect on both).
 3. **Health parity:** `nockbrain-health.py` counts equal.
-4. **Soak:** ≥3 consecutive nightly distills writing through the store contract (still promoting JSON) with green receipts.
+4. **Soak:** ≥3 consecutive nightly distills with green receipts, the distill still promoting JSON while a post-distill `migrate-store.py --apply` refresh keeps `brain.db` in lockstep (idempotent rebuild from the promoted JSON). Distill-writes-through-the-contract comes with the P4 cutover, not before.
 
 ## 10. Testing (base repo, TDD)
 
@@ -156,7 +158,7 @@ P1+P2 are pure base-repo work and start immediately; nothing touches fleet-02 un
 ## 12. Open questions
 
 1. **Hook interpreter FTS5:** fleet-02's `python3` has FTS5; the *hook* resolves whatever `python3` is on PATH in its environment — verify at P3, though nothing in P1–P4 depends on FTS5.
-2. **Insights/graph residency:** insights move into the DB at migration (cheap, table above); `graph.json` stays a derived export until/unless graph recall wants indexed traversal — revisit at P5.
+2. **Insights/embeddings/graph residency (P2 refinement):** all three are *derived, regenerable* artifacts (`synthesize.py`, `embed-facts.py --backfill`, `export-graph.py`), so the v1 contract covers the authoritative data only — facts. The `insights`/`embeddings` tables ship in the schema but stay unpopulated, and the file artifacts remain the live sources, until P5.
 3. **Snapshot cadence:** `VACUUM INTO` per distill vs per promotion — Mira's retention policy (E1) owns this; the store just provides `snapshot()`.
 
 ---

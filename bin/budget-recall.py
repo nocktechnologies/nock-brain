@@ -606,14 +606,19 @@ def format_fact(f: dict, query_terms: set[str] | None = None) -> str:
 
 
 def _load(path: Path, *, verify_key=None, strict_verify: bool = False) -> list[dict]:
+    # Backend-agnostic load (E2): JSON stays the default; SQLite engages only
+    # when explicitly selected (NOCKBRAIN_STORE=sqlite or the store-v2 marker).
+    from _storeback import resolve_store
+    store = resolve_store(path)
     cache = None
     if verify_key is not None:
         # Local import keeps the no-key hot path free of any cache cost. The
         # cache handle captures the store's freshness stat BEFORE the store is
-        # read (see _verify_cache.load_for_store).
+        # read (see _verify_cache.load_for_store) — for SQLite that stat is
+        # brain.db's, not facts.json's.
         import _verify_cache
-        cache = _verify_cache.load_for_store(path, verify_key)
-    facts = load_facts(path, required_fields=RECALL_ITEM_FIELDS)
+        cache = _verify_cache.load_for_store(store.freshness_path, verify_key)
+    facts = store.load_facts(required_fields=RECALL_ITEM_FIELDS)
     kept = _verify_filter(facts, verify_key, label=str(path),
                           strict=strict_verify, cache=cache)
     if cache is not None:

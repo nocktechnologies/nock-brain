@@ -130,3 +130,18 @@ def dedup_facts():
 @pytest.fixture(scope="session")
 def detect_contradictions():
     return _load("detect-contradictions")
+
+
+@pytest.fixture(scope="session")
+def storeback():
+    return _load("_storeback")
+
+
+@pytest.fixture(scope="session")
+def migrate_store():
+    return _load("migrate-store")
+
+
+@pytest.fixture(scope="session")
+def store_parity():
+    return _load("eval-store-parity")
