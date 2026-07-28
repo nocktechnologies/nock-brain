@@ -23,6 +23,7 @@ Memory layer for Claude Code. Extracts facts from session transcripts, classifie
 | `query-facts.py` | Search facts manually | When exploring what's stored |
 | `supersede-fact.py` | Mark outdated decisions | When direction changes |
 | `dedup-facts.py` | Collapse near-duplicate facts (propose → apply) | When one event was extracted many times |
+| `detect-contradictions.py` | Propose supersessions for stale facts (`--llm` judges via claude -p) | Nightly, or when decisions changed |
 | `fetch-embed-model.py` | Install the pinned embedding model | Once, when enabling semantic recall |
 | `embed-facts.py` | Build/update the vector sidecar | After extraction; `--backfill` on first enable |
 | `eval-graph-recall.py` | Benchmark flat vs hybrid recall on the live store | When tuning recall quality |

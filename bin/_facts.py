@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +84,26 @@ def load_facts(
         print(f"{label}: skipped malformed fact store ({exc})", file=sys.stderr)
         return []
     return filter_valid_facts(data, source=label, required_fields=required_fields)
+
+
+# ── Content-token helpers (shared by dedup + contradiction pairing) ──────────
+_CONTENT_TOKEN_RE = re.compile(r"[^a-z0-9]+")
+
+
+def content_tokens(text: Any) -> frozenset:
+    """Case-, punctuation- and whitespace-insensitive token set of a content."""
+    if not isinstance(text, str):
+        return frozenset()
+    return frozenset(t for t in _CONTENT_TOKEN_RE.split(text.lower()) if t)
+
+
+def jaccard(a: Any, b: Any) -> float:
+    """Jaccard similarity of two contents' normalized token sets (0 when either
+    side has no tokens)."""
+    ta, tb = content_tokens(a), content_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
 
 
 # ── Bi-temporal validity (N-borrow-2: supersede-over-delete with a window) ───
