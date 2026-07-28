@@ -177,6 +177,19 @@ def test_apply_overwrites_future_invalid_at_on_duplicates(dedup_facts, tmp_path,
     assert marked["invalid_at"] < future  # closed now, not at the future bound
 
 
+def test_out_of_range_min_similarity_rejected_before_any_work(dedup_facts, tmp_path, monkeypatch):
+    """A non-positive threshold would cluster every same-kind fact together; a
+    typo like --min-similarity -0.9 combined with --apply must be rejected up
+    front, never reach the store."""
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps(_archetype()))
+    before = store.read_bytes()
+
+    for bad in ("0", "-0.9", "1.5"):
+        _run_main(dedup_facts, monkeypatch, ["--facts", str(store), "--apply", "--min-similarity", bad])
+        assert store.read_bytes() == before  # rejected before any mutation
+
+
 def test_apply_preserves_attestation_signatures(dedup_facts, sign_lib, tmp_path, monkeypatch):
     """Dedup mutates only lifecycle fields (status/superseded_*/invalid_at),
     never the signed core — so a fully signed store stays fully VALID."""

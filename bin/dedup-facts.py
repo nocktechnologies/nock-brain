@@ -241,6 +241,11 @@ def main() -> None:
                         help="mark duplicates superseded (default: propose only)")
     args = parser.parse_args()
 
+    # Jaccard lives in [0, 1]; a non-positive threshold would cluster every
+    # same-kind fact together — catastrophic under --apply. Reject up front.
+    if not 0.0 < args.min_similarity <= 1.0:
+        parser.error("--min-similarity must be in (0, 1]")
+
     if not args.facts.exists():
         print("No facts.json found.", file=sys.stderr)
         sys.exit(1)
