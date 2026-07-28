@@ -108,6 +108,10 @@ python3 bin/dedup-facts.py --apply
 python3 bin/detect-contradictions.py
 python3 bin/detect-contradictions.py --llm
 
+# Build the SQLite store from facts.json (fail-closed; facts.json stays authoritative)
+python3 bin/migrate-store.py --apply
+python3 bin/eval-store-parity.py --suite mira-recall-suite.json --fuzz 200
+
 # Hard-delete sensitive material from local stores
 python3 bin/purge-fact.py --pattern "old secret value" --apply
 python3 bin/purge-fact.py <fact_id> --apply
@@ -213,6 +217,8 @@ nock-brain/
     supersede-fact.py      # Mark outdated facts
     dedup-facts.py         # Collapse near-duplicate facts to one canonical
     detect-contradictions.py # Propose supersessions for stale-but-live facts
+    migrate-store.py       # Build brain.db from facts.json, fail-closed
+    eval-store-parity.py   # Prove JSON/SQLite backends interchangeable
   hooks/
     memory-inject.sh       # Claude Code auto-injection hook
   tests/                   # pytest suite for the extraction + recall pipeline

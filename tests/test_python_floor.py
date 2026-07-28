@@ -82,6 +82,7 @@ def test_hook_reachable_closure_is_acknowledged():
         "_graph_recall.py",
         "_sign.py",
         "_store.py",
+        "_storeback.py",
         "_verify_cache.py",
         "budget-recall.py",
         "export-graph.py",
