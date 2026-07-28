@@ -105,7 +105,9 @@ Every `bin/` script that opens `facts.json` moves to the contract. The long tail
 
 ## 6. Concurrency
 
-WAL mode gives the recall hook a consistent snapshot while the distill writes — strictly better than today's whole-file rewrite window. Writers serialize on SQLite's single-writer lock; every existing writer already runs inside the distill window or as a deliberate CLI action, so contention is nil in practice. `busy_timeout` set to 2s on the hook path so a pathological overlap degrades to empty recall (the hook's existing fail-open-to-empty contract), never a hang.
+WAL mode gives the recall hook a consistent snapshot while the distill writes — strictly better than today's whole-file rewrite window. Writers serialize on SQLite's single-writer lock; every existing writer already runs inside the distill window or as a deliberate CLI action, so contention is nil in practice. `busy_timeout` set to 2s on the hook path so a pathological overlap degrades to empty recall, never a hang.
+
+**Why degrade-to-empty and not a JSON fallback** (Mira's §6 review question, answered): two reasons. First, in WAL mode *readers are never blocked by writers* — a reader takes a consistent snapshot; `SQLITE_BUSY` on the read path is confined to rare checkpoint-contention edges, so the scenario is nearly theoretical. Second, post-cutover `facts.json` is a *nightly export* — up to ~24 h stale. A silent fallback to it would quietly serve stale memory, which is precisely the anti-pattern the A4 fix retired from the hook ("no silent fallback"; the store's own thesis is that stale facts are worse than none). The failure stays *visible* (stderr note, same contract as every other hook degradation) and empty.
 
 ## 7. Privacy
 
@@ -122,7 +124,7 @@ Propose-by-default, mirroring dedup/detect conventions. `--apply` performs, insi
 3. Strict whole-store verify **of the staging DB** through `SqliteStore.load_facts()` — proves value-fidelity cryptographically (§2).
 4. Equality gates: row count == fact count; per-fact `canonical_fact_hash` set identical between JSON and DB; embeddings count match.
 5. `fsync` + atomic rename to `brain.db`. **`facts.json` is not deleted or demoted** — the backend selector still prefers... JSON until the cutover flag (below). Record `migrated_from_sha256` in `meta`.
-6. Receipt: extend the distill result JSON with `"store_migration": {"facts": N, "hash_set_equal": true, "verify": "valid", "db_sha256": ...}`.
+6. Receipt: the `"store_migration"` block (`{"facts": N, "hash_set_equal": true, "verify": "valid", "db_sha256": ...}`) extends the **same single distill-receipt schema** that already carries `dedup` / `eval` / `gates` / `verdict` — one receipt document per distill, never a parallel second schema. `migrate-store.py` also emits the block standalone on stdout for ad-hoc runs.
 
 **Cutover** is a separate deliberate step after the parallel-run bar (§9) is met: set `NOCKBRAIN_STORE=sqlite` (or write the `store-v2` marker), watch one full distill cycle + receipt, then demote `facts.json` to a nightly export. **Rollback at any point:** unset the flag — the JSON path never stopped being valid; or `export_facts_json` regenerates it from the DB losslessly.
 
@@ -133,7 +135,7 @@ Run on fleet-02 against the live store, both backends loaded side by side:
 1. **Recall parity:** `mira-recall-suite.json` (all 9) plus a generated fuzz set (≥200 queries sampled from fact contents): identical ranked id lists and identical injected-token counts from both backends. Not "close" — identical; the backends share the scoring code and differ only in IO.
 2. **Verification parity:** whole-store strict verify identical (`valid` counts equal, zero tampered/parent-suspect on both).
 3. **Health parity:** `nockbrain-health.py` counts equal.
-4. **Soak:** ≥3 consecutive nightly distills with green receipts, the distill still promoting JSON while a post-distill `migrate-store.py --apply` refresh keeps `brain.db` in lockstep (idempotent rebuild from the promoted JSON). Distill-writes-through-the-contract comes with the P4 cutover, not before.
+4. **Soak (revised per Mira's operate-side review):** ≥7 consecutive nightly distills with green receipts — covering one full weekly cycle so weekly-cadence interactions (nightly contradiction pass × recall over a week's shape of traffic) are exercised, not just three quiet nights. The distill still promotes JSON while a post-distill `migrate-store.py --apply` refresh keeps `brain.db` in lockstep (idempotent rebuild from the promoted JSON). Distill-writes-through-the-contract comes with the P4 cutover, not before.
 
 ## 10. Testing (base repo, TDD)
 
