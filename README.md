@@ -100,6 +100,10 @@ python3 bin/recall-classifier.py --test
 python3 bin/supersede-fact.py <fact_id> --reason "direction changed"
 python3 bin/supersede-fact.py --search "old pricing" --mark-superseded
 
+# Collapse near-duplicate extractions of one event (propose, review, apply)
+python3 bin/dedup-facts.py
+python3 bin/dedup-facts.py --apply
+
 # Hard-delete sensitive material from local stores
 python3 bin/purge-fact.py --pattern "old secret value" --apply
 python3 bin/purge-fact.py <fact_id> --apply
@@ -203,6 +207,7 @@ nock-brain/
     budget-recall.py       # Token-budgeted retrieval (insights first)
     recall-classifier.py   # Classify prompts for recall need
     supersede-fact.py      # Mark outdated facts
+    dedup-facts.py         # Collapse near-duplicate facts to one canonical
   hooks/
     memory-inject.sh       # Claude Code auto-injection hook
   tests/                   # pytest suite for the extraction + recall pipeline
