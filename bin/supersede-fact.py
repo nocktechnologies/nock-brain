@@ -38,7 +38,7 @@ def main():
 
     store = resolve_store(args.facts)
     if not store.freshness_path.exists():
-        print("No facts.json found.", file=sys.stderr)
+        print(f"No fact store found ({store.describe()}).", file=sys.stderr)
         sys.exit(1)
 
     facts = store.load_facts()

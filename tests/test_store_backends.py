@@ -103,6 +103,31 @@ def test_store_files_are_private(any_store):
     assert stat.S_IMODE(any_store.freshness_path.stat().st_mode) == 0o600
 
 
+def test_integer_values_keep_exact_type(any_store):
+    """SQLite affinity coerces ints in REAL/TEXT columns (1 -> 1.0, 7 -> '7').
+    Non-conforming types must ride `extra` so the round-trip is type-exact."""
+    fact = dict(PLAIN_FACT, id="f-int", confidence=1, session=7)
+    any_store.replace_all([fact])
+    loaded = any_store.load_facts()[0]
+    assert loaded["confidence"] == 1 and isinstance(loaded["confidence"], int)
+    assert loaded["session"] == 7 and isinstance(loaded["session"], int)
+
+
+def test_sqlite_load_on_missing_db_is_empty_and_creates_nothing(storeback, tmp_path, capsys):
+    """The hook must fail open to empty recall — and a READ must never create
+    an empty brain.db (which could later satisfy the marker+db selection)."""
+    store = storeback.SqliteStore(tmp_path / "brain.db")
+    assert store.load_facts() == []
+    assert not (tmp_path / "brain.db").exists()
+
+
+def test_sqlite_load_on_corrupt_db_is_empty_not_crash(storeback, tmp_path, capsys):
+    (tmp_path / "brain.db").write_bytes(b"this is not a sqlite database")
+    store = storeback.SqliteStore(tmp_path / "brain.db")
+    assert store.load_facts() == []
+    assert "skipped" in capsys.readouterr().err
+
+
 # ── backend selection ────────────────────────────────────────────────────────
 def test_default_is_json_even_when_db_exists(storeback, tmp_path):
     (tmp_path / "facts.json").write_text("[]")

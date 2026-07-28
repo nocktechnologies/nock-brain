@@ -61,7 +61,7 @@ def _load_raw_facts(path: Path) -> "list":
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise MigrationError(f"facts store unreadable: {exc}")
+        raise MigrationError(f"facts store unreadable: {exc}") from exc
     if not isinstance(data, list):
         raise MigrationError("facts store is not a list")
     return data

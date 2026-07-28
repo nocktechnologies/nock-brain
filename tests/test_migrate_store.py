@@ -115,6 +115,19 @@ def test_parity_catches_db_drift(migrate_store, store_parity, tmp_path):
     assert result["checks"]["hash_set_equal"] is False
 
 
+def test_parity_compares_multisets_not_by_id(migrate_store, store_parity, tmp_path):
+    """Duplicate ids on one side must not collapse before comparison — a
+    changed record hiding behind a shared id has to surface as inequality."""
+    facts_path = _write_store(tmp_path)
+    migrate_store.run_migration(facts_path, apply=True)
+    twin = dict(FACTS[0], custom_note="only in json twin")
+    _write_store(tmp_path, FACTS + [twin])  # same id 'a' twice, different values
+
+    result = store_parity.run_parity(facts_path, tmp_path / "brain.db", None, fuzz=0)
+    assert result["identical"] is False
+    assert result["checks"]["value_identical"] is False
+
+
 def test_parity_suite_queries_are_used(migrate_store, store_parity, tmp_path):
     facts_path = _write_store(tmp_path)
     migrate_store.run_migration(facts_path, apply=True)

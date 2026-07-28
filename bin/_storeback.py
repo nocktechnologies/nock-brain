@@ -80,19 +80,29 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def _column_conforms(name: str, value: Any) -> bool:
+    """A value may occupy its modeled column only when SQLite's type affinity
+    would hand it back unchanged: floats in the REAL column (``confidence``),
+    strings in TEXT columns. An int would be coerced (1 -> 1.0 under REAL,
+    7 -> '7' under TEXT), so ints — like bools, None, and structures — ride
+    ``extra`` to keep the round-trip type-exact."""
+    if name == "confidence":
+        return isinstance(value, float) and not isinstance(value, bool)
+    return isinstance(value, str)
+
+
 def _fact_to_row(fact: "dict[str, Any]") -> "tuple[Any, ...]":
     """Split a fact into modeled columns + JSON columns + the extra spill.
 
-    Only string/int/float values occupy modeled columns; explicit ``None`` and
-    any other type go to ``extra`` so a reload reproduces the original dict
-    (keys the fact never had are never fabricated)."""
+    Non-conforming values (see ``_column_conforms``) and unknown keys go to
+    ``extra`` so a reload reproduces the original dict exactly — keys the fact
+    never had are never fabricated, types never drift."""
     columns: "dict[str, Any]" = {}
     extra: "dict[str, Any]" = {}
     for key, value in fact.items():
         if key in JSON_COLUMNS:
             columns[key] = _canonical_json(value)
-        elif key in FACT_COLUMNS and isinstance(value, (str, int, float)) \
-                and not isinstance(value, bool):
+        elif key in FACT_COLUMNS and _column_conforms(key, value):
             columns[key] = value
         else:
             extra[key] = value
@@ -201,10 +211,22 @@ class SqliteStore:
             con.close()
 
     def load_facts(self, required_fields: "set[str] | None" = None) -> "list[dict]":
+        # A read must never create an empty brain.db (sqlite3.connect would),
+        # and a broken db degrades to empty — the hook's fail-open contract.
+        if not self.db_path.exists():
+            return []
         columns = ", ".join(FACT_COLUMNS + JSON_COLUMNS + ("extra",))
         con = self._connect()
         try:
-            rows = con.execute(f"SELECT {columns} FROM facts ORDER BY rowid").fetchall()
+            # nosec B608 — column list is built from hardcoded tuples above,
+            # never external input.
+            rows = con.execute(
+                f"SELECT {columns} FROM facts ORDER BY rowid"  # nosec B608
+            ).fetchall()
+        except sqlite3.Error as exc:
+            print(f"{self.db_path}: skipped unreadable sqlite store ({exc})",
+                  file=sys.stderr)
+            return []
         finally:
             con.close()
         facts = [_row_to_fact(row) for row in rows]
@@ -220,7 +242,12 @@ class SqliteStore:
         try:
             with con:  # one transaction: readers never see a half-replaced store
                 con.execute("DELETE FROM facts")
-                con.executemany(f"INSERT INTO facts ({columns}) VALUES ({placeholders})", rows)
+                # nosec B608 — column list/placeholders come from hardcoded
+                # tuples; all values are bound parameters.
+                con.executemany(
+                    f"INSERT INTO facts ({columns}) VALUES ({placeholders})",  # nosec B608
+                    rows,
+                )
         finally:
             con.close()
         self._chmod_files()

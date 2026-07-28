@@ -78,9 +78,16 @@ def run_parity(facts_path: Path, db_path: Path, suite_path: "Path | None",
     checks: "dict[str, bool]" = {}
     checks["count_equal"] = len(json_facts) == len(db_facts)
 
-    by_id_json = {f.get("id"): f for f in json_facts}
-    by_id_db = {f.get("id"): f for f in db_facts}
-    checks["value_identical"] = by_id_json == by_id_db
+    # Multiset comparison of complete fact values — never collapse by id
+    # first: a changed record hiding behind a duplicate/missing id must
+    # surface as inequality, not vanish into a dict overwrite.
+    def _value_key(fact: "dict") -> str:
+        return json.dumps(fact, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False, default=str)
+
+    checks["value_identical"] = (
+        sorted(map(_value_key, json_facts)) == sorted(map(_value_key, db_facts))
+    )
 
     checks["hash_set_equal"] = (
         {_sign.canonical_fact_hash(f) for f in json_facts}
