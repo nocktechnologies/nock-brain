@@ -1,7 +1,7 @@
 # Mira Brain — Enhancement Plan
 
-**Date:** 2026-07-26
-**Status:** Draft for Mira's review — scheduled after the command-center refactor lands
+**Date:** 2026-07-26 · **v2:** 2026-07-27 — Mira's redline (`2026-07-27-mira-brain-enhancement-plan-REDLINE.md`) folded in
+**Status:** **Approved** — Kevin green-lit the E5b privacy call and the signed-store mutations on 2026-07-27 (see Decision log). Build split: Fable builds tooling in base nock-brain; Mira pin-bumps and operates on fleet-02.
 **Scope:** `/home/nock/Dev/mira-brain` + `/home/nock/.nock-brain` on nock-fleet-02, plus the recall hooks in the crm-mira harness
 **Basis:** Live inspection of fleet-02 on 2026-07-26, compared against nock-brain `main` @ `d3995b2` and the mid-2026 agent-memory landscape
 
@@ -13,7 +13,9 @@
 |---|---|
 | Facts | 1,913 (all Ed25519-signed, strict verify in distill) |
 | Kind mix | 722 merge · 349 directive · 239 bug · 215 architecture · 170 decision · 95 correction · 85 dispatch · 37 content |
-| Curated / superseded | 47 / 5 |
+| Curated / superseded (marked) | 47 / 5 — **the 5 is the marking rate, not the supersession rate.** Measured 2026-07-27: ≥5 distinct unmarked supersessions and 16 stale-but-live facts in the decision+correction slice alone (2 of 8 kinds); true activity ≥2× the marked count |
+| Supersession link | **None** — bare status flag; no `superseded_by`/`invalidated_by`, so even marked facts don't record their replacement |
+| Extraction duplication | **High** — one real event became 12 near-identical live facts (the `mara-nockos` surface rule); dedup is load-bearing, not cosmetic |
 | Insights (synthesized) | 133 |
 | Session notes | 163 |
 | Code pin | `d493c9d` (#43) — 3 commits behind base `main` |
@@ -22,7 +24,7 @@
 | Backups | 61 timestamped full-copy generations, no rotation |
 | Automation | Nightly receipt-bound `mira-nockbrain-distill` (fail-closed: verify → rebuild → verify → shrink-guard → atomic restore) |
 
-Enhancements below are numbered in **recommended implementation order**. E1 can ship immediately; E2 is the foundation most later items build on.
+Enhancements below keep their original numbering; the **v2 revised order** (per Mira's redline and the 2026-07-27 measurement) is in the Sequencing summary. Headline changes in v2: E4 denoise moves *before* E3 (embedder becomes eval-gated), E5 splits into E5a (structural, pre-E2) and E5b (LLM contradiction pass), and E6 pays off immediately rather than depending on E5.
 
 ---
 
@@ -118,23 +120,29 @@ Track recall hits per fact; reinforce frequently-used facts, decay never-used on
 
 ---
 
-## E5 — LLM-backed distillation (sleep-time compute)
+## E5 — LLM-backed distillation — **v2: split into E5a / E5b**
 
-**Replaces:** regex/heuristic fact extraction and heuristic insight clustering.
+**Replaces:** regex/heuristic fact extraction and heuristic insight clustering — *reframed* by the 2026-07-27 measurement: distinct-event supersession volume is modest (~5/265), but fact-level pollution and duplication are the real cost. The cheap structural half captures most of the immediate backlog value with zero new dependency and zero privacy exposure, so it ships first.
 
-**Current.** Extraction is tag-matching (`[DECISION]` → 0.9) plus pattern-matched language ("user decided…" → 0.7–0.85). Synthesis is dependency-free clustering (133 insights). Contradiction detection doesn't exist — which is why only 5 facts are superseded and why stale facts are the store's biggest silent risk. The synthesizer was explicitly structured for an LLM back end to drop in.
+**Current.** Extraction is tag-matching (`[DECISION]` → 0.9) plus pattern-matched language ("user decided…" → 0.7–0.85). Synthesis clustering already has an **opt-in LLM path in production**: `synthesize.py --llm` runs Haiku via `claude -p` on the Claude Code subscription (zero metered spend) to enrich insight prose. Contradiction detection doesn't exist — the store cannot tell an agent it was corrected.
 
-**Change.** In the nightly distill window, run new transcript deltas through Haiku 4.5 with structured outputs (Batch API — no latency constraint at 03:33, half price): typed facts with model-scored confidence, dedup/merge proposals, and **contradiction candidates** that flow into the existing human-gated review queue as supersession proposals. Heuristic extraction stays as the offline fallback — the fail-closed philosophy is unchanged.
+### E5a — structural (approved; rides ahead of E2)
+1. **Dedup** near-identical extractions (the 12→1 `mara-nockos` case is the archetype). Zero schema dependency, so it lands *before* E2 and shrinks the migration surface.
+2. **Supersession-link field** (`superseded_by` / `invalidated_by`) so marked facts record their replacement.
+3. **One-time cleanup** of the 16 measured stale facts — executed inside the fail-closed distill pipeline under Kevin's gate.
+
+### E5b — nightly LLM contradiction pass (approved; lower priority, lands last)
+Run new transcript deltas through Haiku with structured outputs, emitting contradiction candidates into the human-gated review queue as supersession proposals. **Costing (grounded, per Mira's correction):** implemented on the existing `claude -p` subscription path (`synthesize.py` pattern) — zero metered spend; the metered Batch API is fallback only if that path proves unsuitable (longer prompts, structured-output needs). Heuristic extraction stays as the offline fallback — the fail-closed philosophy is unchanged.
 
 **Pros**
-- Catches decisions phrased in ways regexes never will; confidence scores mean something.
+- E5a alone clears most of today's measured backlog (duplication + unmarked staleness) with no external dependency.
 - Contradiction detection is the biggest *correctness* win available: the README's own thesis is that stale decisions are worse than no memory.
-- Nightly + batch = cheap at this scale (hundreds of new facts/month), and zero impact on prompt latency.
+- Zero metered spend on the subscription path; nightly cadence means zero impact on prompt latency.
 - Proposals stay human-gated; the model never rewrites the store directly.
 
 **Cons**
-- First API dependency and recurring cost in the memory path (small, but the current stack is proudly zero-dependency).
-- Transcript content leaves the box. The existing privacy fences (denied paths, private-payload drops, secret redaction) must run **before** the API call — they already run at ingest, so ordering is enforceable, but this needs explicit verification in review.
+- E5b sends transcript content off-box. The existing privacy fences (denied paths, private-payload drops, secret redaction) must run **before** the `claude -p` call — they already run at ingest, so ordering is enforceable, but this needs explicit verification in review. *(Kevin accepted this trade-off 2026-07-27.)*
+- The `claude -p` path is proven for insight-prose enrichment only; its fit for a structured contradiction pass is a design assumption to validate early.
 - Nondeterminism vs. the pinned-commit reproducibility story. Mitigate: log prompts + raw outputs as distill receipts; keep the shrink-guard and strict signature verify exactly as they are.
 
 ---
@@ -153,7 +161,7 @@ Track recall hits per fact; reinforce frequently-used facts, decay never-used on
 - Nearly free if the schema lands during the E2 migration (one migration, one re-sign).
 
 **Cons**
-- Only pays off if supersession actually happens at volume — which depends on E5's contradiction detection. Sequence it after E5, or land the schema early (with E2) and let E5 populate it.
+- ~~Only pays off if supersession happens at volume~~ **v2: supersession already happens at volume — it's just unmarked (measured ≥2× the recorded rate). E6 pays off immediately, independent of E5b.** Land the schema *and* the supersession-link field with E2's single migration; backfill the 16 measured cases as the first closed validity intervals.
 - Every consumer — recall filters, exports, vault, graph — must learn the validity filter; miss one and superseded facts leak back into recall.
 - Backdated `valid_from` for 1,913 existing facts is approximate. Accept the fuzziness; document it.
 
@@ -185,15 +193,27 @@ Track recall hits per fact; reinforce frequently-used facts, decay never-used on
 | # | Enhancement | Effort | Risk | Depends on | Payoff |
 |---|---|---|---|---|---|
 | E1 | Pin bump · retention · eval gate | S | Low | — | Immediate latency + monitored quality |
-| E2 | SQLite store | M–L | **Highest** (re-sign migration) | — | Foundation for E3–E7 |
-| E3 | Embedder + reranker | M | Medium (CPU budget) | E2 preferred | Semantic recall that earns its slot |
-| E4 | Taxonomy + decay | M | Low–Med | E2 | Precision + bounded growth |
-| E5 | LLM distillation | M | Medium (privacy ordering) | — (better with E4) | Correctness: contradictions surfaced |
-| E6 | Bi-temporal schema | S–M | Low (if with E2) | E2; populated by E5 | Time-travel audit, reversible supersession |
+| E5a | Dedup · link field · 16-fact cleanup | S–M | Low (human-gated) | — (pre-E2 by design) | Clears measured backlog; shrinks E2 migration |
+| E2 | SQLite store | M–L | **Highest** (re-sign migration) | — | Foundation for the rest |
+| E6 | Bi-temporal schema + link field | S–M | Low (rides E2's migration) | E2 | Time-travel audit, reversible supersession — pays off immediately |
+| E4 | Taxonomy + decay | M | Low–Med | E2 | Precision + bounded growth; gates E3 |
+| E3 | Reranker (embedder eval-gated) | M | Medium (CPU budget) | E4 re-eval | Precision at the injection cutoff |
 | E7 | MCP pull path | M | Medium (new service) | E2 | Token savings + mid-task memory |
+| E5b | Nightly contradiction pass | M | Medium (privacy — accepted) | E5a; `claude -p` path | Going-forward staleness hygiene |
 
-**Recommended path:** E1 now → E2 (with E6's schema riding the same migration) → E3 and E4 in parallel → E5 → E7.
+**Recommended path (v2):** E1 now → E5a dedup (pre-E2, approved) → E2 (+ E6 schema + supersession-link field, one migration) → E4 denoise → re-run `mira-recall-suite.json` → E3 reranker (embedder only if the eval earns it) → E7 → E5b.
 
 ---
 
-*Prepared for Mira's review. All current-state figures were read live from nock-fleet-02 on 2026-07-26; nothing in this plan has been applied.*
+## Decision log
+
+| Date | Decision | By |
+|---|---|---|
+| 2026-07-27 | Redline accepted in full: marking-rate reframe, E4-before-E3 (embedder eval-gated), E5a/E5b split, E6 immediate | Fable + Mira (msgs #36219/#36403) |
+| 2026-07-27 | **E5b privacy: approved.** Fenced transcript deltas may go off-box via the `claude -p` subscription path (`synthesize.py` pattern); metered Batch API is fallback only | Kevin |
+| 2026-07-27 | **Signed-store mutations: approved.** 12→1 `mara-nockos` dedup + cleanup of the 16 measured stale facts; execution stays inside the fail-closed distill pipeline with strict signature verification | Kevin |
+| 2026-07-27 | Build split: Fable builds tooling in base `nock-brain`; Mira pin-bumps and operates against the store on fleet-02 | Kevin |
+
+---
+
+*v1 prepared for Mira's review from a live fleet-02 inspection on 2026-07-26. v2 folds in Mira's redline (its live measurement of 265 decision/correction facts) and Kevin's 2026-07-27 approvals. As of v2, nothing has been applied to the signed store; E5a tooling is in build.*
