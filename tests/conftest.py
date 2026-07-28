@@ -125,3 +125,8 @@ def consolidate_facts():
 @pytest.fixture(scope="session")
 def dedup_facts():
     return _load("dedup-facts")
+
+
+@pytest.fixture(scope="session")
+def detect_contradictions():
+    return _load("detect-contradictions")
