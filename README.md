@@ -104,6 +104,10 @@ python3 bin/supersede-fact.py --search "old pricing" --mark-superseded
 python3 bin/dedup-facts.py
 python3 bin/dedup-facts.py --apply
 
+# Surface stale-but-live facts (propose-only; --llm judges via claude -p)
+python3 bin/detect-contradictions.py
+python3 bin/detect-contradictions.py --llm
+
 # Hard-delete sensitive material from local stores
 python3 bin/purge-fact.py --pattern "old secret value" --apply
 python3 bin/purge-fact.py <fact_id> --apply
@@ -208,6 +212,7 @@ nock-brain/
     recall-classifier.py   # Classify prompts for recall need
     supersede-fact.py      # Mark outdated facts
     dedup-facts.py         # Collapse near-duplicate facts to one canonical
+    detect-contradictions.py # Propose supersessions for stale-but-live facts
   hooks/
     memory-inject.sh       # Claude Code auto-injection hook
   tests/                   # pytest suite for the extraction + recall pipeline

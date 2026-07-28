@@ -29,7 +29,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,28 +38,16 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-from _facts import fact_currently_valid, load_facts
+from _facts import content_tokens, fact_currently_valid, jaccard, load_facts
 from _store import secure_mkdir, secure_write_json, secure_write_text
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 DEFAULT_MIN_SIMILARITY = 0.85
 
-_TOKEN_RE = re.compile(r"[^a-z0-9]+")
-
-
-def normalize_tokens(text: Any) -> frozenset:
-    """Case-, punctuation- and whitespace-insensitive token set."""
-    if not isinstance(text, str):
-        return frozenset()
-    return frozenset(t for t in _TOKEN_RE.split(text.lower()) if t)
-
-
-def similarity(a: Any, b: Any) -> float:
-    """Jaccard similarity of the two contents' normalized token sets."""
-    ta, tb = normalize_tokens(a), normalize_tokens(b)
-    if not ta or not tb:
-        return 0.0
-    return len(ta & tb) / len(ta | tb)
+# Shared token helpers live in _facts so dedup and contradiction pairing agree
+# on what "same content" means.
+normalize_tokens = content_tokens
+similarity = jaccard
 
 
 def _confidence(fact: dict) -> float:
