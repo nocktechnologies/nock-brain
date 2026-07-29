@@ -65,7 +65,9 @@ def _record_degradation(db_path: Path, reason: str) -> None:
         with open(log_path, "a", encoding="utf-8") as stream:
             stream.write(line + "\n")
         log_path.chmod(FILE_MODE)
-    except Exception:
+    except Exception:  # nosec B110 - deliberate: the recall result is already
+        # degraded; raising while trying to LOG that fact would invert the
+        # priority and break the hook's never-block contract.
         pass
 
 # Modeled scalar columns. Everything else — unknown fields, explicit nulls,
@@ -245,8 +247,8 @@ class SqliteStore:
         columns = ", ".join(FACT_COLUMNS + JSON_COLUMNS + ("extra",))
         con = self._connect()
         try:
-            # nosec B608 — column list is built from hardcoded tuples above,
-            # never external input.
+            # Column list is built from hardcoded tuples above, never
+            # external input (bandit suppression on the statement line).
             rows = con.execute(
                 f"SELECT {columns} FROM facts ORDER BY rowid"  # nosec B608
             ).fetchall()
@@ -270,8 +272,8 @@ class SqliteStore:
         try:
             with con:  # one transaction: readers never see a half-replaced store
                 con.execute("DELETE FROM facts")
-                # nosec B608 — column list/placeholders come from hardcoded
-                # tuples; all values are bound parameters.
+                # Column list/placeholders come from hardcoded tuples; all
+                # values are bound parameters (bandit suppression inline).
                 con.executemany(
                     f"INSERT INTO facts ({columns}) VALUES ({placeholders})",  # nosec B608
                     rows,
