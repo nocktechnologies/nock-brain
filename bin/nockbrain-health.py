@@ -43,6 +43,42 @@ def load_events(path: Path | None) -> tuple[list[dict[str, Any]], int]:
     return events, malformed
 
 
+def load_degradations(path: Path | None, *, now: Any = None,
+                      recent_hours: float = 24.0) -> dict[str, Any]:
+    """Aggregate recall-degradation events (recall-degradations.jsonl).
+
+    A degraded read is visible on stderr, but stderr nobody watches is still a
+    silent outage — this turns the events into numbers a health check can flag
+    on: total, count in the recent window, and the latest timestamp."""
+    from datetime import datetime, timedelta, timezone
+
+    total = 0
+    recent = 0
+    last_at = ""
+    if path and path.exists():
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=recent_hours)
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                event = json.loads(line)
+                stamp = str(event.get("at", ""))
+            except (json.JSONDecodeError, AttributeError):
+                continue
+            total += 1
+            if stamp > last_at:
+                last_at = stamp
+            try:
+                at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                if at.tzinfo is None:
+                    at = at.replace(tzinfo=timezone.utc)
+                if at >= cutoff:
+                    recent += 1
+            except ValueError:
+                continue
+    return {"path": str(path) if path else "", "total": total,
+            "recent_24h": recent, "last_at": last_at}
+
+
 def malformed_facts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     bad = []
     for fact in facts:
@@ -123,6 +159,8 @@ def build_report(
     stats_path: Path | None = None,
     env_paths: list[Path] | None = None,
     scan_roots: list[Path] | None = None,
+    degradations_path: Path | None = None,
+    degradation_threshold: int = 3,
 ) -> dict[str, Any]:
     events, malformed_event_lines = load_events(events_path)
     facts = load_json(facts_path, [])
@@ -165,6 +203,11 @@ def build_report(
         },
         "recall_ready": bool(facts) and not bad_facts,
     }
+    degradations = load_degradations(degradations_path)
+    degradations["threshold"] = degradation_threshold
+    # N recent degraded reads = fleet memory silently blind on every recall.
+    degradations["flagged"] = degradations["recent_24h"] >= degradation_threshold
+    report["recall_degradations"] = degradations
     return report
 
 
@@ -185,6 +228,16 @@ def render_text(report: dict[str, Any]) -> str:
         ),
         f"- Recall ready: {str(report['recall_ready']).lower()}",
     ]
+    degradations = report.get("recall_degradations", {})
+    if degradations.get("flagged"):
+        lines.append(
+            f"- RECALL DEGRADED: {degradations['recent_24h']} degraded read(s) in 24h "
+            f"(threshold {degradations['threshold']}, last {degradations['last_at']})"
+        )
+    else:
+        lines.append(
+            f"- Recall degradations (24h): {degradations.get('recent_24h', 0)}"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -197,9 +250,17 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--env-file", action="append", type=Path, default=[])
     parser.add_argument("--scan-root", action="append", type=Path, default=[])
     parser.add_argument("--json", action="store_true", help="Print JSON instead of text")
+    parser.add_argument("--degradations", type=Path, default=None,
+                        help="recall-degradations.jsonl (default: next to --facts)")
+    parser.add_argument("--degradation-threshold", type=int, default=3,
+                        help="recent degraded reads that flag RECALL DEGRADED")
     args = parser.parse_args(argv)
 
-    report = build_report(args.events, args.facts, args.notes_dir, args.stats, args.env_file, args.scan_root)
+    degradations = args.degradations or args.facts.parent / "recall-degradations.jsonl"
+    report = build_report(args.events, args.facts, args.notes_dir, args.stats,
+                          args.env_file, args.scan_root,
+                          degradations_path=degradations,
+                          degradation_threshold=args.degradation_threshold)
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:

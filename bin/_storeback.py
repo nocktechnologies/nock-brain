@@ -28,6 +28,7 @@ import json
 import os
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,32 @@ DB_FILENAME = "brain.db"
 MARKER_FILENAME = "store-v2"
 ENV_VAR = "NOCKBRAIN_STORE"
 SCHEMA_VERSION = 1
+DEGRADATION_LOG = "recall-degradations.jsonl"
+
+
+def _record_degradation(db_path: Path, reason: str) -> None:
+    """Append one degradation event next to the store, best-effort.
+
+    A degraded read (missing/broken db -> empty recall) is emitted to stderr,
+    but stderr nobody watches is still a silent outage — so every degradation
+    also lands in a small JSONL that nockbrain-health.py aggregates into a
+    flag. This must NEVER raise or block the hook: any failure to record is
+    swallowed (the recall result is already degraded; making it worse to log
+    that fact would invert the priority)."""
+    try:
+        log_path = Path(db_path).parent / DEGRADATION_LOG
+        line = json.dumps({
+            "at": datetime.now(timezone.utc).isoformat(),
+            "db": str(db_path),
+            "reason": reason,
+        })
+        with open(log_path, "a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+        log_path.chmod(FILE_MODE)
+    except Exception:  # nosec B110 - deliberate: the recall result is already
+        # degraded; raising while trying to LOG that fact would invert the
+        # priority and break the hook's never-block contract.
+        pass
 
 # Modeled scalar columns. Everything else — unknown fields, explicit nulls,
 # non-scalar values in a modeled slot — rides the `extra` JSON column, which is
@@ -213,19 +240,22 @@ class SqliteStore:
     def load_facts(self, required_fields: "set[str] | None" = None) -> "list[dict]":
         # A read must never create an empty brain.db (sqlite3.connect would),
         # and a broken db degrades to empty — the hook's fail-open contract.
+        # Every degraded read is also recorded for health aggregation.
         if not self.db_path.exists():
+            _record_degradation(self.db_path, "db-missing")
             return []
         columns = ", ".join(FACT_COLUMNS + JSON_COLUMNS + ("extra",))
         con = self._connect()
         try:
-            # nosec B608 — column list is built from hardcoded tuples above,
-            # never external input.
+            # Column list is built from hardcoded tuples above, never
+            # external input (bandit suppression on the statement line).
             rows = con.execute(
                 f"SELECT {columns} FROM facts ORDER BY rowid"  # nosec B608
             ).fetchall()
         except sqlite3.Error as exc:
             print(f"{self.db_path}: skipped unreadable sqlite store ({exc})",
                   file=sys.stderr)
+            _record_degradation(self.db_path, f"sqlite-error: {exc}")
             return []
         finally:
             con.close()
@@ -242,8 +272,8 @@ class SqliteStore:
         try:
             with con:  # one transaction: readers never see a half-replaced store
                 con.execute("DELETE FROM facts")
-                # nosec B608 — column list/placeholders come from hardcoded
-                # tuples; all values are bound parameters.
+                # Column list/placeholders come from hardcoded tuples; all
+                # values are bound parameters (bandit suppression inline).
                 con.executemany(
                     f"INSERT INTO facts ({columns}) VALUES ({placeholders})",  # nosec B608
                     rows,
