@@ -46,14 +46,14 @@ def make_claim_fact() -> dict:
                 "source_id": "44123",
                 "digest": "d" * 64,
                 "digest_kind": "attested",
-                "source_created_at": "2026-08-04T15:00:00Z",
+                "source_created_at": "2026-08-04T15:00:00.000000Z",
                 "scope": "private",
             }
         ],
         "scope": "private",
-        "confidence": 1.0,
-        "source_time": "2026-08-04T15:00:00Z",
-        "valid_from": "2026-08-04T15:00:00Z",
+        "confidence": 0.8,
+        "source_time": "2026-08-04T15:00:00.000000Z",
+        "valid_from": "2026-08-04T15:00:00.000000Z",
         "valid_to": None,
         "verify_before_act": False,
         "promotion_batch_digest": BATCH,
@@ -108,6 +108,23 @@ def test_v2_payload_is_canonical_and_does_not_authorize_mutable_status(sign):
     )
 
 
+def test_contract_fixture_matches_exact_joined_bytes(sign):
+    fixture_path = REPO / "tests" / "nock_memory_conformance_v1.json"
+    raw = fixture_path.read_bytes().rstrip(b"\n")
+    fixture = json.loads(raw)
+
+    assert sign.canonical_contract_json(fixture) == raw
+    assert sign._sha256_hex(raw) == (
+        "cb4c0c9c26c34e2c74a1cf6e51c81a31c521f47e58211dbb78bd595de9794423"
+    )
+
+
+@pytest.mark.parametrize("value", [-0.0, 1.0, 1e-7, float("nan"), float("inf")])
+def test_contract_canonicalizer_rejects_nonportable_numbers(sign, value):
+    with pytest.raises(sign.ClaimAttestationError):
+        sign.canonical_contract_json({"confidence": value})
+
+
 @pytest.mark.parametrize(
     ("field", "replacement"),
     [
@@ -120,9 +137,9 @@ def test_v2_payload_is_canonical_and_does_not_authorize_mutable_status(sign):
         ("evidence", [{"source_id": "forged"}]),
         ("scope", "public"),
         ("confidence", 0.7),
-        ("source_time", "2026-08-03T15:00:00Z"),
-        ("valid_from", "2026-08-03T15:00:00Z"),
-        ("valid_to", "2026-08-05T15:00:00Z"),
+        ("source_time", "2026-08-03T15:00:00.000000Z"),
+        ("valid_from", "2026-08-03T15:00:00.000000Z"),
+        ("valid_to", "2026-08-05T15:00:00.000000Z"),
         ("verify_before_act", True),
         ("promotion_batch_digest", "sha256:" + "e" * 64),
         ("parent_revision_ids", [REV_B]),
@@ -202,7 +219,7 @@ def test_v2_status_edit_cannot_retire_or_resurrect_authority(sign, tmp_path):
         ("confidence", 1.1),
         ("source_time", "2026-08-04"),
         ("valid_from", "not-a-time"),
-        ("valid_to", "2026-08-04T14:59:59Z"),
+        ("valid_to", "2026-08-04T14:59:59.000000Z"),
         ("verify_before_act", "false"),
         ("promotion_batch_digest", "not-a-digest"),
         ("parent_revision_ids", ["not-a-revision"]),

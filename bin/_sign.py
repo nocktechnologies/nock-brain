@@ -122,6 +122,37 @@ def _canonical_json(obj: Any) -> bytes:
     ).encode("utf-8")
 
 
+def canonical_contract_json(obj: Any) -> bytes:
+    """Canonical bytes for portable memory, claim, and receipt contracts."""
+
+    def validate_numbers(item: Any) -> None:
+        if isinstance(item, bool) or item is None or isinstance(item, (str, int)):
+            return
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                raise ClaimAttestationError("canonical numbers must be finite")
+            if item == 0.0 and math.copysign(1.0, item) < 0:
+                raise ClaimAttestationError(
+                    "canonical numbers must not use negative zero"
+                )
+            rendered = json.dumps(item, allow_nan=False)
+            if "e" in rendered.lower() or rendered.endswith(".0"):
+                raise ClaimAttestationError(
+                    "fractional canonical numbers use plain shortest decimal form"
+                )
+            return
+        if isinstance(item, dict):
+            for nested in item.values():
+                validate_numbers(nested)
+            return
+        if isinstance(item, (list, tuple)):
+            for nested in item:
+                validate_numbers(nested)
+
+    validate_numbers(obj)
+    return _canonical_json(obj)
+
+
 def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -216,6 +247,13 @@ def _claim_timestamp(fact: dict[str, Any], field: str, *, nullable: bool = False
         raise ClaimAttestationError(f"{field} must be an ISO-8601 timestamp") from exc
     if parsed.tzinfo is None:
         raise ClaimAttestationError(f"{field} must include a timezone")
+    canonical = parsed.astimezone(timezone.utc).isoformat(
+        timespec="microseconds"
+    ).replace("+00:00", "Z")
+    if value != canonical:
+        raise ClaimAttestationError(
+            f"{field} must use canonical UTC with six fractional digits"
+        )
     return value, parsed
 
 
@@ -291,7 +329,7 @@ def claim_payload_v2(fact: dict[str, Any]) -> dict[str, Any]:
 
 def canonical_claim_payload_v2(fact: dict[str, Any]) -> bytes:
     """Return the deterministic JSON bytes committed by a v2 signature."""
-    return _canonical_json(claim_payload_v2(fact))
+    return canonical_contract_json(claim_payload_v2(fact))
 
 
 def verifier_receipt_payload(receipt: dict[str, Any]) -> dict[str, Any]:
@@ -330,7 +368,7 @@ def verifier_receipt_payload(receipt: dict[str, Any]) -> dict[str, Any]:
 
 def canonical_verifier_receipt_payload(receipt: dict[str, Any]) -> bytes:
     """Return the deterministic bytes committed by a verifier receipt."""
-    return _canonical_json(verifier_receipt_payload(receipt))
+    return canonical_contract_json(verifier_receipt_payload(receipt))
 
 
 def _signed_payload(fact_hash: str, src_hash: str, parent_hashes: list[str]) -> bytes:
@@ -604,7 +642,7 @@ def attest_claim_fact_v2(
     """Return a signed envelope binding the complete v2 authority payload."""
     payload = claim_payload_v2(fact)
     signature = key.sign_bytes(
-        CLAIM_ATTESTATION_V2_DOMAIN + _canonical_json(payload)
+        CLAIM_ATTESTATION_V2_DOMAIN + canonical_contract_json(payload)
     )
     return {
         "schema": CLAIM_ATTESTATION_V2_SCHEMA,
@@ -640,7 +678,7 @@ def sign_verifier_receipt(
             "alg": key.alg,
             "key_id": key.key_id,
             "signature": key.sign_bytes(
-                VERIFIER_RECEIPT_DOMAIN + _canonical_json(validated)
+                VERIFIER_RECEIPT_DOMAIN + canonical_contract_json(validated)
             ),
         }
     )
@@ -672,7 +710,7 @@ def verify_verifier_receipt(
     if not isinstance(signature, str):
         return False
     return key.verify_bytes(
-        VERIFIER_RECEIPT_DOMAIN + _canonical_json(validated), signature
+        VERIFIER_RECEIPT_DOMAIN + canonical_contract_json(validated), signature
     )
 
 
@@ -785,7 +823,9 @@ def verify_fact(
         signature = att.get("signature")
         if not isinstance(signature, str):
             return TAMPERED
-        signed_payload = CLAIM_ATTESTATION_V2_DOMAIN + _canonical_json(payload)
+        signed_payload = CLAIM_ATTESTATION_V2_DOMAIN + canonical_contract_json(
+            payload
+        )
         digest = None
         if verified_cache is not None and is_cacheable_signature(signature):
             digest = cache_digest(key, signature, signed_payload)
