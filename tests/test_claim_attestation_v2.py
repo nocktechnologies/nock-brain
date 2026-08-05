@@ -63,6 +63,24 @@ def make_claim_fact() -> dict:
     }
 
 
+def make_verifier_receipt_payload(fact: dict) -> dict:
+    payload = fact["attestation"]["payload"]
+    return {
+        "schema": "nock-claim-verifier-receipt/v1",
+        "session_id": "provider-session-7",
+        "turn_id": "turn-12",
+        "fact_id": fact["id"],
+        "memory_id": fact["memory_id"],
+        "revision_id": fact["revision_id"],
+        "evidence_hash": payload["evidence_hash"],
+        "promotion_batch_digest": payload["promotion_batch_digest"],
+        "verifier_id": "probe:webhook",
+        "source_digest": "d" * 64,
+        "result": "verified",
+        "observed_at": "2026-08-04T15:00:00.000000Z",
+    }
+
+
 def test_v2_roundtrip_binds_complete_claim_payload(sign, tmp_path):
     key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
     fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
@@ -134,6 +152,33 @@ def test_v2_detects_tampered_declared_content_or_evidence_hash(sign, tmp_path):
         assert sign.verify_fact(fact, key) == sign.TAMPERED
 
 
+def test_v2_comutation_reaches_signature_verification(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
+    old_signature = fact["attestation"]["signature"]
+    fact["scope"] = "org"
+    fact["confidence"] = 0.72
+    fact["attestation"]["payload"] = sign.claim_payload_v2(fact)
+
+    calls = []
+    verify_bytes = key.verify_bytes
+
+    def recording_verify(payload, signature):
+        calls.append((payload, signature))
+        return verify_bytes(payload, signature)
+
+    key.verify_bytes = recording_verify
+    assert fact["attestation"]["payload"] == sign.claim_payload_v2(fact)
+    assert sign.verify_fact(fact, key) == sign.TAMPERED
+    assert calls == [
+        (
+            sign.CLAIM_ATTESTATION_V2_DOMAIN
+            + sign.canonical_claim_payload_v2(fact),
+            old_signature,
+        )
+    ]
+
+
 def test_v2_status_edit_cannot_retire_or_resurrect_authority(sign, tmp_path):
     key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
     fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
@@ -182,6 +227,40 @@ def test_v2_signature_is_domain_separated_from_v1(sign, tmp_path):
     fact["attestation"]["signature"] = v1["signature"]
 
     assert sign.verify_fact(fact, key) == sign.TAMPERED
+
+
+def test_signed_verifier_receipt_roundtrip_binds_every_field(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
+    receipt = sign.sign_verifier_receipt(
+        make_verifier_receipt_payload(fact), key
+    )
+    public_key = sign.load_public_key(tmp_path / "key.pub")
+
+    assert sign.verify_verifier_receipt(receipt, public_key) is True
+    for field, replacement in (
+        ("session_id", "provider-session-8"),
+        ("turn_id", "turn-13"),
+        ("revision_id", REV_B),
+        ("source_digest", "e" * 64),
+        ("observed_at", "2026-08-04T15:00:01.000000Z"),
+    ):
+        tampered = copy.deepcopy(receipt)
+        tampered[field] = replacement
+        assert sign.verify_verifier_receipt(tampered, public_key) is False
+
+
+def test_verifier_receipt_signature_is_domain_separated(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
+    payload = make_verifier_receipt_payload(fact)
+    receipt = sign.sign_verifier_receipt(payload, key)
+    receipt["signature"] = key.sign_bytes(
+        sign.CLAIM_ATTESTATION_V2_DOMAIN
+        + sign.canonical_verifier_receipt_payload(payload)
+    )
+
+    assert sign.verify_verifier_receipt(receipt, key) is False
 
 
 def test_legacy_v1_attestation_still_verifies(sign, tmp_path):

@@ -83,6 +83,22 @@ _DOMAIN = b"nockbrain-fact-v1\n"
 
 CLAIM_ATTESTATION_V2_SCHEMA = "nock-claim-attestation/v2"
 CLAIM_ATTESTATION_V2_DOMAIN = b"nock-claim-attestation-v2\n"
+VERIFIER_RECEIPT_SCHEMA = "nock-claim-verifier-receipt/v1"
+VERIFIER_RECEIPT_DOMAIN = b"nock-claim-verifier-receipt-v1\n"
+VERIFIER_RECEIPT_FIELDS = (
+    "schema",
+    "session_id",
+    "turn_id",
+    "fact_id",
+    "memory_id",
+    "revision_id",
+    "evidence_hash",
+    "promotion_batch_digest",
+    "verifier_id",
+    "source_digest",
+    "result",
+    "observed_at",
+)
 _SHA256_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CLAIM_SCOPES = frozenset({"private", "agent", "org", "public"})
 
@@ -276,6 +292,45 @@ def claim_payload_v2(fact: dict[str, Any]) -> dict[str, Any]:
 def canonical_claim_payload_v2(fact: dict[str, Any]) -> bytes:
     """Return the deterministic JSON bytes committed by a v2 signature."""
     return _canonical_json(claim_payload_v2(fact))
+
+
+def verifier_receipt_payload(receipt: dict[str, Any]) -> dict[str, Any]:
+    """Validate the exact payload emitted by a trusted live verifier.
+
+    A receipt is deliberately narrower than a general event envelope: it binds
+    one real provider session and turn to one signed claim revision and one
+    live evidence anchor. Extra fields are rejected so every accepted byte is
+    part of the signature contract.
+    """
+    if not isinstance(receipt, dict) or set(receipt) != set(VERIFIER_RECEIPT_FIELDS):
+        raise ClaimAttestationError("verifier receipt fields do not match schema")
+    if receipt.get("schema") != VERIFIER_RECEIPT_SCHEMA:
+        raise ClaimAttestationError("verifier receipt schema is not recognized")
+    for field in (
+        "session_id",
+        "turn_id",
+        "fact_id",
+        "verifier_id",
+        "source_digest",
+    ):
+        _required_text(receipt, field)
+    memory_id = _required_text(receipt, "memory_id")
+    try:
+        uuid.UUID(memory_id)
+    except (ValueError, AttributeError) as exc:
+        raise ClaimAttestationError("memory_id must be a UUID") from exc
+    _revision_id(receipt, "revision_id")
+    _revision_id(receipt, "evidence_hash")
+    _revision_id(receipt, "promotion_batch_digest")
+    if receipt.get("result") != "verified":
+        raise ClaimAttestationError("verifier receipt result must be verified")
+    _claim_timestamp(receipt, "observed_at")
+    return {field: receipt[field] for field in VERIFIER_RECEIPT_FIELDS}
+
+
+def canonical_verifier_receipt_payload(receipt: dict[str, Any]) -> bytes:
+    """Return the deterministic bytes committed by a verifier receipt."""
+    return _canonical_json(verifier_receipt_payload(receipt))
 
 
 def _signed_payload(fact_hash: str, src_hash: str, parent_hashes: list[str]) -> bytes:
@@ -567,6 +622,58 @@ def sign_claim_fact_v2(
     """Sign a claim-authority fact in place using the v2 contract."""
     fact["attestation"] = attest_claim_fact_v2(fact, key)
     return fact
+
+
+def sign_verifier_receipt(
+    payload: dict[str, Any], key: SigningKey
+) -> dict[str, Any]:
+    """Sign one trusted live-verifier result for an exact session and turn.
+
+    Operational callers must keep the private key outside the model seat. The
+    returned record is ready for the append-only receipt store consumed by
+    Claim Guard; unsigned or seat-authored records cannot pass verification.
+    """
+    validated = verifier_receipt_payload(payload)
+    signed = dict(validated)
+    signed.update(
+        {
+            "alg": key.alg,
+            "key_id": key.key_id,
+            "signature": key.sign_bytes(
+                VERIFIER_RECEIPT_DOMAIN + _canonical_json(validated)
+            ),
+        }
+    )
+    return signed
+
+
+def verify_verifier_receipt(
+    receipt: dict[str, Any], key: SigningKey | None
+) -> bool:
+    """Verify a strict verifier-receipt envelope under its own domain."""
+    if key is None or not isinstance(receipt, dict):
+        return False
+    payload = {
+        field: receipt.get(field) for field in VERIFIER_RECEIPT_FIELDS
+    }
+    try:
+        validated = verifier_receipt_payload(payload)
+    except ClaimAttestationError:
+        return False
+    if set(receipt) != set(VERIFIER_RECEIPT_FIELDS) | {
+        "alg",
+        "key_id",
+        "signature",
+    }:
+        return False
+    if receipt.get("alg") != key.alg or receipt.get("key_id") != key.key_id:
+        return False
+    signature = receipt.get("signature")
+    if not isinstance(signature, str):
+        return False
+    return key.verify_bytes(
+        VERIFIER_RECEIPT_DOMAIN + _canonical_json(validated), signature
+    )
 
 
 # --- verification ------------------------------------------------------------
