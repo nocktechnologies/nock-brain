@@ -1,0 +1,198 @@
+"""Contract tests for claim-authority attestation v2."""
+
+from __future__ import annotations
+
+import copy
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+
+REPO = Path(__file__).resolve().parent.parent
+BIN = REPO / "bin"
+REV_A = "sha256:" + "a" * 64
+REV_B = "sha256:" + "b" * 64
+BATCH = "sha256:" + "c" * 64
+
+
+def load_sign():
+    path = BIN / "_sign.py"
+    spec = importlib.util.spec_from_file_location("claim_attestation_sign", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture()
+def sign():
+    return load_sign()
+
+
+def make_claim_fact() -> dict:
+    return {
+        "id": "fact-kevin-approval",
+        "memory_id": "018fba20-5f5d-7c52-a714-3fb4f36d153d",
+        "revision_id": REV_A,
+        "kind": "decision",
+        "category": "kevin_decision",
+        "content": "Kevin approved the bounded memory build.",
+        "evidence": [
+            {
+                "source_type": "owner_inbound",
+                "source_id": "44123",
+                "digest": "d" * 64,
+                "digest_kind": "attested",
+                "source_created_at": "2026-08-04T15:00:00Z",
+                "scope": "private",
+            }
+        ],
+        "scope": "private",
+        "confidence": 1.0,
+        "source_time": "2026-08-04T15:00:00Z",
+        "valid_from": "2026-08-04T15:00:00Z",
+        "valid_to": None,
+        "verify_before_act": False,
+        "promotion_batch_digest": BATCH,
+        "parent_revision_ids": [],
+        "revokes_revision_ids": [],
+        "status": "current",
+    }
+
+
+def test_v2_roundtrip_binds_complete_claim_payload(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
+
+    attestation = fact["attestation"]
+    assert attestation["schema"] == "nock-claim-attestation/v2"
+    assert attestation["payload"] == sign.claim_payload_v2(fact)
+    assert attestation["alg"] == key.alg
+    assert attestation["key_id"] == key.key_id
+    assert attestation["signature"]
+
+    public_key = sign.load_public_key(tmp_path / "key.pub")
+    assert sign.verify_fact(fact, public_key) == sign.VALID
+
+
+def test_v2_payload_is_canonical_and_does_not_authorize_mutable_status(sign):
+    fact = make_claim_fact()
+    first = sign.claim_payload_v2(fact)
+    reordered = json.loads(json.dumps(fact, sort_keys=True))
+    reordered["status"] = "revoked"
+
+    assert sign.claim_payload_v2(reordered) == first
+    assert sign.canonical_claim_payload_v2(reordered) == sign.canonical_claim_payload_v2(
+        fact
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("memory_id", "018fba20-5f5d-7c52-a714-3fb4f36d153e"),
+        ("revision_id", REV_B),
+        ("id", "forged-fact-id"),
+        ("kind", "directive"),
+        ("category", "standing_order"),
+        ("content", "Kevin approved an unlimited build."),
+        ("evidence", [{"source_id": "forged"}]),
+        ("scope", "public"),
+        ("confidence", 0.7),
+        ("source_time", "2026-08-03T15:00:00Z"),
+        ("valid_from", "2026-08-03T15:00:00Z"),
+        ("valid_to", "2026-08-05T15:00:00Z"),
+        ("verify_before_act", True),
+        ("promotion_batch_digest", "sha256:" + "e" * 64),
+        ("parent_revision_ids", [REV_B]),
+        ("revokes_revision_ids", [REV_B]),
+    ],
+)
+def test_v2_detects_tampering_in_every_authority_field(
+    sign, tmp_path, field, replacement
+):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
+    fact[field] = replacement
+
+    assert sign.verify_fact(fact, key) == sign.TAMPERED
+
+
+def test_v2_detects_tampered_declared_content_or_evidence_hash(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    for field in ("content_hash", "evidence_hash"):
+        fact = make_claim_fact()
+        if field == "content_hash":
+            fact[field] = sign.content_hash_v2(fact)
+        else:
+            fact[field] = sign.evidence_hash_v2(fact)
+        fact = sign.sign_claim_fact_v2(fact, key)
+        fact[field] = "sha256:" + "f" * 64
+        assert sign.verify_fact(fact, key) == sign.TAMPERED
+
+
+def test_v2_status_edit_cannot_retire_or_resurrect_authority(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
+
+    for status in ("revoked", "superseded", "current", "invented"):
+        fact["status"] = status
+        assert sign.verify_fact(fact, key) == sign.VALID
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("memory_id", None),
+        ("revision_id", "not-a-revision"),
+        ("id", ""),
+        ("category", ""),
+        ("content", ""),
+        ("evidence", []),
+        ("evidence", [{"score": float("nan")}]),
+        ("scope", "unknown"),
+        ("confidence", 1.1),
+        ("source_time", "2026-08-04"),
+        ("valid_from", "not-a-time"),
+        ("valid_to", "2026-08-04T14:59:59Z"),
+        ("verify_before_act", "false"),
+        ("promotion_batch_digest", "not-a-digest"),
+        ("parent_revision_ids", ["not-a-revision"]),
+        ("revokes_revision_ids", [REV_B, REV_B]),
+    ],
+)
+def test_v2_signing_rejects_invalid_authority_contract(
+    sign, tmp_path, field, replacement
+):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = make_claim_fact()
+    fact[field] = replacement
+
+    with pytest.raises(sign.ClaimAttestationError):
+        sign.sign_claim_fact_v2(fact, key)
+
+
+def test_v2_signature_is_domain_separated_from_v1(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
+    v1 = sign.attest_fact(fact, key)
+    fact["attestation"]["signature"] = v1["signature"]
+
+    assert sign.verify_fact(fact, key) == sign.TAMPERED
+
+
+def test_legacy_v1_attestation_still_verifies(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = {
+        "id": "legacy-fact",
+        "kind": "decision",
+        "content": "Existing signed memory remains readable.",
+        "evidence": [{"event_id": "event-1"}],
+    }
+
+    sign.sign_fact(fact, key)
+    assert "schema" not in fact["attestation"]
+    assert sign.verify_fact(fact, key) == sign.VALID

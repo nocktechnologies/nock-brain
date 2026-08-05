@@ -37,8 +37,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
+import re
 import secrets
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -78,6 +81,15 @@ DEFAULT_PUB_PATH = DEFAULT_STORE_DIR / "signing-key.pub"
 # context that might reuse the same key bytes.
 _DOMAIN = b"nockbrain-fact-v1\n"
 
+CLAIM_ATTESTATION_V2_SCHEMA = "nock-claim-attestation/v2"
+CLAIM_ATTESTATION_V2_DOMAIN = b"nock-claim-attestation-v2\n"
+_SHA256_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_CLAIM_SCOPES = frozenset({"private", "agent", "org", "public"})
+
+
+class ClaimAttestationError(ValueError):
+    """A claim revision cannot be represented by the signed v2 contract."""
+
 
 # --- canonicalization --------------------------------------------------------
 def _canonical_json(obj: Any) -> bytes:
@@ -86,7 +98,11 @@ def _canonical_json(obj: Any) -> bytes:
     Stable across re-serialization so a fact that round-trips through json
     dump/load produces an identical signing payload."""
     return json.dumps(
-        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        obj,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8")
 
 
@@ -121,6 +137,145 @@ def canonical_fact_hash(fact: dict[str, Any]) -> str:
 
 def source_hash(fact: dict[str, Any]) -> str:
     return _sha256_hex(_canonical_json(source_anchor(fact)))
+
+
+def _sha256_id(data: bytes) -> str:
+    return "sha256:" + _sha256_hex(data)
+
+
+def content_hash_v2(fact: dict[str, Any]) -> str:
+    """Hash the exact claim text used by the v2 authority contract."""
+    content = fact.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise ClaimAttestationError("content must be non-empty text")
+    return _sha256_id(content.encode("utf-8"))
+
+
+def evidence_hash_v2(fact: dict[str, Any]) -> str:
+    """Hash the complete evidence-anchor array used for promotion."""
+    evidence = fact.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        raise ClaimAttestationError("evidence must be a non-empty list")
+    try:
+        return _sha256_id(_canonical_json(evidence))
+    except (TypeError, ValueError) as exc:
+        raise ClaimAttestationError("evidence must be canonical JSON") from exc
+
+
+def _required_text(fact: dict[str, Any], field: str) -> str:
+    value = fact.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ClaimAttestationError(f"{field} must be non-empty text")
+    return value
+
+
+def _revision_id(fact: dict[str, Any], field: str) -> str:
+    value = _required_text(fact, field)
+    if not _SHA256_ID_RE.fullmatch(value):
+        raise ClaimAttestationError(f"{field} must be a sha256 revision id")
+    return value
+
+
+def _revision_ids_v2(fact: dict[str, Any], field: str) -> list[str]:
+    values = fact.get(field, [])
+    if not isinstance(values, list) or any(
+        not isinstance(value, str) or not _SHA256_ID_RE.fullmatch(value)
+        for value in values
+    ):
+        raise ClaimAttestationError(f"{field} must contain sha256 revision ids")
+    if len(values) != len(set(values)):
+        raise ClaimAttestationError(f"{field} contains duplicate revision ids")
+    return list(values)
+
+
+def _claim_timestamp(fact: dict[str, Any], field: str, *, nullable: bool = False):
+    value = fact.get(field)
+    if nullable and value is None:
+        return None, None
+    if not isinstance(value, str):
+        raise ClaimAttestationError(f"{field} must be an ISO-8601 timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ClaimAttestationError(f"{field} must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ClaimAttestationError(f"{field} must include a timezone")
+    return value, parsed
+
+
+def claim_payload_v2(fact: dict[str, Any]) -> dict[str, Any]:
+    """Build and validate every immutable field that changes claim authority.
+
+    Human-readable ``status`` is deliberately absent. Authority is retired only
+    by a separately signed record whose ``revokes_revision_ids`` names the
+    revision being replaced or revoked.
+    """
+    memory_id = _required_text(fact, "memory_id")
+    try:
+        uuid.UUID(memory_id)
+    except (ValueError, AttributeError) as exc:
+        raise ClaimAttestationError("memory_id must be a UUID") from exc
+
+    revision_id = _revision_id(fact, "revision_id")
+    fact_id = _required_text(fact, "id")
+    kind = _required_text(fact, "kind")
+    category = _required_text(fact, "category")
+    content_hash = content_hash_v2(fact)
+    evidence_hash = evidence_hash_v2(fact)
+    if "content_hash" in fact and fact["content_hash"] != content_hash:
+        raise ClaimAttestationError("content_hash does not match content")
+    if "evidence_hash" in fact and fact["evidence_hash"] != evidence_hash:
+        raise ClaimAttestationError("evidence_hash does not match evidence")
+
+    scope = fact.get("scope")
+    if scope not in _CLAIM_SCOPES:
+        raise ClaimAttestationError("scope is not recognized")
+    confidence = fact.get("confidence")
+    if (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+        or not math.isfinite(confidence)
+        or not 0 <= confidence <= 1
+    ):
+        raise ClaimAttestationError("confidence must be a finite number from 0 to 1")
+
+    source_time, _ = _claim_timestamp(fact, "source_time")
+    valid_from, valid_from_dt = _claim_timestamp(fact, "valid_from")
+    valid_to, valid_to_dt = _claim_timestamp(fact, "valid_to", nullable=True)
+    if valid_to_dt is not None and valid_to_dt <= valid_from_dt:
+        raise ClaimAttestationError("valid_to must be later than valid_from")
+
+    verify_before_act = fact.get("verify_before_act")
+    if not isinstance(verify_before_act, bool):
+        raise ClaimAttestationError("verify_before_act must be true or false")
+    promotion_batch_digest = _required_text(fact, "promotion_batch_digest")
+    if not _SHA256_ID_RE.fullmatch(promotion_batch_digest):
+        raise ClaimAttestationError("promotion_batch_digest must be a sha256 digest")
+
+    return {
+        "schema": CLAIM_ATTESTATION_V2_SCHEMA,
+        "memory_id": memory_id,
+        "revision_id": revision_id,
+        "fact_id": fact_id,
+        "kind": kind,
+        "category": category,
+        "content_hash": content_hash,
+        "evidence_hash": evidence_hash,
+        "scope": scope,
+        "confidence": confidence,
+        "source_time": source_time,
+        "valid_from": valid_from,
+        "valid_to": valid_to,
+        "verify_before_act": verify_before_act,
+        "promotion_batch_digest": promotion_batch_digest,
+        "parent_revision_ids": _revision_ids_v2(fact, "parent_revision_ids"),
+        "revokes_revision_ids": _revision_ids_v2(fact, "revokes_revision_ids"),
+    }
+
+
+def canonical_claim_payload_v2(fact: dict[str, Any]) -> bytes:
+    """Return the deterministic JSON bytes committed by a v2 signature."""
+    return _canonical_json(claim_payload_v2(fact))
 
 
 def _signed_payload(fact_hash: str, src_hash: str, parent_hashes: list[str]) -> bytes:
@@ -388,6 +543,32 @@ def sign_facts(facts: list[dict[str, Any]], key: SigningKey) -> list[dict[str, A
     return facts
 
 
+def attest_claim_fact_v2(
+    fact: dict[str, Any], key: SigningKey
+) -> dict[str, Any]:
+    """Return a signed envelope binding the complete v2 authority payload."""
+    payload = claim_payload_v2(fact)
+    signature = key.sign_bytes(
+        CLAIM_ATTESTATION_V2_DOMAIN + _canonical_json(payload)
+    )
+    return {
+        "schema": CLAIM_ATTESTATION_V2_SCHEMA,
+        "payload": payload,
+        "alg": key.alg,
+        "key_id": key.key_id,
+        "signature": signature,
+        "signed_at": _now_iso(),
+    }
+
+
+def sign_claim_fact_v2(
+    fact: dict[str, Any], key: SigningKey
+) -> dict[str, Any]:
+    """Sign a claim-authority fact in place using the v2 contract."""
+    fact["attestation"] = attest_claim_fact_v2(fact, key)
+    return fact
+
+
 # --- verification ------------------------------------------------------------
 # Verification status constants.
 VALID = "valid"
@@ -480,6 +661,33 @@ def verify_fact(
         return UNSIGNED
     if key is None:
         # No key to verify against -> cannot affirm; treat as tampered/unverifiable.
+        return TAMPERED
+
+    schema = att.get("schema")
+    if schema is not None:
+        if schema != CLAIM_ATTESTATION_V2_SCHEMA:
+            return TAMPERED
+        try:
+            payload = claim_payload_v2(fact)
+        except ClaimAttestationError:
+            return TAMPERED
+        if att.get("payload") != payload:
+            return TAMPERED
+        if key.alg != att.get("alg") or key.key_id != att.get("key_id"):
+            return TAMPERED
+        signature = att.get("signature")
+        if not isinstance(signature, str):
+            return TAMPERED
+        signed_payload = CLAIM_ATTESTATION_V2_DOMAIN + _canonical_json(payload)
+        digest = None
+        if verified_cache is not None and is_cacheable_signature(signature):
+            digest = cache_digest(key, signature, signed_payload)
+            if verified_cache.hit(digest):
+                return VALID
+        if key.verify_bytes(signed_payload, signature):
+            if digest is not None:
+                verified_cache.add(digest)
+            return VALID
         return TAMPERED
 
     # 1. Recompute the fact's own hashes from current content and compare to the
