@@ -96,6 +96,35 @@ def test_v2_roundtrip_binds_complete_claim_payload(sign, tmp_path):
     assert sign.verify_fact(fact, public_key) == sign.VALID
 
 
+@pytest.mark.parametrize(
+    ("mode", "replacement"),
+    [
+        ("missing", None),
+        ("empty", ""),
+        ("null", None),
+        ("number", 7),
+        ("list", []),
+    ],
+)
+def test_malformed_v2_signature_is_tampered_not_unsigned(
+    sign, tmp_path, mode, replacement
+):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
+    if mode == "missing":
+        fact["attestation"].pop("signature")
+    else:
+        fact["attestation"]["signature"] = replacement
+
+    assert sign.verify_fact(fact, key) == sign.TAMPERED
+    report = sign.verify_facts([fact], key)
+    assert report["tampered"] == 1
+    assert report["unsigned"] == 0
+    assert report["statuses"] == [
+        {"id": fact["id"], "status": sign.TAMPERED}
+    ]
+
+
 def test_v2_payload_is_canonical_and_does_not_authorize_mutable_status(sign):
     fact = make_claim_fact()
     first = sign.claim_payload_v2(fact)
@@ -123,6 +152,14 @@ def test_contract_fixture_matches_exact_joined_bytes(sign):
 def test_contract_canonicalizer_rejects_nonportable_numbers(sign, value):
     with pytest.raises(sign.ClaimAttestationError):
         sign.canonical_contract_json({"confidence": value})
+
+
+@pytest.mark.parametrize("value", [-0.0, 1.0, 1e-7, float("nan"), float("inf")])
+def test_contract_canonicalizer_rejects_nested_nonportable_numbers(sign, value):
+    with pytest.raises(sign.ClaimAttestationError):
+        sign.canonical_contract_json(
+            {"outer": [{"authority": {"confidence": value}}]}
+        )
 
 
 @pytest.mark.parametrize(

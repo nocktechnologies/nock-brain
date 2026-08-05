@@ -38,7 +38,6 @@ import hashlib
 import hmac
 import json
 import math
-import os
 import re
 import secrets
 import uuid
@@ -801,9 +800,14 @@ def verify_fact(
     tampered fact is still caught with a warm cache; only VALID results are
     ever recorded."""
     facts_by_id = facts_by_id or {}
-    att = fact.get("attestation")
-    if not isinstance(att, dict) or not att.get("signature"):
+    if "attestation" not in fact:
         return UNSIGNED
+    att = fact.get("attestation")
+    if not isinstance(att, dict):
+        return TAMPERED
+    signature = att.get("signature")
+    if not isinstance(signature, str) or not signature:
+        return TAMPERED
     if key is None:
         # No key to verify against -> cannot affirm; treat as tampered/unverifiable.
         return TAMPERED
@@ -819,9 +823,6 @@ def verify_fact(
         if att.get("payload") != payload:
             return TAMPERED
         if key.alg != att.get("alg") or key.key_id != att.get("key_id"):
-            return TAMPERED
-        signature = att.get("signature")
-        if not isinstance(signature, str):
             return TAMPERED
         signed_payload = CLAIM_ATTESTATION_V2_DOMAIN + canonical_contract_json(
             payload
