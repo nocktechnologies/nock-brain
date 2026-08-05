@@ -286,6 +286,7 @@ def test_v2_signing_rejects_oversized_integer_confidence(sign, tmp_path):
 def test_v2_verification_rejects_oversized_integer_confidence(sign, tmp_path):
     key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
     fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
+    assert sign.verify_fact(fact, key) == sign.VALID
     fact["confidence"] = 10**400
 
     assert sign.verify_fact(fact, key) == sign.TAMPERED
@@ -357,6 +358,7 @@ def test_v2_authority_fields_cannot_use_a_legacy_attestation(sign, tmp_path):
         "evidence": [{"event_id": "event-1"}],
     }
     sign.sign_fact(fact, key)
+    assert sign.verify_fact(fact, key) == sign.VALID
     fact["verify_before_act"] = True
 
     assert sign.verify_fact(fact, key) == sign.TAMPERED
@@ -365,6 +367,7 @@ def test_v2_authority_fields_cannot_use_a_legacy_attestation(sign, tmp_path):
 def test_v2_envelope_without_schema_is_tampered(sign, tmp_path):
     key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
     fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
+    assert sign.verify_fact(fact, key) == sign.VALID
     del fact["attestation"]["schema"]
 
     assert sign.verify_fact(fact, key) == sign.TAMPERED
