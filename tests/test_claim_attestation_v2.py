@@ -144,7 +144,7 @@ def test_contract_fixture_matches_exact_joined_bytes(sign):
 
     assert sign.canonical_contract_json(fixture) == raw
     assert sign._sha256_hex(raw) == (
-        "cb4c0c9c26c34e2c74a1cf6e51c81a31c521f47e58211dbb78bd595de9794423"
+        "8a76447f2d7db0af886caf6f59881398ae9ca8d767593b8dddddd1fea68d2343"
     )
 
 
@@ -274,6 +274,23 @@ def test_v2_signing_rejects_invalid_authority_contract(
         sign.sign_claim_fact_v2(fact, key)
 
 
+def test_v2_signing_rejects_oversized_integer_confidence(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = make_claim_fact()
+    fact["confidence"] = 10**400
+
+    with pytest.raises(sign.ClaimAttestationError):
+        sign.sign_claim_fact_v2(fact, key)
+
+
+def test_v2_verification_rejects_oversized_integer_confidence(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
+    fact["confidence"] = 10**400
+
+    assert sign.verify_fact(fact, key) == sign.TAMPERED
+
+
 def test_v2_signature_is_domain_separated_from_v1(sign, tmp_path):
     key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
     fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
@@ -329,3 +346,25 @@ def test_legacy_v1_attestation_still_verifies(sign, tmp_path):
     sign.sign_fact(fact, key)
     assert "schema" not in fact["attestation"]
     assert sign.verify_fact(fact, key) == sign.VALID
+
+
+def test_v2_authority_fields_cannot_use_a_legacy_attestation(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = {
+        "id": "legacy-fact",
+        "kind": "decision",
+        "content": "Existing signed memory remains readable.",
+        "evidence": [{"event_id": "event-1"}],
+    }
+    sign.sign_fact(fact, key)
+    fact["verify_before_act"] = True
+
+    assert sign.verify_fact(fact, key) == sign.TAMPERED
+
+
+def test_v2_envelope_without_schema_is_tampered(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = sign.sign_claim_fact_v2(make_claim_fact(), key)
+    del fact["attestation"]["schema"]
+
+    assert sign.verify_fact(fact, key) == sign.TAMPERED

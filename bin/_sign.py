@@ -100,6 +100,18 @@ VERIFIER_RECEIPT_FIELDS = (
 )
 _SHA256_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CLAIM_SCOPES = frozenset({"private", "agent", "org", "public"})
+_CLAIM_V2_ONLY_AUTHORITY_FIELDS = frozenset(
+    {
+        "memory_id",
+        "revision_id",
+        "valid_from",
+        "valid_to",
+        "verify_before_act",
+        "promotion_batch_digest",
+        "parent_revision_ids",
+        "revokes_revision_ids",
+    }
+)
 
 
 class ClaimAttestationError(ValueError):
@@ -287,7 +299,7 @@ def claim_payload_v2(fact: dict[str, Any]) -> dict[str, Any]:
     if (
         isinstance(confidence, bool)
         or not isinstance(confidence, (int, float))
-        or not math.isfinite(confidence)
+        or (isinstance(confidence, float) and not math.isfinite(confidence))
         or not 0 <= confidence <= 1
     ):
         raise ClaimAttestationError("confidence must be a finite number from 0 to 1")
@@ -838,6 +850,26 @@ def verify_fact(
             return VALID
         return TAMPERED
 
+    if _CLAIM_V2_ONLY_AUTHORITY_FIELDS.intersection(fact):
+        return TAMPERED
+    legacy_text_fields = (
+        "fact_id",
+        "canonical_fact_hash",
+        "source_hash",
+        "alg",
+        "key_id",
+        "signature",
+        "signed_at",
+    )
+    if any(not isinstance(att.get(field), str) or not att[field] for field in legacy_text_fields):
+        return TAMPERED
+    parent_fact_ids = att.get("parent_fact_ids")
+    if not isinstance(parent_fact_ids, list) or any(
+        not isinstance(parent_id, str) or not parent_id
+        for parent_id in parent_fact_ids
+    ):
+        return TAMPERED
+
     # 1. Recompute the fact's own hashes from current content and compare to the
     #    committed values. This catches the F5 content-poisoning attack.
     current_fact_hash = canonical_fact_hash(fact)
@@ -850,7 +882,7 @@ def verify_fact(
     # 2. Recompute the signed payload using the committed hashes + CURRENT parent
     #    hashes, and verify the signature. If the signature itself fails the
     #    fact's own bytes were tampered (or wrong key) -> TAMPERED.
-    parent_ids = list(att.get("parent_fact_ids", []))
+    parent_ids = list(parent_fact_ids)
     parent_hashes_now = _parent_hashes(parent_ids, facts_by_id)
     payload_now = _signed_payload(
         att["canonical_fact_hash"], att["source_hash"], parent_hashes_now
