@@ -121,6 +121,26 @@ def test_budget_recall_without_agent_scope_is_unchanged(
     assert "pricing owned by agent b" in output
 
 
+def test_budget_recall_agent_scope_filters_insights_too(
+        budget_recall, tmp_path):
+    facts_store = tmp_path / "facts.json"
+    insights_store = tmp_path / "insights.json"
+    facts_store.write_text(json.dumps([
+        fact("pricing owned by agent a", source="agent-a"),
+    ]), encoding="utf-8")
+    insights_store.write_text(json.dumps([
+        fact("pricing synthesis owned by agent b", source="agent-b",
+             kind="insight"),
+    ]), encoding="utf-8")
+
+    output = budget_recall.budget_recall(
+        "pricing", facts_store, budget=1000, insights_file=insights_store,
+        agent_scope="agent-a")
+
+    assert "pricing owned by agent a" in output
+    assert "pricing synthesis owned by agent b" not in output
+
+
 def test_cli_agent_scope_can_come_from_environment(tmp_path):
     store = tmp_path / "facts.json"
     store.write_text(json.dumps([
