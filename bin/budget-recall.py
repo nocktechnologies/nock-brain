@@ -37,6 +37,7 @@ CHARS_PER_TOKEN = 4
 DEFAULT_BUDGET = 1000
 MAX_BUDGET = 1500
 MIN_CONFIDENCE = 0.7
+SHARED_SOURCE = "shared"
 
 QUERY_STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "been", "but", "by",
@@ -151,6 +152,20 @@ def bulk_date_factor(share: float, threshold: float, floor: float) -> float:
 
 def estimate_tokens(text: str) -> int:
     return len(text) // CHARS_PER_TOKEN
+
+
+def _agent_sources(agent_scope: "str | None") -> "set[str] | None":
+    """Return the sources visible to one agent, or None for legacy recall."""
+    if not agent_scope or not agent_scope.strip():
+        return None
+    return {agent_scope.strip(), SHARED_SOURCE}
+
+
+def _scope_facts(facts: list[dict], agent_scope: "str | None") -> list[dict]:
+    sources = _agent_sources(agent_scope)
+    if sources is None:
+        return facts
+    return [fact for fact in facts if fact_source(fact) in sources]
 
 
 def _normalize_token(token: str) -> str:
@@ -665,12 +680,13 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
                   include_superseded: bool = False, insights_file: Path | None = None,
                   now: datetime | None = None, graph_expand: bool = False,
                   max_per_date: "int | None" = None,
-                  strict_verify: bool = False, semantic: bool = False) -> str:
+                  strict_verify: bool = False, semantic: bool = False,
+                  agent_scope: "str | None" = None) -> str:
     selection = select_recall(
         query, facts_file, budget, include_superseded,
         insights_file=insights_file, now=now, graph_expand=graph_expand,
         max_per_date=max_per_date, strict_verify=strict_verify,
-        semantic=semantic,
+        semantic=semantic, agent_scope=agent_scope,
     )
     if selection is None:
         return ""
@@ -755,7 +771,8 @@ def select_recall(query: str, facts_file: "Path | None",
                   now: "datetime | None" = None, graph_expand: bool = False,
                   max_per_date: "int | None" = None,
                   strict_verify: bool = False,
-                  semantic: bool = False) -> "dict | None":
+                  semantic: bool = False,
+                  agent_scope: "str | None" = None) -> "dict | None":
     """Run the full selection pipeline and return the facts that would be
     injected, as dicts: {results, included, tokens_used, truncated,
     query_terms, reserved_ids}. budget_recall() renders this; the offline
@@ -770,8 +787,11 @@ def select_recall(query: str, facts_file: "Path | None",
               "found; attestation verification skipped", file=sys.stderr)
     reserved_ids: frozenset = frozenset()
     if facts_file:
-        all_facts = _load(facts_file, verify_key=verify_key,
-                          strict_verify=strict_verify)
+        all_facts = _scope_facts(
+            _load(facts_file, verify_key=verify_key,
+                  strict_verify=strict_verify),
+            agent_scope,
+        )
         fact_results = search(
             all_facts, query, include_superseded,
             now=ref_now, min_matched_terms=min_matches,
@@ -789,8 +809,11 @@ def select_recall(query: str, facts_file: "Path | None",
         fact_results = []
     insight_results = (
         search(
-            _load(insights_file, verify_key=verify_key,
-                  strict_verify=strict_verify),
+            _scope_facts(
+                _load(insights_file, verify_key=verify_key,
+                      strict_verify=strict_verify),
+                agent_scope,
+            ),
             query, include_superseded,
             now=ref_now, min_matched_terms=min_matches,
         )
@@ -902,6 +925,10 @@ def main():
                              "verifies as valid (default also excludes tampered "
                              "facts but still allows unsigned ones; also via "
                              "NOCKBRAIN_STRICT_VERIFY=1)")
+    parser.add_argument("--agent-scope", default=None,
+                        help="Recall this agent's private facts plus shared "
+                             "facts (also via NOCKBRAIN_AGENT_SCOPE); omitted "
+                             "keeps unscoped legacy behavior")
     args = parser.parse_args()
 
     budget = min(args.budget, MAX_BUDGET)
@@ -909,10 +936,12 @@ def main():
     graph_expand = args.graph or _env_truthy("NOCKBRAIN_GRAPH_RECALL")
     strict_verify = args.strict_verify or _env_truthy("NOCKBRAIN_STRICT_VERIFY")
     semantic = args.semantic or _env_truthy("NOCKBRAIN_SEMANTIC")
+    agent_scope = args.agent_scope or os.environ.get("NOCKBRAIN_AGENT_SCOPE")
     result = budget_recall(query_str, args.facts, budget, args.include_superseded,
                            insights_file=args.insights, graph_expand=graph_expand,
                            max_per_date=args.max_per_date,
-                           strict_verify=strict_verify, semantic=semantic)
+                           strict_verify=strict_verify, semantic=semantic,
+                           agent_scope=agent_scope)
 
     if result:
         print(result)

@@ -6,6 +6,9 @@ every existing caller is unaffected. Backfill is idempotent.
 """
 import importlib.util
 import json
+import os
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -83,6 +86,83 @@ def test_search_scope_treats_missing_source_as_default(budget_recall):
     facts = [fact("pricing legacy fact")]  # no source
     assert len(budget_recall.search(facts, "pricing", sources={"mira"})) == 1
     assert len(budget_recall.search(facts, "pricing", sources={"mar"})) == 0
+
+
+def test_budget_recall_agent_scope_includes_own_and_shared_only(
+        budget_recall, tmp_path):
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([
+        fact("pricing owned by agent a", source="agent-a"),
+        fact("pricing shared across agents", source="shared"),
+        fact("pricing owned by agent b", source="agent-b"),
+    ]), encoding="utf-8")
+
+    output = budget_recall.budget_recall(
+        "pricing", store, budget=1000, agent_scope="agent-a")
+
+    assert "pricing owned by agent a" in output
+    assert "pricing shared across agents" in output
+    assert "pricing owned by agent b" not in output
+
+
+def test_budget_recall_without_agent_scope_is_unchanged(
+        budget_recall, tmp_path):
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([
+        fact("pricing owned by agent a", source="agent-a"),
+        fact("pricing shared across agents", source="shared"),
+        fact("pricing owned by agent b", source="agent-b"),
+    ]), encoding="utf-8")
+
+    output = budget_recall.budget_recall("pricing", store, budget=1000)
+
+    assert "pricing owned by agent a" in output
+    assert "pricing shared across agents" in output
+    assert "pricing owned by agent b" in output
+
+
+def test_budget_recall_agent_scope_filters_insights_too(
+        budget_recall, tmp_path):
+    facts_store = tmp_path / "facts.json"
+    insights_store = tmp_path / "insights.json"
+    facts_store.write_text(json.dumps([
+        fact("pricing owned by agent a", source="agent-a"),
+    ]), encoding="utf-8")
+    insights_store.write_text(json.dumps([
+        fact("pricing synthesis owned by agent b", source="agent-b",
+             kind="insight"),
+    ]), encoding="utf-8")
+
+    output = budget_recall.budget_recall(
+        "pricing", facts_store, budget=1000, insights_file=insights_store,
+        agent_scope="agent-a")
+
+    assert "pricing owned by agent a" in output
+    assert "pricing synthesis owned by agent b" not in output
+
+
+def test_cli_agent_scope_can_come_from_environment(tmp_path):
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([
+        fact("pricing owned by agent a", source="agent-a"),
+        fact("pricing shared across agents", source="shared"),
+        fact("pricing owned by agent b", source="agent-b"),
+    ]), encoding="utf-8")
+    env = os.environ.copy()
+    for name in ("NOCKBRAIN_STRICT_VERIFY", "NOCKBRAIN_GRAPH_RECALL", "NOCKBRAIN_SEMANTIC", "NOCKBRAIN_MAX_PER_DATE", "NOCKBRAIN_STORE"):
+        env.pop(name, None)
+    env["NOCKBRAIN_AGENT_SCOPE"] = "agent-a"
+
+    result = subprocess.run(
+        [sys.executable, str(REPO / "bin" / "budget-recall.py"),
+         "--facts", str(store), "--insights", str(tmp_path / "missing.json"),
+         "pricing"],
+        check=True, capture_output=True, text=True, env=env,
+    )
+
+    assert "pricing owned by agent a" in result.stdout
+    assert "pricing shared across agents" in result.stdout
+    assert "pricing owned by agent b" not in result.stdout
 
 
 # ---- backfill ------------------------------------------------------------
