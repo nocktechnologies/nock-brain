@@ -25,6 +25,11 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
+from _revoke import (  # noqa: E402
+    REVOCATIONS_FILENAME,
+    audit as revocation_audit,
+    load_revocations,
+)
 from _sign import (  # noqa: E402
     DEFAULT_PUB_PATH,
     PARENT_SUSPECT,
@@ -47,6 +52,14 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="emit JSON report")
     parser.add_argument("--strict", action="store_true",
                         help="also exit non-zero if any fact is unsigned")
+    parser.add_argument("--revocations", type=Path, default=None,
+                        help="revocations.jsonl (default: next to --facts)")
+    parser.add_argument("--retired-pub", action="append", type=Path, default=[],
+                        help="retired public key(s) so pre-rotation revocation "
+                             "events still verify (repeatable)")
+    parser.add_argument("--strict-revocations", action="store_true",
+                        help="also exit non-zero when a superseded fact has "
+                             "no signed revocation event (legacy marks)")
     args = parser.parse_args(argv)
 
     if not args.facts.exists():
@@ -75,6 +88,34 @@ def run(argv: list[str] | None = None) -> int:
 
     report = verify_facts(data, key)
 
+    # S1: cross-check supersession marks against signed revocation events.
+    # Resurrection — a live fact a valid event says is dead — is tampered-class
+    # and fails the run unconditionally; unattested legacy marks warn unless
+    # --strict-revocations.
+    revocations_path = args.revocations or args.facts.parent / REVOCATIONS_FILENAME
+    revocation_report = None
+    if key is not None:
+        retired_keys = []
+        for retired_path in args.retired_pub:
+            try:
+                retired_keys.append(load_public_key(retired_path))
+            except Exception as exc:  # noqa: BLE001 - report, don't crash
+                print(f"could not load retired key {retired_path}: {exc}",
+                      file=sys.stderr)
+        revocation_report = revocation_audit(
+            data, load_revocations(revocations_path), key,
+            retired_keys=tuple(retired_keys),
+        )
+        revocation_report["path"] = str(revocations_path)
+        report["revocations"] = revocation_report
+    elif args.strict_revocations:
+        # A strict run that cannot load the key must fail loudly — silently
+        # returning 0 would let a nightly job believe it is enforcing
+        # revocations while checking nothing.
+        print("--strict-revocations requested but no verifying key loaded; "
+              "revocation enforcement CANNOT run", file=sys.stderr)
+        return 5
+
     if args.json:
         print(json.dumps(report, indent=2))
     else:
@@ -94,11 +135,29 @@ def run(argv: list[str] | None = None) -> int:
             for s in report["statuses"]:
                 if s["status"] == PARENT_SUSPECT:
                     print(f"  {s['id']}", file=sys.stderr)
+        if revocation_report is not None:
+            print(f"  revocations: {revocation_report['attested']} attested, "
+                  f"{revocation_report['invalid_events']} invalid, "
+                  f"{revocation_report['foreign_key_events']} foreign-key, "
+                  f"{len(revocation_report['resurrected'])} RESURRECTED, "
+                  f"{len(revocation_report['unattested_superseded'])} unattested")
+            if revocation_report["resurrected"]:
+                print("\nRESURRECTED fact ids (live despite a valid signed "
+                      "revocation):", file=sys.stderr)
+                for fid in revocation_report["resurrected"]:
+                    print(f"  {fid}", file=sys.stderr)
 
     if report["tampered"]:
         return 2
+    if revocation_report is not None and (
+        revocation_report["resurrected"] or revocation_report["invalid_events"]
+    ):
+        return 4
     if args.strict and report["unsigned"]:
         return 3
+    if args.strict_revocations and revocation_report is not None \
+            and revocation_report["unattested_superseded"]:
+        return 5
     return 0
 
 
