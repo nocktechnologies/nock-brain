@@ -149,6 +149,8 @@ def test_cli_agent_scope_can_come_from_environment(tmp_path):
         fact("pricing owned by agent b", source="agent-b"),
     ]), encoding="utf-8")
     env = os.environ.copy()
+    for name in ("NOCKBRAIN_STRICT_VERIFY", "NOCKBRAIN_GRAPH_RECALL", "NOCKBRAIN_SEMANTIC", "NOCKBRAIN_MAX_PER_DATE", "NOCKBRAIN_STORE"):
+        env.pop(name, None)
     env["NOCKBRAIN_AGENT_SCOPE"] = "agent-a"
 
     result = subprocess.run(
