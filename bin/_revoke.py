@@ -124,11 +124,23 @@ def audit(
       other than superseded — the silent-resurrection attack. Hard failure.
     - ``unattested_superseded``: superseded facts with no valid event —
       legacy marks from before S1; reported, not fatal by default.
-    - ``invalid_events``: events whose signature does not verify (tampered
-      or wrong key)."""
+    - ``invalid_events``: events that fail verification UNDER the verifying
+      key's own key_id — tampering, the hard-failure class.
+    - ``foreign_key_events``: events attributed to a DIFFERENT key_id (a
+      prior signing key, after rotation). Reported, never tampering: an
+      append-only log must not fail permanently because the key rotated.
+      Their facts count as unattested until backfilled under the new key."""
     valid_ids: "set[str]" = set()
     invalid = 0
+    foreign = 0
     for event in events:
+        if not isinstance(event, dict) or not isinstance(event.get("signature"), str) \
+                or not event.get("signature") or not event.get("key_id"):
+            invalid += 1  # unattributable garbage is never "foreign"
+            continue
+        if event.get("key_id") != key.key_id or event.get("alg") != key.alg:
+            foreign += 1
+            continue
         if verify_revocation(event, key):
             valid_ids.add(str(event.get("superseded_id", "")))
         else:
@@ -145,10 +157,14 @@ def audit(
         if fact.get("status") == "superseded" and fid not in valid_ids
     )
     return {
-        "attested": sum(
-            1 for event in events if verify_revocation(event, key)
-        ),
+        "attested": len([
+            event for event in events
+            if isinstance(event, dict)
+            and event.get("key_id") == key.key_id
+            and verify_revocation(event, key)
+        ]),
         "invalid_events": invalid,
+        "foreign_key_events": foreign,
         "resurrected": resurrected,
         "unattested_superseded": unattested,
     }

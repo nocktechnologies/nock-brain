@@ -263,3 +263,82 @@ def test_verify_cli_strict_revocations_flags_legacy_marks(revoke_lib, sign_lib, 
                      "--strict-revocations"])
     assert default == 0   # legacy marks warn, don't fail
     assert strict == 5
+
+
+# ── gate findings (Mira #47932 + CodeRabbit, converged) ──────────────────────
+def test_strict_revocations_without_key_fails_loudly(tmp_path, capsys):
+    """Thread 1: --strict-revocations with no loadable key must NOT silently
+    pass — a nightly job would believe it is enforcing revocations while
+    checking nothing."""
+    import importlib.util
+    from pathlib import Path as P
+    spec = importlib.util.spec_from_file_location(
+        "verify_facts_cli3", P(__file__).resolve().parent.parent / "bin" / "verify-facts.py")
+    vf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vf)
+
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("a")]))
+
+    code = vf.run(["--facts", str(store), "--pub", str(tmp_path / "missing.pub"),
+                   "--strict-revocations"])
+    assert code != 0
+    assert "revocation" in capsys.readouterr().err.lower()
+
+
+def test_rotated_key_events_are_foreign_not_tampering(revoke_lib, sign_lib, tmp_path):
+    """Thread 2: after key rotation, old-key events must classify as FOREIGN
+    (reported, not exit-4) — only failures under the MATCHING key_id are
+    tampering. Otherwise rotation breaks the append-only log permanently."""
+    old_key = sign_lib.load_or_create_key(
+        tmp_path / "old-key", tmp_path / "old-key.pub", alg=sign_lib.ALG_HMAC)
+    new_key = sign_lib.load_or_create_key(
+        tmp_path / "new-key", tmp_path / "new-key.pub", alg=sign_lib.ALG_HMAC)
+    old_event = revoke_lib.sign_revocation(
+        old_key, superseded_id="x", superseding_id="", reason="",
+        superseded_at=SUP_AT)
+
+    report = revoke_lib.audit([], [old_event], new_key)
+    assert report["foreign_key_events"] == 1
+    assert report["invalid_events"] == 0
+
+    # Tampering under the MATCHING key stays invalid.
+    fresh = revoke_lib.sign_revocation(
+        new_key, superseded_id="y", superseding_id="", reason="",
+        superseded_at=SUP_AT)
+    report = revoke_lib.audit([], [dict(fresh, reason="edited")], new_key)
+    assert report["invalid_events"] == 1
+    assert report["foreign_key_events"] == 0
+
+    # Garbage without an attributable key_id is invalid, never foreign.
+    report = revoke_lib.audit([], [{"schema": "x", "signature": "zz"}], new_key)
+    assert report["invalid_events"] == 1
+    assert report["foreign_key_events"] == 0
+
+
+def test_rotation_does_not_hard_fail_verify_cli(revoke_lib, sign_lib, tmp_path):
+    """End-to-end: a store whose sidecar holds only old-key events verifies
+    exit 0 by default after rotation (foreign + unattested are warnings)."""
+    import importlib.util
+    from pathlib import Path as P
+    spec = importlib.util.spec_from_file_location(
+        "verify_facts_cli4", P(__file__).resolve().parent.parent / "bin" / "verify-facts.py")
+    vf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vf)
+
+    old_key = sign_lib.load_or_create_key(
+        tmp_path / "old-key", tmp_path / "old-key.pub", alg=sign_lib.ALG_HMAC)
+    new_key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    facts = [_fact("old", status="superseded", superseded_by="new"), _fact("new")]
+    sign_lib.sign_facts(facts, new_key)
+    (tmp_path / "facts.json").write_text(json.dumps(facts))
+    revoke_lib.append_revocation(
+        tmp_path / "revocations.jsonl",
+        revoke_lib.sign_revocation(old_key, superseded_id="old",
+                                   superseding_id="new", reason="r",
+                                   superseded_at=SUP_AT))
+
+    code = vf.run(["--facts", str(tmp_path / "facts.json"),
+                   "--pub", str(tmp_path / "signing-key.pub")])
+    assert code == 0  # rotation is a warning state, never a permanent hard fail

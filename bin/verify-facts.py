@@ -97,6 +97,13 @@ def run(argv: list[str] | None = None) -> int:
         )
         revocation_report["path"] = str(revocations_path)
         report["revocations"] = revocation_report
+    elif args.strict_revocations:
+        # A strict run that cannot load the key must fail loudly — silently
+        # returning 0 would let a nightly job believe it is enforcing
+        # revocations while checking nothing.
+        print("--strict-revocations requested but no verifying key loaded; "
+              "revocation enforcement CANNOT run", file=sys.stderr)
+        return 5
 
     if args.json:
         print(json.dumps(report, indent=2))
@@ -120,6 +127,7 @@ def run(argv: list[str] | None = None) -> int:
         if revocation_report is not None:
             print(f"  revocations: {revocation_report['attested']} attested, "
                   f"{revocation_report['invalid_events']} invalid, "
+                  f"{revocation_report['foreign_key_events']} foreign-key, "
                   f"{len(revocation_report['resurrected'])} RESURRECTED, "
                   f"{len(revocation_report['unattested_superseded'])} unattested")
             if revocation_report["resurrected"]:
