@@ -39,6 +39,7 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from _facts import content_tokens, fact_currently_valid, jaccard
+from _revoke import record_supersessions
 from _store import secure_mkdir, secure_write_json, secure_write_text
 from _storeback import resolve_store
 
@@ -250,7 +251,12 @@ def main() -> None:
     if args.apply:
         marked = apply_clusters(clusters)
         store.replace_all(facts)
-        print(f"Marked {marked} duplicate fact(s) superseded across {len(clusters)} cluster(s).")
+        duplicates = [d for c in clusters for d in c["duplicates"]]
+        written, warning = record_supersessions(store.freshness_path, duplicates)
+        if warning:
+            print(f"dedup-facts: {warning}", file=sys.stderr)
+        print(f"Marked {marked} duplicate fact(s) superseded across {len(clusters)} "
+              f"cluster(s) ({written} signed revocation event(s)).")
         for c in clusters:
             print(f"  keep {c['canonical'].get('id', '')} [{c['kind']}] "
                   f"← supersedes {len(c['duplicates'])} duplicate(s)")
