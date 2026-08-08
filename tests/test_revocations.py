@@ -282,7 +282,7 @@ def test_strict_revocations_without_key_fails_loudly(tmp_path, capsys):
 
     code = vf.run(["--facts", str(store), "--pub", str(tmp_path / "missing.pub"),
                    "--strict-revocations"])
-    assert code != 0
+    assert code == 5  # exact code, not just non-zero (CodeRabbit :286)
     assert "revocation" in capsys.readouterr().err.lower()
 
 
