@@ -54,6 +54,9 @@ def run(argv: list[str] | None = None) -> int:
                         help="also exit non-zero if any fact is unsigned")
     parser.add_argument("--revocations", type=Path, default=None,
                         help="revocations.jsonl (default: next to --facts)")
+    parser.add_argument("--retired-pub", action="append", type=Path, default=[],
+                        help="retired public key(s) so pre-rotation revocation "
+                             "events still verify (repeatable)")
     parser.add_argument("--strict-revocations", action="store_true",
                         help="also exit non-zero when a superseded fact has "
                              "no signed revocation event (legacy marks)")
@@ -92,8 +95,16 @@ def run(argv: list[str] | None = None) -> int:
     revocations_path = args.revocations or args.facts.parent / REVOCATIONS_FILENAME
     revocation_report = None
     if key is not None:
+        retired_keys = []
+        for retired_path in args.retired_pub:
+            try:
+                retired_keys.append(load_public_key(retired_path))
+            except Exception as exc:  # noqa: BLE001 - report, don't crash
+                print(f"could not load retired key {retired_path}: {exc}",
+                      file=sys.stderr)
         revocation_report = revocation_audit(
-            data, load_revocations(revocations_path), key
+            data, load_revocations(revocations_path), key,
+            retired_keys=tuple(retired_keys),
         )
         revocation_report["path"] = str(revocations_path)
         report["revocations"] = revocation_report

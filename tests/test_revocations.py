@@ -286,10 +286,30 @@ def test_strict_revocations_without_key_fails_loudly(tmp_path, capsys):
     assert "revocation" in capsys.readouterr().err.lower()
 
 
-def test_rotated_key_events_are_foreign_not_tampering(revoke_lib, sign_lib, tmp_path):
-    """Thread 2: after key rotation, old-key events must classify as FOREIGN
-    (reported, not exit-4) — only failures under the MATCHING key_id are
-    tampering. Otherwise rotation breaks the append-only log permanently."""
+def test_signed_keyid_blocks_relabel_evasion(revoke_lib, sign_lib, tmp_path):
+    """The evasion Mira + CodeRabbit found: key_id/alg were classification
+    inputs but NOT signed, so a valid event could be relabeled 'foreign' to
+    dodge resurrection detection. Now they are signed — any relabel breaks the
+    signature, verifies under NO key -> invalid (exit-4 class), never foreign."""
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    event = revoke_lib.sign_revocation(key, superseded_id="x", superseding_id="",
+                                       reason="", superseded_at=SUP_AT)
+    assert revoke_lib.verify_revocation(event, key) is True
+    for field, value in (("key_id", "hmac-sha256:deadbeefdeadbeef"),
+                         ("alg", "ed25519")):
+        forged = dict(event, **{field: value})
+        assert revoke_lib.verify_revocation(forged, key) is False, field
+        report = revoke_lib.audit([], [forged], key)
+        assert report["invalid_events"] == 1, field
+        assert report["foreign_key_events"] == 0, field
+
+
+def test_rotation_benign_only_with_retired_key_in_ring(revoke_lib, sign_lib, tmp_path):
+    """Rotation is benign ONLY when the retired public key is supplied: then
+    the old event verifies (foreign, counted, still trusted for resurrection).
+    Without it the event verifies under no key -> invalid, which is correct —
+    an unverifiable event is never trusted-benign by its label alone."""
     old_key = sign_lib.load_or_create_key(
         tmp_path / "old-key", tmp_path / "old-key.pub", alg=sign_lib.ALG_HMAC)
     new_key = sign_lib.load_or_create_key(
@@ -298,27 +318,52 @@ def test_rotated_key_events_are_foreign_not_tampering(revoke_lib, sign_lib, tmp_
         old_key, superseded_id="x", superseding_id="", reason="",
         superseded_at=SUP_AT)
 
-    report = revoke_lib.audit([], [old_event], new_key)
-    assert report["foreign_key_events"] == 1
-    assert report["invalid_events"] == 0
+    without_ring = revoke_lib.audit([], [old_event], new_key)
+    assert without_ring["invalid_events"] == 1
+    assert without_ring["foreign_key_events"] == 0
 
-    # Tampering under the MATCHING key stays invalid.
-    fresh = revoke_lib.sign_revocation(
-        new_key, superseded_id="y", superseding_id="", reason="",
+    with_ring = revoke_lib.audit([], [old_event], new_key, retired_keys=[old_key])
+    assert with_ring["foreign_key_events"] == 1
+    assert with_ring["invalid_events"] == 0
+
+
+def test_retired_key_revocation_still_catches_resurrection(revoke_lib, sign_lib, tmp_path):
+    """A genuine old-key revocation is still a real revocation: if its fact is
+    flipped live, that is resurrection even though it was signed pre-rotation."""
+    old_key = sign_lib.load_or_create_key(
+        tmp_path / "old-key", tmp_path / "old-key.pub", alg=sign_lib.ALG_HMAC)
+    new_key = sign_lib.load_or_create_key(
+        tmp_path / "new-key", tmp_path / "new-key.pub", alg=sign_lib.ALG_HMAC)
+    old_event = revoke_lib.sign_revocation(
+        old_key, superseded_id="x", superseding_id="", reason="",
         superseded_at=SUP_AT)
-    report = revoke_lib.audit([], [dict(fresh, reason="edited")], new_key)
+    facts = [_fact("x", status="current")]
+    report = revoke_lib.audit(facts, [old_event], new_key, retired_keys=[old_key])
+    assert report["resurrected"] == ["x"]
+
+
+def test_tampered_current_key_event_is_tampering(revoke_lib, sign_lib, tmp_path):
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    event = revoke_lib.sign_revocation(key, superseded_id="y", superseding_id="",
+                                       reason="", superseded_at=SUP_AT)
+    report = revoke_lib.audit([], [dict(event, reason="edited")], key)
     assert report["invalid_events"] == 1
     assert report["foreign_key_events"] == 0
 
-    # Garbage without an attributable key_id is invalid, never foreign.
-    report = revoke_lib.audit([], [{"schema": "x", "signature": "zz"}], new_key)
+
+def test_unattributable_garbage_is_invalid_never_foreign(revoke_lib, sign_lib, tmp_path):
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    report = revoke_lib.audit([], [{"schema": "x", "signature": "zz"}], key)
     assert report["invalid_events"] == 1
     assert report["foreign_key_events"] == 0
 
 
-def test_rotation_does_not_hard_fail_verify_cli(revoke_lib, sign_lib, tmp_path):
-    """End-to-end: a store whose sidecar holds only old-key events verifies
-    exit 0 by default after rotation (foreign + unattested are warnings)."""
+def test_rotation_verify_cli_needs_retired_pub(revoke_lib, sign_lib, tmp_path):
+    """End-to-end: an old-key sidecar exits 0 ONLY when --retired-pub is
+    supplied; without it the unverifiable event is invalid -> exit 4 (assert
+    the exact code, per CodeRabbit :286/:344)."""
     import importlib.util
     from pathlib import Path as P
     spec = importlib.util.spec_from_file_location(
@@ -339,6 +384,7 @@ def test_rotation_does_not_hard_fail_verify_cli(revoke_lib, sign_lib, tmp_path):
                                    superseding_id="new", reason="r",
                                    superseded_at=SUP_AT))
 
-    code = vf.run(["--facts", str(tmp_path / "facts.json"),
-                   "--pub", str(tmp_path / "signing-key.pub")])
-    assert code == 0  # rotation is a warning state, never a permanent hard fail
+    args = ["--facts", str(tmp_path / "facts.json"),
+            "--pub", str(tmp_path / "signing-key.pub")]
+    assert vf.run(args) == 4  # unverifiable old event = invalid, hard fail
+    assert vf.run(args + ["--retired-pub", str(tmp_path / "old-key.pub")]) == 0

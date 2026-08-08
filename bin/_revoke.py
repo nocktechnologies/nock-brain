@@ -45,7 +45,13 @@ from _store import FILE_MODE  # noqa: E402
 SCHEMA = "nockbrain-revocation/v1"
 REVOCATIONS_FILENAME = "revocations.jsonl"
 _DOMAIN = b"nockbrain-revocation-v1\n"
-_PAYLOAD_FIELDS = ("superseded_id", "superseding_id", "reason", "superseded_at")
+# key_id and alg ARE signed: the audit classifies events by them (active vs
+# retired key), so leaving them unsigned let an attacker relabel a valid
+# event "foreign" to dodge resurrection detection (the F5 threat this
+# defends). Signing them makes any relabel break the signature.
+_PAYLOAD_FIELDS = (
+    "superseded_id", "superseding_id", "reason", "superseded_at", "key_id", "alg",
+)
 
 
 def _canonical_payload(event: "dict[str, Any]") -> bytes:
@@ -71,6 +77,7 @@ def sign_revocation(
         "reason": str(reason),
         "superseded_at": superseded_at or datetime.now(timezone.utc).isoformat(),
     }
+    # Set before signing so both are covered by the signature (see _PAYLOAD_FIELDS).
     event["alg"] = key.alg
     event["key_id"] = key.key_id
     event["signature"] = key.sign_bytes(_canonical_payload(event))
@@ -117,52 +124,54 @@ def audit(
     facts: "list[dict[str, Any]]",
     events: "list[dict[str, Any]]",
     key: SigningKey,
+    *,
+    retired_keys: "tuple[SigningKey, ...]" = (),
 ) -> "dict[str, Any]":
-    """Cross-check facts against revocation events.
+    """Cross-check facts against revocation events, verifying each event
+    against a KEYRING (the active key plus any supplied retired keys).
 
-    - ``resurrected``: a fact a VALID event revokes, present with a status
-      other than superseded — the silent-resurrection attack. Hard failure.
-    - ``unattested_superseded``: superseded facts with no valid event —
-      legacy marks from before S1; reported, not fatal by default.
-    - ``invalid_events``: events that fail verification UNDER the verifying
-      key's own key_id — tampering, the hard-failure class.
-    - ``foreign_key_events``: events attributed to a DIFFERENT key_id (a
-      prior signing key, after rotation). Reported, never tampering: an
-      append-only log must not fail permanently because the key rotated.
-      Their facts count as unattested until backfilled under the new key."""
-    valid_ids: "set[str]" = set()
-    invalid = 0
+    An event is trusted iff it verifies under some key in the ring — because
+    key_id and alg are now signed, a relabeled event verifies under none.
+    Classification:
+
+    - ``attested``: verifies under the ACTIVE key.
+    - ``foreign_key_events``: verifies under a RETIRED key (a genuine
+      pre-rotation revocation) — benign, still trusted for resurrection.
+    - ``invalid_events``: verifies under NO ring key — tampering, a
+      relabel-evasion attempt, or an old event whose key was not supplied.
+      Hard-failure class; an unverifiable event is never trusted-benign.
+    - ``resurrected``: a fact a TRUSTED event revokes but which is present
+      with a non-superseded status — the silent-resurrection attack.
+    - ``unattested_superseded``: superseded facts with no trusted event
+      (legacy pre-S1 marks); reported, not fatal by default."""
+    active_ids: "set[str]" = set()
+    trusted_ids: "set[str]" = set()
+    attested = 0
     foreign = 0
+    invalid = 0
     for event in events:
-        if not isinstance(event, dict) or not isinstance(event.get("signature"), str) \
-                or not event.get("signature") or not event.get("key_id"):
-            invalid += 1  # unattributable garbage is never "foreign"
-            continue
-        if event.get("key_id") != key.key_id or event.get("alg") != key.alg:
-            foreign += 1
-            continue
         if verify_revocation(event, key):
-            valid_ids.add(str(event.get("superseded_id", "")))
+            attested += 1
+            active_ids.add(str(event.get("superseded_id", "")))
+            trusted_ids.add(str(event.get("superseded_id", "")))
+        elif any(verify_revocation(event, retired) for retired in retired_keys):
+            foreign += 1
+            trusted_ids.add(str(event.get("superseded_id", "")))
         else:
             invalid += 1
     facts_by_id = {
         str(f.get("id", "")): f for f in facts if isinstance(f, dict)
     }
     resurrected = sorted(
-        fid for fid in valid_ids
+        fid for fid in trusted_ids
         if fid in facts_by_id and facts_by_id[fid].get("status") != "superseded"
     )
     unattested = sorted(
         fid for fid, fact in facts_by_id.items()
-        if fact.get("status") == "superseded" and fid not in valid_ids
+        if fact.get("status") == "superseded" and fid not in trusted_ids
     )
     return {
-        "attested": len([
-            event for event in events
-            if isinstance(event, dict)
-            and event.get("key_id") == key.key_id
-            and verify_revocation(event, key)
-        ]),
+        "attested": attested,
         "invalid_events": invalid,
         "foreign_key_events": foreign,
         "resurrected": resurrected,
