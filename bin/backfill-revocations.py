@@ -91,9 +91,13 @@ def main() -> None:
     after = audit(facts, load_revocations(sidecar), key)
     print(f"Minted {minted} signed revocation event(s) -> {sidecar}")
     print(f"After: {after['attested']} attested, "
+          f"{after['invalid_events']} invalid, "
           f"{len(after['unattested_superseded'])} unattested, "
           f"{len(after['resurrected'])} resurrected.")
-    if after["resurrected"] or after["unattested_superseded"]:
+    # invalid_events is the S1 tampering/exit-4 class: a corrupt or tampered
+    # sidecar must fail the backfill loudly, not slip through as success.
+    if (after["resurrected"] or after["unattested_superseded"]
+            or after["invalid_events"]):
         print("WARNING: post-backfill audit is not clean — investigate before "
               "trusting strict verification.", file=sys.stderr)
         sys.exit(1)

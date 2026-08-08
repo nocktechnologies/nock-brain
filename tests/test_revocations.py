@@ -460,3 +460,28 @@ def test_backfill_is_idempotent(revoke_lib, sign_lib, tmp_path, monkeypatch, cap
     events = revoke_lib.load_revocations(tmp_path / "revocations.jsonl")
     assert len(events) == 1
     assert "Nothing to backfill" in capsys.readouterr().out
+
+
+def test_backfill_fails_on_preexisting_invalid_event(revoke_lib, sign_lib, tmp_path, monkeypatch):
+    """CodeRabbit :99 — a tampered/invalid sidecar event (S1 exit-4 class)
+    must fail the backfill, not slip through as success."""
+    bf = _load_backfill()
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("old", status="superseded", superseded_by="new"),
+                                 _fact("new")]))
+    # Seed a tampered event so the post-backfill audit sees invalid_events > 0.
+    good = revoke_lib.sign_revocation(key, superseded_id="z", superseding_id="",
+                                      reason="", superseded_at=SUP_AT)
+    revoke_lib.append_revocation(tmp_path / "revocations.jsonl",
+                                 dict(good, reason="tampered"))
+
+    import sys as _sys
+    monkeypatch.setattr(_sys, "argv",
+                        ["backfill-revocations.py", "--facts", str(store), "--apply"])
+    with pytest.raises(SystemExit) as exc:
+        bf.main()
+    assert exc.value.code == 1
