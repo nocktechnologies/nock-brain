@@ -20,6 +20,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
+from _revoke import record_supersessions
 from _storeback import resolve_store
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
@@ -81,7 +82,11 @@ def main():
                 if args.reason:
                     f["supersession_reason"] = args.reason
             store.replace_all(facts)
-            print(f"Marked {len(results)} facts as superseded.")
+            written, warning = record_supersessions(store.freshness_path, results)
+            if warning:
+                print(f"supersede-fact: {warning}", file=sys.stderr)
+            print(f"Marked {len(results)} facts as superseded "
+                  f"({written} signed revocation event(s)).")
         return
 
     if not args.fact_id:
@@ -108,7 +113,11 @@ def main():
         fact["supersession_reason"] = args.reason
 
     store.replace_all(facts)
-    print(f"Fact {args.fact_id} marked as superseded.")
+    written, warning = record_supersessions(store.freshness_path, [fact])
+    if warning:
+        print(f"supersede-fact: {warning}", file=sys.stderr)
+    print(f"Fact {args.fact_id} marked as superseded "
+          f"({written} signed revocation event(s)).")
     print(f"  Was: [{fact.get('kind', 'fact')}] {str(fact.get('content', ''))[:120]}")
 
 

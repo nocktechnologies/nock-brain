@@ -133,6 +133,11 @@ def detect_contradictions():
 
 
 @pytest.fixture(scope="session")
+def revoke_lib():
+    return _load("_revoke")
+
+
+@pytest.fixture(scope="session")
 def storeback():
     return _load("_storeback")
 

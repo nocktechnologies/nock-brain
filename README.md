@@ -96,8 +96,8 @@ python3 bin/budget-recall.py --budget 800 "what was decided about pricing"
 # Test the classifier
 python3 bin/recall-classifier.py --test
 
-# Mark outdated facts as superseded
-python3 bin/supersede-fact.py <fact_id> --reason "direction changed"
+# Mark outdated facts as superseded (appends a SIGNED revocation event)
+python3 bin/supersede-fact.py <fact_id> --by <new_id> --reason "direction changed"
 python3 bin/supersede-fact.py --search "old pricing" --mark-superseded
 
 # Collapse near-duplicate extractions of one event (propose, review, apply)
