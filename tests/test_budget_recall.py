@@ -519,3 +519,61 @@ def test_bulk_date_penalty_does_not_crush_results(budget_recall):
     assert len(ranked) == 50  # all still rankable, just uniformly down-weighted
     for f in ranked:
         assert f["source_date"] == "2026-05-19"
+
+
+# ── S7: source-trust down-weight ─────────────────────────────────────────────
+def _f(fid, content="railway deploy pipeline staging", **extra):
+    d = {"id": fid, "kind": "decision", "status": "current", "confidence": 0.9,
+         "content": content, "source_date": "2026-08-01", "evidence": []}
+    d.update(extra)
+    return d
+
+
+def test_trust_factor_default_trusted(budget_recall):
+    assert budget_recall.trust_factor(_f("a")) == 1.0
+    assert budget_recall.trust_factor(_f("a", trust="trusted")) == 1.0
+
+
+def test_untrusted_by_trust_or_provenance(budget_recall):
+    assert budget_recall.is_untrusted(_f("a", trust="untrusted")) is True
+    assert budget_recall.is_untrusted(_f("a", trust="external")) is True
+    assert budget_recall.is_untrusted(_f("a", provenance="external_write")) is True
+    assert budget_recall.is_untrusted(_f("a", provenance="mcp")) is True
+    # explicit trusted overrides an external provenance (promotion)
+    assert budget_recall.is_untrusted(
+        _f("a", provenance="mcp", trust="trusted")) is False
+    assert budget_recall.is_untrusted(_f("a")) is False
+
+
+def test_trust_factor_discounts_untrusted(budget_recall):
+    assert 0 < budget_recall.trust_factor(_f("a", trust="untrusted")) < 1.0
+
+
+def test_trust_factor_env_override(budget_recall, monkeypatch):
+    monkeypatch.setenv("NOCKBRAIN_UNTRUSTED_FACTOR", "0.2")
+    assert budget_recall.trust_factor(_f("a", trust="untrusted")) == 0.2
+    monkeypatch.setenv("NOCKBRAIN_UNTRUSTED_FACTOR", "9")  # out of range -> default
+    assert budget_recall.trust_factor(_f("a", trust="untrusted")) == 0.5
+
+
+def test_untrusted_ranks_below_trusted_on_equal_match(budget_recall):
+    facts = [
+        _f("trusted", content="cloudflare dns migration plan"),
+        _f("external", content="cloudflare dns migration plan",
+           provenance="external_write"),
+    ]
+    ranked = budget_recall.search(facts, "cloudflare dns migration",
+                                  now=datetime(2026, 8, 2))
+    ids = [f["id"] for f in ranked]
+    assert ids.index("trusted") < ids.index("external")
+
+
+def test_promotion_restores_full_weight(budget_recall):
+    facts = [
+        _f("promoted", content="cloudflare dns migration plan",
+           provenance="external_write", trust="trusted"),
+        _f("plain", content="cloudflare dns migration plan"),
+    ]
+    # promoted external == plain trusted; neither is discounted
+    assert budget_recall.trust_factor(facts[0]) == 1.0
+    assert budget_recall.trust_factor(facts[1]) == 1.0
