@@ -388,3 +388,125 @@ def test_rotation_verify_cli_needs_retired_pub(revoke_lib, sign_lib, tmp_path):
             "--pub", str(tmp_path / "signing-key.pub")]
     assert vf.run(args) == 4  # unverifiable old event = invalid, hard fail
     assert vf.run(args + ["--retired-pub", str(tmp_path / "old-key.pub")]) == 0
+
+
+# ── backfill one-shot (separate mutation, Mira-gated at run time) ────────────
+def _load_backfill():
+    import importlib.util
+    from pathlib import Path as P
+    spec = importlib.util.spec_from_file_location(
+        "backfill_revocations",
+        P(__file__).resolve().parent.parent / "bin" / "backfill-revocations.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_backfill_propose_lists_but_writes_nothing(revoke_lib, sign_lib, tmp_path, monkeypatch, capsys):
+    bf = _load_backfill()
+    sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([
+        _fact("old", status="superseded", superseded_by="new"), _fact("new")]))
+
+    _run(bf.main, monkeypatch, ["--facts", str(store)], name="backfill-revocations.py")
+
+    assert "Would mint 1" in capsys.readouterr().out
+    assert not (tmp_path / "revocations.jsonl").exists()
+
+
+def test_backfill_apply_attests_legacy_marks_cleanly(revoke_lib, sign_lib, tmp_path, monkeypatch, capsys):
+    bf = _load_backfill()
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    facts = [_fact("old", status="superseded", superseded_by="new",
+                   supersession_reason="legacy", superseded_at=SUP_AT),
+             _fact("new")]
+    store = tmp_path / "facts.json"
+    before = json.dumps(facts)
+    store.write_text(before)
+
+    _run(bf.main, monkeypatch, ["--facts", str(store), "--apply"],
+         name="backfill-revocations.py")
+
+    assert store.read_text() == before
+    events = revoke_lib.load_revocations(tmp_path / "revocations.jsonl")
+    assert len(events) == 1
+    assert revoke_lib.verify_revocation(events[0], key)
+    report = revoke_lib.audit(facts, events, key)
+    assert report["unattested_superseded"] == []
+    assert report["resurrected"] == []
+
+
+def test_backfill_is_idempotent(revoke_lib, sign_lib, tmp_path, monkeypatch, capsys):
+    bf = _load_backfill()
+    sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("old", status="superseded")]))
+
+    _run(bf.main, monkeypatch, ["--facts", str(store), "--apply"],
+         name="backfill-revocations.py")
+    _run(bf.main, monkeypatch, ["--facts", str(store), "--apply"],
+         name="backfill-revocations.py")
+
+    events = revoke_lib.load_revocations(tmp_path / "revocations.jsonl")
+    assert len(events) == 1
+    assert "Nothing to backfill" in capsys.readouterr().out
+
+
+def test_backfill_fails_on_preexisting_invalid_event(revoke_lib, sign_lib, tmp_path, monkeypatch):
+    """CodeRabbit :99 — a tampered/invalid sidecar event (S1 exit-4 class)
+    must fail the backfill, not slip through as success."""
+    bf = _load_backfill()
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("old", status="superseded", superseded_by="new"),
+                                 _fact("new")]))
+    # Seed a tampered event so the post-backfill audit sees invalid_events > 0.
+    good = revoke_lib.sign_revocation(key, superseded_id="z", superseding_id="",
+                                      reason="", superseded_at=SUP_AT)
+    revoke_lib.append_revocation(tmp_path / "revocations.jsonl",
+                                 dict(good, reason="tampered"))
+
+    import sys as _sys
+    monkeypatch.setattr(_sys, "argv",
+                        ["backfill-revocations.py", "--facts", str(store), "--apply"])
+    with pytest.raises(SystemExit) as exc:
+        bf.main()
+    assert exc.value.code == 1
+
+
+def test_backfill_refuses_on_invalid_sidecar_even_with_nothing_to_mint(
+        revoke_lib, sign_lib, tmp_path, monkeypatch):
+    """CodeRabbit #65: an invalid sidecar event must fail the run even when no
+    fact needs backfilling (the early-return path skipped the invalid check)."""
+    bf = _load_backfill()
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    # No superseded facts -> nothing to backfill; but seed a tampered event.
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("live")]))
+    good = revoke_lib.sign_revocation(key, superseded_id="z", superseding_id="",
+                                      reason="", superseded_at=SUP_AT)
+    revoke_lib.append_revocation(tmp_path / "revocations.jsonl",
+                                 dict(good, reason="tampered"))
+
+    import sys as _sys
+    monkeypatch.setattr(_sys, "argv",
+                        ["backfill-revocations.py", "--facts", str(store), "--apply"])
+    with pytest.raises(SystemExit) as exc:
+        bf.main()
+    assert exc.value.code == 1
