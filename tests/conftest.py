@@ -155,3 +155,8 @@ def migrate_store():
 @pytest.fixture(scope="session")
 def store_parity():
     return _load("eval-store-parity")
+
+
+@pytest.fixture(scope="session")
+def projection_lib():
+    return _load("_projection")

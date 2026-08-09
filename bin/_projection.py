@@ -105,9 +105,14 @@ def load_receipts(receipts_path: Path) -> "list[dict[str, Any]]":
         if not line.strip():
             continue
         try:
-            receipts.append(json.loads(line))
+            row = json.loads(line)
         except json.JSONDecodeError:
             continue
+        # Only dict rows: a decoded null / [] / scalar would later crash
+        # last_status()'s .get() — a health checker must not die on a
+        # malformed artifact (same class as the contradiction-queue guard).
+        if isinstance(row, dict):
+            receipts.append(row)
     return receipts
 
 
