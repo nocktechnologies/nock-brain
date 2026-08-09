@@ -28,6 +28,7 @@ if str(BIN_DIR) not in sys.path:
 from _revoke import (  # noqa: E402
     REVOCATIONS_FILENAME,
     audit as revocation_audit,
+    blocking_findings,
     load_revocations,
 )
 from _sign import (  # noqa: E402
@@ -149,15 +150,21 @@ def run(argv: list[str] | None = None) -> int:
 
     if report["tampered"]:
         return 2
-    if revocation_report is not None and (
-        revocation_report["resurrected"] or revocation_report["invalid_events"]
-    ):
-        return 4
+    # Revocation exit invariant via the single predicate (_revoke.blocking_
+    # findings): resurrected/invalid are always blocking (exit 4); unattested
+    # is blocking only under --strict-revocations (exit 5). One source of
+    # truth so a new exit path can't silently skip a condition.
+    if revocation_report is not None:
+        if blocking_findings(revocation_report):  # resurrected or invalid
+            return 4
+        if args.strict and report["unsigned"]:
+            return 3
+        if blocking_findings(revocation_report, strict_unattested=True) \
+                and args.strict_revocations:
+            return 5
+        return 0
     if args.strict and report["unsigned"]:
         return 3
-    if args.strict_revocations and revocation_report is not None \
-            and revocation_report["unattested_superseded"]:
-        return 5
     return 0
 
 
