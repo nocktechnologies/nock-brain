@@ -26,6 +26,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
+from _projection import write_with_receipt
 from _store import secure_copyfile, secure_mkdir, secure_write_text
 
 
@@ -337,7 +338,7 @@ def copy_markdown_dir(src: Path | None, dst: Path) -> int:
     return count
 
 
-def write_index(vault: Path, counts: dict[str, int]) -> None:
+def write_index(vault: Path, counts: dict[str, int], receipts_path: Path) -> dict[str, Any]:
     lines = [
         "# NockBrain Vault",
         "",
@@ -365,7 +366,11 @@ def write_index(vault: Path, counts: dict[str, int]) -> None:
         "- [[concepts]]",
         "",
     ]
-    secure_write_text(vault / "index.md", "\n".join(lines), encoding="utf-8")
+    # index.md is the vault's entry point and principal artifact; route its
+    # write through a readback receipt so a silently failed/stale vault write
+    # is flagged, not lost (S4).
+    return write_with_receipt(
+        vault / "index.md", "\n".join(lines), receipts_path, kind="text")
 
 
 def export_vault(
@@ -373,6 +378,7 @@ def export_vault(
     vault: Path,
     sessions: Path | None = None,
     review: Path | None = None,
+    receipts_path: Path | None = None,
 ) -> dict[str, int]:
     secure_mkdir(vault)
     entities, fact_links = build_entity_index(facts)
@@ -391,7 +397,9 @@ def export_vault(
         "decisions": decision_count,
         **entity_counts,
     }
-    write_index(vault, counts)
+    # Default the ledger next to the vault when a caller does not point it at
+    # the store; run() passes the store-adjacent path.
+    write_index(vault, counts, receipts_path or vault.parent / "projection-receipts.jsonl")
     return counts
 
 
@@ -401,13 +409,16 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--sessions", type=Path, default=None)
     parser.add_argument("--review", type=Path, default=None)
     parser.add_argument("--vault", type=Path, required=True)
+    parser.add_argument("--receipts", type=Path, default=None,
+                        help="projection-receipts.jsonl (default: next to --facts)")
     args = parser.parse_args(argv)
 
     if not args.facts.exists():
         print(f"Facts file not found: {args.facts}")
         return 1
 
-    counts = export_vault(load_facts(args.facts), args.vault, args.sessions, args.review)
+    receipts = args.receipts or args.facts.parent / "projection-receipts.jsonl"
+    counts = export_vault(load_facts(args.facts), args.vault, args.sessions, args.review, receipts)
     print(f"Wrote vault to {args.vault}: {counts}")
     return 0
 
