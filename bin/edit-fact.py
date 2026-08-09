@@ -173,19 +173,26 @@ def append_edit(path: Path, row: "dict[str, Any]") -> None:
         # Tighten BEFORE writing: an already-existing file created with broad
         # perms would otherwise expose the new excerpts between write and chmod.
         os.fchmod(fd, FILE_MODE)
-        # Loop until every byte lands: a single os.write can short-write, which
-        # would truncate the JSON row — load_edits then skips the malformed
-        # line and --revert loses that restore target (the history-loss class
-        # we hardened everywhere else). Raise on no-progress rather than spin.
+        # All-or-nothing append: a single os.write can short-write, and a
+        # write that makes partial progress then fails would leave a truncated
+        # JSONL row that load_edits skips — losing a --revert restore target
+        # (the history-loss class we harden everywhere). Loop until every byte
+        # lands; on ANY failure, ftruncate back to the pre-append size so the
+        # row is either fully present or fully absent, never torn.
+        pre_size = os.fstat(fd).st_size
         payload = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
         written = 0
-        while written < len(payload):
-            n = os.write(fd, payload[written:])
-            if n <= 0:
-                raise OSError("edit-fact: short write to history sidecar "
-                              f"({written}/{len(payload)} bytes) — aborting to "
-                              "avoid a truncated revert row")
-            written += n
+        try:
+            while written < len(payload):
+                n = os.write(fd, payload[written:])
+                if n <= 0:
+                    raise OSError(
+                        "short write to history sidecar "
+                        f"({written}/{len(payload)} bytes)")
+                written += n
+        except OSError:
+            os.ftruncate(fd, pre_size)  # roll back the partial row
+            raise
     finally:
         os.close(fd)
 

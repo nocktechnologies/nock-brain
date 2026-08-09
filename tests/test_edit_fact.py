@@ -443,6 +443,32 @@ def test_revert_self_heals_missing_audit_row(edit_fact, sign_lib, tmp_path, monk
     assert any(r.get("op") == "revert" for r in rows_after)  # audit row backfilled
 
 
+def test_append_edit_rolls_back_partial_row_on_failure(edit_fact, tmp_path, monkeypatch):
+    """CR:188 — a write that makes partial progress then FAILS must leave NO
+    torn row: ftruncate rolls back to the pre-append size (all-or-nothing)."""
+    import os, json as _json
+    edits = tmp_path / "fact-edits.jsonl"
+    # seed one good complete row first
+    edit_fact.append_edit(edits, {"fact_id": "f0", "actor": "human",
+                                  "old_excerpt": "x", "new_excerpt": "y"})
+    good_bytes = edits.read_bytes()
+    real_write = os.write
+    calls = {"n": 0}
+    def flaky_write(fd, data):
+        calls["n"] += 1
+        if calls["n"] == 1 and len(data) > 3:
+            return real_write(fd, data[:3])   # partial progress
+        raise OSError("device error mid-append")  # then fail
+    monkeypatch.setattr(edit_fact.os, "write", flaky_write)
+    with pytest.raises(OSError):
+        edit_fact.append_edit(edits, {"fact_id": "f1", "actor": "agent",
+                                      "old_excerpt": "a", "new_excerpt": "b"})
+    # the file is exactly the pre-append content — no torn f1 row
+    assert edits.read_bytes() == good_bytes
+    rows = [_json.loads(l) for l in edits.read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["fact_id"] == "f0"
+
+
 def test_append_edit_survives_short_write(edit_fact, tmp_path, monkeypatch):
     """CR:176 (post-merge) — a short os.write must not truncate the history
     row; the loop retries until all bytes land, so load_edits reads it whole."""
