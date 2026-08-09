@@ -340,6 +340,54 @@ def recency_factor(fact: dict, now: datetime) -> float:
     return max(MIN_RECENCY_FACTOR, 0.5 ** (age_days / half_life))
 
 
+# --- Source-trust down-weight (S7) ------------------------------------------
+# A fact written by an agent/tool rather than distilled from a human-reviewed
+# transcript is UNPROVEN until a human promotes it. This is the memory-layer
+# prompt-injection defense (mnemosyne's EXTERNAL_WRITE, adapted): an externally
+# written fact is kept rankable but DISCOUNTED so it cannot outrank trusted
+# facts on term match alone, until promotion clears the marker.
+#
+# Vocabulary (all optional; absent == trusted, so every existing fact and the
+# whole distilled store are unaffected):
+#   trust: "trusted" | "untrusted" | "external"   (explicit)
+#   provenance: "external_write" | "mcp" | "tool" (marks an external writer)
+# A fact is untrusted iff trust is untrusted/external OR provenance names an
+# external writer AND trust is not explicitly "trusted". Promotion = set
+# trust:"trusted" (or drop the markers), a deliberate human/gated step.
+UNTRUSTED_RECALL_FACTOR = 0.5
+_EXTERNAL_PROVENANCE = {"external_write", "mcp", "tool", "external"}
+
+
+def _env_factor(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if 0.0 < value <= 1.0 else default
+
+
+def is_untrusted(fact: dict) -> bool:
+    """True iff the fact is externally/tool-written and not human-promoted."""
+    trust = str(fact.get("trust", "")).lower()
+    if trust == "trusted":
+        return False
+    if trust in {"untrusted", "external"}:
+        return True
+    return str(fact.get("provenance", "")).lower() in _EXTERNAL_PROVENANCE
+
+
+def trust_factor(fact: dict) -> float:
+    """Recall multiplier for source trust: 1.0 for trusted (the default and
+    every existing fact), a discount for unproven external writes. Override the
+    discount with NOCKBRAIN_UNTRUSTED_FACTOR (0 < x <= 1)."""
+    if is_untrusted(fact):
+        return _env_factor("NOCKBRAIN_UNTRUSTED_FACTOR", UNTRUSTED_RECALL_FACTOR)
+    return 1.0
+
+
 def supersession_factor(fact: dict) -> float:
     """Soft penalty for facts that are deprecated-but-not-hard-filtered.
 
@@ -449,6 +497,7 @@ def search(facts: list[dict], query: str, include_superseded: bool = False,
             * f.get("confidence", 0)
             * recency_factor(f, ref_now)
             * supersession_factor(f)
+            * trust_factor(f)
             * coverage_boost
             * phrase_boost
             * bulk_date_factor(share, bulk_threshold, bulk_floor)
@@ -669,6 +718,7 @@ def _maybe_graph_expand(all_facts: list[dict], seeds: list[dict], query: str,
         all_facts, seeds, include_superseded, now,
         recency_factor=recency_factor,
         supersession_factor=supersession_factor,
+        trust_factor=trust_factor,
         min_confidence=MIN_CONFIDENCE,
         currently_valid=fact_currently_valid,
         query_terms=_query_terms(query),
