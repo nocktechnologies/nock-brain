@@ -381,3 +381,19 @@ def test_sign_insights_no_key_returns_none(synthesize, monkeypatch, tmp_path):
     monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "missing.pub"))
     assert synthesize._sign_insights([{"id": "i", "kind": "insight",
                                        "content": "x", "evidence": []}]) is None
+
+
+def test_shape_gate_rejects_quote_wrapped_question(synthesize):
+    """CR #68: a quote-wrapped question ends with '\"' not '?', bypassing the
+    endswith check. Quotes are stripped and '?' anywhere rejects."""
+    assert synthesize.is_valid_lesson('"What next after the deploy freeze?"') is False
+    assert synthesize.is_valid_lesson("'Which schedule runs the nightly distill?'") is False
+
+
+def test_shape_gate_rejects_curly_apostrophe_refusals(synthesize):
+    """CR #68: U+2019 refusals evade an ASCII-apostrophe regex; smart quotes
+    are normalized before matching."""
+    assert synthesize.is_valid_lesson(
+        "I’ll return the lesson once you share the facts with me here.") is False
+    assert synthesize.is_valid_lesson(
+        "I’m unable to access that repository from this seat right now.") is False

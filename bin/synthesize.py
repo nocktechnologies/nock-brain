@@ -165,12 +165,17 @@ def is_valid_lesson(text: str) -> bool:
     runs identically in the hook floor."""
     if not isinstance(text, str):
         return False
-    stripped = text.strip()
-    if len(stripped) < 12:
+    # Normalize smart quotes/apostrophes and strip surrounding quotes FIRST:
+    # a quote-wrapped question ends with '"' not '?', and a curly-apostrophe
+    # refusal (’: "i’ll return") evades an ASCII-apostrophe regex.
+    normalized = (text.replace("\u2019", "'").replace("\u2018", "'")
+                      .replace("\u201c", '"').replace("\u201d", '"')
+                      .strip().strip("\"'").strip())
+    if len(normalized) < 12:
         return False
-    if stripped.endswith("?"):
+    if "?" in normalized:  # a lesson asserts; it never asks
         return False
-    if _CHAT_SHAPE_RE.search(stripped):
+    if _CHAT_SHAPE_RE.search(normalized):
         return False
     return True
 
