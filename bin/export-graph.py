@@ -13,7 +13,8 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-from _store import secure_mkdir, secure_write_text
+from _projection import write_with_receipt
+from _store import secure_mkdir
 
 STOPWORDS = {
     "about", "after", "also", "code", "fact", "fixed", "found", "from", "into",
@@ -87,6 +88,8 @@ def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Export a Graphify-compatible memory graph")
     parser.add_argument("--facts", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--receipts", type=Path, default=None,
+                        help="projection-receipts.jsonl (default: next to --facts)")
     args = parser.parse_args(argv)
 
     if not args.facts.exists():
@@ -95,8 +98,13 @@ def run(argv: list[str] | None = None) -> int:
 
     graph = graph_from_facts(load_facts(args.facts))
     secure_mkdir(args.output.parent)
-    secure_write_text(args.output, json.dumps(graph, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"Wrote graph with {len(graph['nodes'])} node(s) and {len(graph['edges'])} edge(s)")
+    # Route the principal artifact write through a readback receipt so a
+    # silently failed/stale graph write is flagged, not lost (S4).
+    receipts = args.receipts or args.facts.parent / "projection-receipts.jsonl"
+    receipt = write_with_receipt(
+        args.output, json.dumps(graph, indent=2, ensure_ascii=False), receipts, kind="text")
+    print(f"Wrote graph with {len(graph['nodes'])} node(s) and "
+          f"{len(graph['edges'])} edge(s) [{receipt['status']}]")
     return 0
 
 

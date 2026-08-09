@@ -108,6 +108,11 @@ def nockbrain_health():
 
 
 @pytest.fixture(scope="session")
+def projection():
+    return _load("_projection")
+
+
+@pytest.fixture(scope="session")
 def ingest_curated_memory():
     return _load("ingest-curated-memory")
 
