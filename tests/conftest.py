@@ -138,6 +138,11 @@ def revoke_lib():
 
 
 @pytest.fixture(scope="session")
+def edit_fact():
+    return _load("edit-fact")
+
+
+@pytest.fixture(scope="session")
 def storeback():
     return _load("_storeback")
 
