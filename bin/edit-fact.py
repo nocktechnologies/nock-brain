@@ -148,8 +148,12 @@ def _apply_edit(args, store, facts: "list[dict]", edits_path: Path, key) -> None
 
     fact["content"] = new_content  # id/kind are never touched
     signed = _resign(facts, fact, key)
-    store.replace_all(facts)
+    # History BEFORE the store write: a crash between the two must never leave
+    # an edited store with no revert row (which would silently defeat --revert).
+    # The reverse order is safe — a history row whose store write never landed
+    # just describes a change that didn't happen, and --revert no-ops on it.
     append_edit(edits_path, build_edit_row(args.fact_id, args.actor, old_content, new_content))
+    store.replace_all(facts)
 
     if not signed:
         print("edit-fact: WARNING no signing key available — fact left UNSIGNED "
@@ -182,9 +186,10 @@ def _revert(args, store, facts: "list[dict]", edits_path: Path, key) -> None:
     current = str(fact.get("content", ""))
     fact["content"] = prior  # id/kind are never touched
     signed = _resign(facts, fact, key)
-    store.replace_all(facts)
-    # A revert is itself an actor=human change: current -> restored prior.
+    # History BEFORE the store write (see _edit): the undo trail must survive a
+    # crash in the write window. A revert is itself an actor=human change.
     append_edit(edits_path, build_edit_row(fid, "human", current, prior))
+    store.replace_all(facts)
 
     if not signed:
         print("edit-fact: WARNING no signing key available — fact left UNSIGNED "

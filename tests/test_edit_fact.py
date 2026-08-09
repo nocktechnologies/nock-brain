@@ -168,3 +168,38 @@ def test_cli_edit_without_key_warns_but_records(edit_fact, tmp_path, monkeypatch
     assert "unsigned" in capsys.readouterr().err.lower()
     rows = edit_fact.load_edits(tmp_path / "fact-edits.jsonl")
     assert len(rows) == 1 and rows[0]["actor"] == "human"
+
+
+def test_history_written_before_store_so_crash_preserves_revert(edit_fact, sign_lib, tmp_path, monkeypatch):
+    """Mira #48110 durability: if the store write crashes, the edit-history row
+    must already exist so --revert still works. Prove ordering by making
+    replace_all raise and asserting the history row is on disk."""
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("f1", "the value is alpha")]))
+    edits = tmp_path / "fact-edits.jsonl"  # derived next to the store
+
+    # Make the store write blow up AFTER history should already be written.
+    import _storeback
+    real = _storeback.JsonStore.replace_all
+    def boom(self, facts):
+        raise OSError("disk full mid-write")
+    monkeypatch.setattr(_storeback.JsonStore, "replace_all", boom)
+
+    import sys
+    monkeypatch.setattr(sys, "argv",
+                        ["edit-fact.py", "f1", "--replace", "alpha", "--with", "beta",
+                         "--actor", "agent", "--facts", str(store)])
+    try:
+        edit_fact.main()
+    except OSError:
+        pass  # the crash we injected
+
+    # The revert trail survived the crash.
+    assert edits.exists()
+    rows = [json.loads(l) for l in edits.read_text().splitlines()]
+    assert rows and rows[-1]["fact_id"] == "f1"
+    assert rows[-1]["old_excerpt"] == "the value is alpha"
