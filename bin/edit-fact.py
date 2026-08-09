@@ -173,7 +173,19 @@ def append_edit(path: Path, row: "dict[str, Any]") -> None:
         # Tighten BEFORE writing: an already-existing file created with broad
         # perms would otherwise expose the new excerpts between write and chmod.
         os.fchmod(fd, FILE_MODE)
-        os.write(fd, (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8"))
+        # Loop until every byte lands: a single os.write can short-write, which
+        # would truncate the JSON row — load_edits then skips the malformed
+        # line and --revert loses that restore target (the history-loss class
+        # we hardened everywhere else). Raise on no-progress rather than spin.
+        payload = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
+        written = 0
+        while written < len(payload):
+            n = os.write(fd, payload[written:])
+            if n <= 0:
+                raise OSError("edit-fact: short write to history sidecar "
+                              f"({written}/{len(payload)} bytes) — aborting to "
+                              "avoid a truncated revert row")
+            written += n
     finally:
         os.close(fd)
 

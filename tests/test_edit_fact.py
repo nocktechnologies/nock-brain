@@ -441,3 +441,23 @@ def test_revert_self_heals_missing_audit_row(edit_fact, sign_lib, tmp_path, monk
     assert json.loads(store.read_text())[0]["content"] == "value alpha here"  # unchanged
     rows_after = [json.loads(l) for l in edits.read_text().splitlines()]
     assert any(r.get("op") == "revert" for r in rows_after)  # audit row backfilled
+
+
+def test_append_edit_survives_short_write(edit_fact, tmp_path, monkeypatch):
+    """CR:176 (post-merge) — a short os.write must not truncate the history
+    row; the loop retries until all bytes land, so load_edits reads it whole."""
+    import os
+    edits = tmp_path / "fact-edits.jsonl"
+    real_write = os.write
+    state = {"first": True}
+    def short_write(fd, data):
+        # write only the first byte once, then behave normally
+        if state["first"] and len(data) > 1:
+            state["first"] = False
+            return real_write(fd, data[:1])
+        return real_write(fd, data)
+    monkeypatch.setattr(edit_fact.os, "write", short_write)
+    edit_fact.append_edit(edits, {"fact_id": "f1", "actor": "agent",
+                                  "old_excerpt": "a", "new_excerpt": "b"})
+    rows = [__import__("json").loads(l) for l in edits.read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["fact_id"] == "f1"  # not truncated
