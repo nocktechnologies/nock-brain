@@ -45,7 +45,11 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from _revoke import resolve_signing_key
-from _sign import canonical_fact_hash, sign_fact
+from _sign import (
+    CLAIM_ATTESTATION_V2_SCHEMA,
+    _CLAIM_V2_ONLY_AUTHORITY_FIELDS,
+    sign_fact,
+)
 from _store import FILE_MODE
 from _storeback import resolve_store
 
@@ -120,6 +124,27 @@ def build_edit_row(fact_id: str, actor: str, old_content: str, new_content: str)
     }
 
 
+def _raw_record_count(store_path: Path) -> "int | None":
+    """Number of raw records in the store file, or None if it is not a JSON
+    fact list (e.g. a SQLite backend, whose load is lossless). Used to refuse
+    an edit that would silently drop malformed siblings on write-back."""
+    try:
+        data = json.loads(Path(store_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return len(data) if isinstance(data, list) else None
+
+
+def _is_v2_claim(fact: "dict[str, Any]") -> bool:
+    """True if a fact carries the v2 claim attestation schema or its authority
+    fields — the legacy sign_fact cannot safely re-sign it (verify_fact would
+    return TAMPERED), so edit-fact refuses rather than silently corrupt."""
+    att = fact.get("attestation")
+    if isinstance(att, dict) and att.get("schema") == CLAIM_ATTESTATION_V2_SCHEMA:
+        return True
+    return bool(_CLAIM_V2_ONLY_AUTHORITY_FIELDS.intersection(fact))
+
+
 def _child_ids(facts: "list[dict]", parent_id: str) -> "list[str]":
     """Facts that name ``parent_id`` in their attestation's parent_fact_ids —
     their signatures commit to the parent's core hash, so editing the parent
@@ -190,6 +215,12 @@ def _apply_edit(args, store, facts: "list[dict]", edits_path: Path, key) -> None
         print(f"Fact {args.fact_id} not found.", file=sys.stderr)
         sys.exit(1)
 
+    if _is_v2_claim(fact):
+        print(f"edit-fact: {args.fact_id} carries a v2 claim attestation; "
+              "re-signing it with the legacy signer would make it verify as "
+              "TAMPERED. Editing v2-claim facts is not supported — refusing.",
+              file=sys.stderr)
+        sys.exit(1)
     children = _child_ids(facts, args.fact_id)
     if children:
         print(f"edit-fact: {args.fact_id} is a parent of {len(children)} fact(s) "
@@ -233,6 +264,11 @@ def _revert(args, store, facts: "list[dict]", edits_path: Path, key) -> None:
         sys.exit(1)
 
     last = history[-1]
+    if last.get("op") == "revert":
+        print(f"edit-fact: the last change to {fid} was already a revert; a "
+              "second revert would re-apply the undone edit. Refusing — make a "
+              "new edit if you want to change it again.", file=sys.stderr)
+        sys.exit(1)
     prior = str(last.get("old_excerpt", ""))
     # The history line is the only record of the pre-edit content; verify it
     # against the row's own hash before trusting it as the restore target.
@@ -255,7 +291,9 @@ def _revert(args, store, facts: "list[dict]", edits_path: Path, key) -> None:
     signed = _resign(facts, fact, key)
     # History BEFORE the store write (see _edit): the undo trail must survive a
     # crash in the write window. A revert is itself an actor=human change.
-    append_edit(edits_path, build_edit_row(fid, "human", current, prior))
+    revert_row = build_edit_row(fid, "human", current, prior)
+    revert_row["op"] = "revert"
+    append_edit(edits_path, revert_row)
     store.replace_all(facts)
 
     if not signed:
@@ -297,6 +335,14 @@ def main() -> None:
     # concurrent edit-fact cannot interleave and clobber this write.
     with _StoreLock(store.freshness_path):
         facts = store.load_facts()
+        raw = _raw_record_count(store.freshness_path)
+        if raw is not None and raw != len(facts):
+            print(f"edit-fact: store has {raw} records but only {len(facts)} "
+                  "loaded as valid — writing back would silently DROP the "
+                  f"{raw - len(facts)} malformed record(s). Refusing; clean the "
+                  "store first (extract/refine) before an in-place edit.",
+                  file=sys.stderr)
+            sys.exit(1)
         if args.revert:
             _revert(args, store, facts, edits_path, key)
         else:

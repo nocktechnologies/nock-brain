@@ -292,3 +292,72 @@ def test_store_lock_serializes_writers(edit_fact, tmp_path):
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         finally:
             os.close(fd)
+
+
+def test_edit_refuses_v2_claim_fact(edit_fact, sign_lib, tmp_path, monkeypatch):
+    """nock-review HIGH: legacy re-sign of a v2-claim fact yields TAMPERED.
+    Refuse instead."""
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    v2 = _fact("c1", "claim content alpha")
+    v2["attestation"] = {"schema": "nock-claim-attestation/v2", "signature": "x"}
+    v2["revision_id"] = "rev-1"
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([v2]))
+    import sys
+    monkeypatch.setattr(sys, "argv",
+                        ["edit-fact.py", "c1", "--replace", "alpha", "--with", "beta",
+                         "--actor", "agent", "--facts", str(store)])
+    with pytest.raises(SystemExit) as exc:
+        edit_fact.main()
+    assert exc.value.code == 1
+    assert json.loads(store.read_text())[0]["content"] == "claim content alpha"
+
+
+def test_edit_refuses_when_load_drops_malformed_sibling(edit_fact, sign_lib, tmp_path, monkeypatch):
+    """nock-review MEDIUM: writing back after a lossy load would delete a
+    malformed sibling. Refuse."""
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    good = _fact("f1", "value alpha here")
+    malformed = {"id": "f2", "content": "no required fields"}  # missing kind/status/...
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([good, malformed]))
+    import sys
+    monkeypatch.setattr(sys, "argv",
+                        ["edit-fact.py", "f1", "--replace", "alpha", "--with", "beta",
+                         "--actor", "agent", "--facts", str(store)])
+    with pytest.raises(SystemExit) as exc:
+        edit_fact.main()
+    assert exc.value.code == 1
+    # both facts still on disk (nothing dropped)
+    assert len(json.loads(store.read_text())) == 2
+
+
+def test_double_revert_refused(edit_fact, sign_lib, tmp_path, monkeypatch):
+    """nock-review MEDIUM: a second consecutive revert re-applies the undone
+    edit. Refuse."""
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("f1", "value alpha here")]))
+    import sys
+    monkeypatch.setattr(sys, "argv",
+                        ["edit-fact.py", "f1", "--replace", "alpha", "--with", "beta",
+                         "--actor", "agent", "--facts", str(store)])
+    edit_fact.main()  # content -> beta
+    monkeypatch.setattr(sys, "argv", ["edit-fact.py", "--revert", "f1", "--facts", str(store)])
+    edit_fact.main()  # back to alpha
+    assert json.loads(store.read_text())[0]["content"] == "value alpha here"
+    # second revert must refuse (would re-apply beta)
+    monkeypatch.setattr(sys, "argv", ["edit-fact.py", "--revert", "f1", "--facts", str(store)])
+    with pytest.raises(SystemExit) as exc:
+        edit_fact.main()
+    assert exc.value.code == 1
+    assert json.loads(store.read_text())[0]["content"] == "value alpha here"  # still alpha
