@@ -143,6 +143,43 @@ def _call_claude(prompt: str, model: str, timeout: float) -> str:
     return proc.stdout.strip()
 
 
+# Chat-shaped LLM artifacts that must never enter the trusted recall surface.
+# The live pollution ("Once you share those, I'll return...") is a model asking
+# for input instead of stating a lesson. A shape gate at GENERATION beats a
+# post-hoc reject filter, which always trails the next bad shape (F3, Mira).
+_CHAT_SHAPE_RE = re.compile(
+    r"\b(once you (share|provide|send)|please (share|provide|send|paste)|"
+    r"i'?ll (return|provide|give|need)|could you (share|clarify|provide)|"
+    r"i (need|would need|don'?t have)|let me know|as an ai|i'?m unable|"
+    r"i cannot|to (help|assist) (you )?(with )?(that|this)|here (is|are) the|"
+    r"send (me|them|those)|waiting for|based on the (notes|facts) (you|above))",
+    re.IGNORECASE,
+)
+
+
+def is_valid_lesson(text: str) -> bool:
+    """True iff ``text`` reads like a durable lesson, not a chat reply.
+
+    Rejects empty/too-short output, questions (a lesson asserts, it doesn't
+    ask), and known chat/meta shapes. Deterministic and dependency-free so it
+    runs identically in the hook floor."""
+    if not isinstance(text, str):
+        return False
+    # Normalize smart quotes/apostrophes and strip surrounding quotes FIRST:
+    # a quote-wrapped question ends with '"' not '?', and a curly-apostrophe
+    # refusal (’: "i’ll return") evades an ASCII-apostrophe regex.
+    normalized = (text.replace("\u2019", "'").replace("\u2018", "'")
+                      .replace("\u201c", '"').replace("\u201d", '"')
+                      .strip().strip("\"'").strip())
+    if len(normalized) < 12:
+        return False
+    if "?" in normalized:  # a lesson asserts; it never asks
+        return False
+    if _CHAT_SHAPE_RE.search(normalized):
+        return False
+    return True
+
+
 def make_claude_synthesizer(model: str = DEFAULT_LLM_MODEL,
                             timeout: float = DEFAULT_LLM_TIMEOUT):
     """Build an opt-in LLM synthesizer for :func:`synthesize_cluster`.
@@ -168,7 +205,9 @@ def make_claude_synthesizer(model: str = DEFAULT_LLM_MODEL,
             "sentence, no preamble or quotes.\n\n" + members
         )
         cleaned = " ".join(_call_claude(prompt, model, timeout).split())
-        return cleaned if len(cleaned) >= 12 else ""
+        # Shape-gate at generation: a chat-shaped artifact falls back to the
+        # deterministic heuristic content rather than polluting recall.
+        return cleaned if is_valid_lesson(cleaned) else ""
     return _synth
 
 
@@ -279,6 +318,24 @@ def synthesize(
     return insights
 
 
+def _sign_insights(insights: list[dict]) -> "list[dict] | None":
+    """Attach an attestation to each insight using the store's key.
+
+    Reuses the fact-signing machinery: the signature covers id + kind +
+    content (canonical_fact_core), so a tampered insight fails verify exactly
+    like a tampered fact. Returns None when no key is available (caller keeps
+    the unsigned insights and warns) so signing never blocks synthesis."""
+    import os
+    from _sign import DEFAULT_KEY_PATH, DEFAULT_PUB_PATH, load_or_create_key, sign_facts
+    key_path = Path(os.environ.get("NOCKBRAIN_SIGNING_KEY", DEFAULT_KEY_PATH))
+    pub_path = Path(os.environ.get("NOCKBRAIN_SIGNING_PUB", DEFAULT_PUB_PATH))
+    try:
+        key = load_or_create_key(key_path, pub_path, create=False)
+    except (FileNotFoundError, RuntimeError, ValueError, KeyError, OSError):
+        return None
+    return sign_facts(insights, key)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Synthesize facts into insights")
     parser.add_argument("--facts", type=Path, default=DEFAULT_FACTS)
@@ -307,6 +364,10 @@ def main():
                         help="With --llm, enrich only the N strongest recurrences; "
                              f"the rest stay heuristic (default: {DEFAULT_LLM_TOP}, "
                              "0 = no cap)")
+    parser.add_argument("--sign", action="store_true",
+                        help="Attach a signed attestation to each insight "
+                             "(same key + machinery as facts) so the recall "
+                             "surface is fully attested, not just the facts.")
     args = parser.parse_args()
 
     if not args.facts.exists():
@@ -321,6 +382,14 @@ def main():
     insights = synthesize(facts, args.threshold, args.min_cluster, kinds,
                           synthesizer, llm_top,
                           confidence_floor=args.confidence_floor)
+
+    if args.sign:
+        signed = _sign_insights(insights)
+        if signed is None:
+            print("synthesize: --sign requested but no signing key available; "
+                  "writing UNSIGNED insights", file=sys.stderr)
+        else:
+            insights = signed
 
     secure_mkdir(args.output.parent)
     secure_write_json(args.output, insights, indent=2, default=str)
