@@ -361,3 +361,45 @@ def test_double_revert_refused(edit_fact, sign_lib, tmp_path, monkeypatch):
         edit_fact.main()
     assert exc.value.code == 1
     assert json.loads(store.read_text())[0]["content"] == "value alpha here"  # still alpha
+
+
+def test_failed_revert_is_retryable(edit_fact, sign_lib, tmp_path, monkeypatch):
+    """CR:289/363 — a revert whose store write fails must be retryable: the
+    revert log is written AFTER the store, so a crash leaves the store
+    unchanged and the retry runs cleanly (not stranded by its own log row)."""
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("f1", "value alpha here")]))
+    import sys
+    # edit alpha -> beta
+    monkeypatch.setattr(sys, "argv",
+                        ["edit-fact.py", "f1", "--replace", "alpha", "--with", "beta",
+                         "--actor", "agent", "--facts", str(store)])
+    edit_fact.main()
+
+    # First revert: store write BLOWS UP after content is prepared.
+    import _storeback
+    def boom(self, facts):
+        raise OSError("disk full mid-revert")
+    monkeypatch.setattr(_storeback.JsonStore, "replace_all", boom)
+    monkeypatch.setattr(sys, "argv", ["edit-fact.py", "--revert", "f1", "--facts", str(store)])
+    try:
+        edit_fact.main()
+    except OSError:
+        pass
+    # store still has beta (crash), and NO revert row was appended
+    assert json.loads(store.read_text())[0]["content"] == "value beta here"
+    edits = tmp_path / "fact-edits.jsonl"
+    rows = [json.loads(l) for l in edits.read_text().splitlines()]
+    assert not any(r.get("op") == "revert" for r in rows)
+
+    # Retry with a working store write -> revert lands.
+    monkeypatch.undo()  # restore real replace_all
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    monkeypatch.setattr(sys, "argv", ["edit-fact.py", "--revert", "f1", "--facts", str(store)])
+    edit_fact.main()
+    assert json.loads(store.read_text())[0]["content"] == "value alpha here"

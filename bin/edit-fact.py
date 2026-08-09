@@ -170,10 +170,12 @@ def append_edit(path: Path, row: "dict[str, Any]") -> None:
     # secure_write's create-then-chmod leaves open for a brand-new file.
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, FILE_MODE)
     try:
+        # Tighten BEFORE writing: an already-existing file created with broad
+        # perms would otherwise expose the new excerpts between write and chmod.
+        os.fchmod(fd, FILE_MODE)
         os.write(fd, (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8"))
     finally:
         os.close(fd)
-    path.chmod(FILE_MODE)  # tighten an existing file that predated this guard
 
 
 def load_edits(path: Path) -> "list[dict[str, Any]]":
@@ -289,12 +291,15 @@ def _revert(args, store, facts: "list[dict]", edits_path: Path, key) -> None:
         sys.exit(1)
     fact["content"] = prior  # id/kind are never touched
     signed = _resign(facts, fact, key)
-    # History BEFORE the store write (see _edit): the undo trail must survive a
-    # crash in the write window. A revert is itself an actor=human change.
+    # Revert is STORE-FIRST (unlike edit): the restore target already lives in
+    # the original edit row, so a crash that loses the revert LOG is cosmetic —
+    # whereas logging BEFORE a failed store write would strand the store on
+    # `current` while the log claims `prior`, and both guards would then refuse
+    # every retry. Store-first keeps a crashed revert cleanly retryable.
+    store.replace_all(facts)
     revert_row = build_edit_row(fid, "human", current, prior)
     revert_row["op"] = "revert"
     append_edit(edits_path, revert_row)
-    store.replace_all(facts)
 
     if not signed:
         print("edit-fact: WARNING no signing key available — fact left UNSIGNED "
