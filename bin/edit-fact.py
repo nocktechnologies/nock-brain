@@ -192,8 +192,11 @@ def append_edit(path: Path, row: "dict[str, Any]") -> None:
                 written += n
         except OSError as write_err:
             # The rollback itself can fail (CR:195): if ftruncate ALSO raises,
-            # the torn bytes stay on disk (load_edits skips the malformed
-            # line) and this row's revert target is gone. That must be loud,
+            # the torn bytes stay on disk and this row's revert target is
+            # gone. The torn tail can even be VALID JSON (payload minus only
+            # its trailing LF) — load_edits ignores it not because it is
+            # malformed but because only LF-terminated records count as
+            # committed rows. That must be loud,
             # not silent — surface BOTH failures, chaining the original write
             # error as the cause so neither masks the other.
             try:
@@ -211,12 +214,20 @@ def append_edit(path: Path, row: "dict[str, Any]") -> None:
 
 def load_edits(path: Path) -> "list[dict[str, Any]]":
     """Load the append-only history, skipping any malformed line (lenient by
-    design — one bad row must never hide the rest of a fact's history)."""
+    design — one bad row must never hide the rest of a fact's history).
+
+    Only LF-terminated records count as committed rows: append_edit always
+    writes ``json + "\n"``, and its failed-rollback path can leave a torn
+    tail of ``payload[:-1]`` — the row minus ONLY its trailing LF, which is
+    still VALID JSON. splitlines() would resurrect that tail as a phantom
+    history row, corrupting the --revert target; ``split("\n")[:-1]`` drops
+    the unterminated tail instead (an LF-terminated file yields a final ""
+    element, so no committed row is ever lost)."""
     path = Path(path)
     if not path.exists():
         return []
     rows: "list[dict[str, Any]]" = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").split("\n")[:-1]:
         try:
             row = json.loads(line)
         except json.JSONDecodeError:

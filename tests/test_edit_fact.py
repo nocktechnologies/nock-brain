@@ -456,8 +456,11 @@ def test_append_edit_rolls_back_partial_row_on_failure(edit_fact, tmp_path, monk
     calls = {"n": 0}
     def flaky_write(fd, data):
         calls["n"] += 1
-        if calls["n"] == 1 and len(data) > 3:
-            return real_write(fd, data[:3])   # partial progress
+        if calls["n"] == 1 and len(data) > 1:
+            # CR's REAL torn-tail case: everything but the trailing LF lands,
+            # so the fragment on disk is VALID JSON minus only its newline —
+            # exactly what a splitlines()-based load_edits would resurrect.
+            return real_write(fd, data[:-1])
         raise OSError("device error mid-append")  # then fail
     monkeypatch.setattr(edit_fact.os, "write", flaky_write)
     with pytest.raises(OSError):
@@ -501,10 +504,29 @@ def test_append_edit_failed_rollback_surfaces_both_errors(edit_fact, tmp_path,
     assert "injected ftruncate failure" in str(err)
     assert isinstance(err.__cause__, OSError)
     assert "device error mid-append" in str(err.__cause__)
-    # The torn fragment left on disk is never readable as a valid history
-    # row — load_edits skips it and the good row is intact.
+    # The torn fragment on disk IS valid JSON (minus only its LF) — but it
+    # is not LF-terminated, so load_edits treats it as uncommitted and the
+    # good row is intact. This is the CR:206 phantom-row regression guard.
     rows = edit_fact.load_edits(edits)
     assert len(rows) == 1 and rows[0]["fact_id"] == "f0"
+
+
+def test_load_edits_ignores_unterminated_tail(edit_fact, tmp_path):
+    """CR:206 — a torn tail that is VALID JSON minus only its trailing LF must
+    never load as a committed history row. splitlines() did exactly that;
+    only LF-terminated records count. An LF-terminated file still loads every
+    row (the trailing "" split element is never treated as data)."""
+    import json
+    edits = tmp_path / "fact-edits.jsonl"
+    edit_fact.append_edit(edits, {"fact_id": "f0", "actor": "human",
+                                  "old_excerpt": "x", "new_excerpt": "y"})
+    torn = json.dumps({"fact_id": "phantom", "actor": "agent",
+                       "old_excerpt": "a", "new_excerpt": "b"},
+                      ensure_ascii=False).encode("utf-8")
+    with open(edits, "ab") as fh:
+        fh.write(torn)  # no trailing LF — an uncommitted torn tail
+    rows = edit_fact.load_edits(edits)
+    assert [r["fact_id"] for r in rows] == ["f0"]
 
 
 def test_append_edit_survives_short_write(edit_fact, tmp_path, monkeypatch):
