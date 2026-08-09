@@ -485,3 +485,28 @@ def test_backfill_fails_on_preexisting_invalid_event(revoke_lib, sign_lib, tmp_p
     with pytest.raises(SystemExit) as exc:
         bf.main()
     assert exc.value.code == 1
+
+
+def test_backfill_refuses_on_invalid_sidecar_even_with_nothing_to_mint(
+        revoke_lib, sign_lib, tmp_path, monkeypatch):
+    """CodeRabbit #65: an invalid sidecar event must fail the run even when no
+    fact needs backfilling (the early-return path skipped the invalid check)."""
+    bf = _load_backfill()
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    # No superseded facts -> nothing to backfill; but seed a tampered event.
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("live")]))
+    good = revoke_lib.sign_revocation(key, superseded_id="z", superseding_id="",
+                                      reason="", superseded_at=SUP_AT)
+    revoke_lib.append_revocation(tmp_path / "revocations.jsonl",
+                                 dict(good, reason="tampered"))
+
+    import sys as _sys
+    monkeypatch.setattr(_sys, "argv",
+                        ["backfill-revocations.py", "--facts", str(store), "--apply"])
+    with pytest.raises(SystemExit) as exc:
+        bf.main()
+    assert exc.value.code == 1

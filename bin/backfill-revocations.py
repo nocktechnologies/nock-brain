@@ -61,6 +61,16 @@ def main() -> None:
     report = audit(facts, load_revocations(sidecar), key)
     unattested = report["unattested_superseded"]
 
+    # invalid_events is the S1 tampering/exit-4 class: a corrupt or tampered
+    # sidecar must fail LOUDLY even when there is nothing to mint — otherwise
+    # a poisoned sidecar with no unattested facts would exit success.
+    if report["invalid_events"]:
+        print(f"Sidecar has {report['invalid_events']} INVALID revocation "
+              "event(s) (tampered or wrong key) — refusing to proceed; "
+              "investigate before trusting strict verification.",
+              file=sys.stderr)
+        sys.exit(1)
+
     if not unattested:
         print("Nothing to backfill: every superseded fact is attested.")
         return
