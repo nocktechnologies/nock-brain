@@ -203,3 +203,92 @@ def test_history_written_before_store_so_crash_preserves_revert(edit_fact, sign_
     rows = [json.loads(l) for l in edits.read_text().splitlines()]
     assert rows and rows[-1]["fact_id"] == "f1"
     assert rows[-1]["old_excerpt"] == "the value is alpha"
+
+
+def test_history_file_created_0600(edit_fact, sign_lib, tmp_path, monkeypatch):
+    """CR:100 — the history sidecar (holds content excerpts) must be 0600 from
+    creation, never briefly umask-readable."""
+    import stat
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("f1", "value alpha here")]))
+    import sys
+    monkeypatch.setattr(sys, "argv",
+                        ["edit-fact.py", "f1", "--replace", "alpha", "--with", "beta",
+                         "--actor", "agent", "--facts", str(store)])
+    edit_fact.main()
+    edits = tmp_path / "fact-edits.jsonl"
+    assert edits.exists()
+    assert stat.S_IMODE(edits.stat().st_mode) == 0o600
+
+
+def test_edit_refuses_when_fact_is_a_parent(edit_fact, sign_lib, tmp_path, monkeypatch):
+    """CR:133 — editing a parent would make children parent-suspect; refuse
+    until child re-signing exists (0 parent-linked facts today)."""
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    parent = _fact("p1", "parent content alpha")
+    child = _fact("c1", "child content")
+    child["attestation"] = {"parent_fact_ids": ["p1"]}
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([parent, child]))
+    import sys
+    monkeypatch.setattr(sys, "argv",
+                        ["edit-fact.py", "p1", "--replace", "alpha", "--with", "beta",
+                         "--actor", "agent", "--facts", str(store)])
+    with pytest.raises(SystemExit) as exc:
+        edit_fact.main()
+    assert exc.value.code == 1
+    # store untouched
+    assert json.loads(store.read_text())[0]["content"] == "parent content alpha"
+
+
+def test_revert_refuses_when_current_changed_out_of_band(edit_fact, sign_lib, tmp_path, monkeypatch):
+    """CR:192 — revert must not clobber content that changed since the last
+    recorded edit (out-of-band write)."""
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("f1", "value alpha here")]))
+    import sys
+    # edit normally
+    monkeypatch.setattr(sys, "argv",
+                        ["edit-fact.py", "f1", "--replace", "alpha", "--with", "beta",
+                         "--actor", "agent", "--facts", str(store)])
+    edit_fact.main()
+    # now mutate the store OUT OF BAND
+    facts = json.loads(store.read_text())
+    facts[0]["content"] = "value gamma here"
+    store.write_text(json.dumps(facts))
+    # revert must refuse
+    monkeypatch.setattr(sys, "argv",
+                        ["edit-fact.py", "--revert", "f1", "--facts", str(store)])
+    with pytest.raises(SystemExit) as exc:
+        edit_fact.main()
+    assert exc.value.code == 1
+    assert json.loads(store.read_text())[0]["content"] == "value gamma here"  # untouched
+
+
+def test_store_lock_serializes_writers(edit_fact, tmp_path):
+    """CR:234 — the lock is exclusive: a second acquire blocks until release."""
+    import _storeback  # noqa: F401 - ensure importable
+    store = tmp_path / "facts.json"
+    store.write_text("[]")
+    lock_a = edit_fact._StoreLock(store)
+    lock_b = edit_fact._StoreLock(store)
+    import fcntl, os
+    with lock_a:
+        # non-blocking acquire on B must fail while A holds it
+        fd = os.open(str(tmp_path / ".edit-fact.lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)

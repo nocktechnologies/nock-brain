@@ -31,8 +31,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,12 +45,38 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from _revoke import resolve_signing_key
-from _sign import sign_fact
+from _sign import canonical_fact_hash, sign_fact
 from _store import FILE_MODE
 from _storeback import resolve_store
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 EDITS_FILENAME = "fact-edits.jsonl"
+LOCK_FILENAME = ".edit-fact.lock"
+
+
+class _StoreLock:
+    """Advisory exclusive lock over one store, held for the whole
+    load-modify-store cycle so two concurrent edit-fact processes cannot
+    load the same content, append different history rows, and clobber each
+    other's write. flock is advisory (only cooperating edit-fact processes
+    honor it), which is exactly the scope here — this is the one writer."""
+
+    def __init__(self, store_path: Path):
+        self._path = Path(store_path).parent / LOCK_FILENAME
+        self._fd = None
+
+    def __enter__(self):
+        self._fd = os.open(str(self._path),
+                           os.O_WRONLY | os.O_CREAT, FILE_MODE)
+        fcntl.flock(self._fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        if self._fd is not None:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            os.close(self._fd)
+            self._fd = None
+        return False
 
 
 def unique_replace(content: str, old: str, new: str) -> str:
@@ -92,12 +120,35 @@ def build_edit_row(fact_id: str, actor: str, old_content: str, new_content: str)
     }
 
 
+def _child_ids(facts: "list[dict]", parent_id: str) -> "list[str]":
+    """Facts that name ``parent_id`` in their attestation's parent_fact_ids —
+    their signatures commit to the parent's core hash, so editing the parent
+    would make them parent-suspect (see verify_fact)."""
+    out = []
+    for f in facts:
+        if not isinstance(f, dict) or f.get("id") == parent_id:
+            continue
+        att = f.get("attestation") or {}
+        if isinstance(att, dict) and parent_id in (att.get("parent_fact_ids") or []):
+            out.append(str(f.get("id", "")))
+    return out
+
+
 def append_edit(path: Path, row: "dict[str, Any]") -> None:
-    """Append one row to the history sidecar (0600); never rewrites prior lines."""
+    """Append one row to the history sidecar; never rewrites prior lines.
+
+    The file is created 0600 BEFORE any content is written — the row carries
+    fact-content excerpts, so a umask-created file would briefly expose them
+    world-readable (the store itself is 0600)."""
     path = Path(path)
-    with open(path, "a", encoding="utf-8") as stream:
-        stream.write(json.dumps(row, ensure_ascii=False) + "\n")
-    path.chmod(FILE_MODE)
+    # O_CREAT with mode 0600 is applied at creation, closing the umask window
+    # secure_write's create-then-chmod leaves open for a brand-new file.
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, FILE_MODE)
+    try:
+        os.write(fd, (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+    path.chmod(FILE_MODE)  # tighten an existing file that predated this guard
 
 
 def load_edits(path: Path) -> "list[dict[str, Any]]":
@@ -139,6 +190,13 @@ def _apply_edit(args, store, facts: "list[dict]", edits_path: Path, key) -> None
         print(f"Fact {args.fact_id} not found.", file=sys.stderr)
         sys.exit(1)
 
+    children = _child_ids(facts, args.fact_id)
+    if children:
+        print(f"edit-fact: {args.fact_id} is a parent of {len(children)} fact(s) "
+              f"({', '.join(children[:5])}{'…' if len(children) > 5 else ''}); "
+              "editing it would make those children parent-suspect. Re-signing "
+              "the child subtree is not yet supported — refusing.", file=sys.stderr)
+        sys.exit(1)
     old_content = str(fact.get("content", ""))
     try:
         new_content = unique_replace(old_content, args.replace, args.new)
@@ -184,6 +242,15 @@ def _revert(args, store, facts: "list[dict]", edits_path: Path, key) -> None:
         sys.exit(1)
 
     current = str(fact.get("content", ""))
+    # The store may have been changed out-of-band since the last recorded edit
+    # (a direct write, a distill rebuild). Reverting then would restore stale
+    # content OVER an unexpected current — silent data loss. Only revert when
+    # the live content is exactly what the last history row produced.
+    if _sha256(current) != last.get("new_sha256"):
+        print(f"edit-fact: {fid}'s current content does not match the last "
+              "recorded edit (changed out-of-band?); refusing revert to avoid "
+              "clobbering unexpected content.", file=sys.stderr)
+        sys.exit(1)
     fact["content"] = prior  # id/kind are never touched
     signed = _resign(facts, fact, key)
     # History BEFORE the store write (see _edit): the undo trail must survive a
@@ -217,21 +284,23 @@ def main() -> None:
         print(f"No fact store found ({store.describe()}).", file=sys.stderr)
         sys.exit(1)
 
-    facts = store.load_facts()
+    if not args.revert and not args.fact_id:
+        parser.print_help()
+        return
+    if not args.revert and (args.replace is None or args.new is None):
+        parser.error("--replace and --with are required for an edit")
+
     edits_path = Path(store.freshness_path).parent / EDITS_FILENAME
     key = resolve_signing_key()
 
-    if args.revert:
-        _revert(args, store, facts, edits_path, key)
-        return
-
-    if not args.fact_id:
-        parser.print_help()
-        return
-    if args.replace is None or args.new is None:
-        parser.error("--replace and --with are required for an edit")
-
-    _apply_edit(args, store, facts, edits_path, key)
+    # Hold the store lock across the ENTIRE load-modify-store cycle so a
+    # concurrent edit-fact cannot interleave and clobber this write.
+    with _StoreLock(store.freshness_path):
+        facts = store.load_facts()
+        if args.revert:
+            _revert(args, store, facts, edits_path, key)
+        else:
+            _apply_edit(args, store, facts, edits_path, key)
 
 
 if __name__ == "__main__":
