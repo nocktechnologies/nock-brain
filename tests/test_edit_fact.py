@@ -469,6 +469,44 @@ def test_append_edit_rolls_back_partial_row_on_failure(edit_fact, tmp_path, monk
     assert len(rows) == 1 and rows[0]["fact_id"] == "f0"
 
 
+def test_append_edit_failed_rollback_surfaces_both_errors(edit_fact, tmp_path,
+                                                          monkeypatch):
+    """CR:195 — partial write, then the ftruncate rollback ALSO fails: the
+    torn bytes can't be removed, so the failure must be loud. The raised
+    error names the rollback failure and chains the original write failure
+    as its cause, and the torn fragment is never readable as valid history."""
+    import os
+    edits = tmp_path / "fact-edits.jsonl"
+    # seed one good complete row first
+    edit_fact.append_edit(edits, {"fact_id": "f0", "actor": "human",
+                                  "old_excerpt": "x", "new_excerpt": "y"})
+    real_write = os.write
+    calls = {"n": 0}
+    def flaky_write(fd, data):
+        calls["n"] += 1
+        if calls["n"] == 1 and len(data) > 3:
+            return real_write(fd, data[:3])   # partial progress
+        raise OSError("device error mid-append")  # then fail
+    def broken_truncate(fd, size):
+        raise OSError("injected ftruncate failure")
+    monkeypatch.setattr(edit_fact.os, "write", flaky_write)
+    monkeypatch.setattr(edit_fact.os, "ftruncate", broken_truncate)
+    with pytest.raises(OSError) as excinfo:
+        edit_fact.append_edit(edits, {"fact_id": "f1", "actor": "agent",
+                                      "old_excerpt": "a", "new_excerpt": "b"})
+    # BOTH failures surface: the raised error names each, and the original
+    # write failure is the explicit cause (raise ... from write_err).
+    err = excinfo.value
+    assert "device error mid-append" in str(err)
+    assert "injected ftruncate failure" in str(err)
+    assert isinstance(err.__cause__, OSError)
+    assert "device error mid-append" in str(err.__cause__)
+    # The torn fragment left on disk is never readable as a valid history
+    # row — load_edits skips it and the good row is intact.
+    rows = edit_fact.load_edits(edits)
+    assert len(rows) == 1 and rows[0]["fact_id"] == "f0"
+
+
 def test_append_edit_survives_short_write(edit_fact, tmp_path, monkeypatch):
     """CR:176 (post-merge) — a short os.write must not truncate the history
     row; the loop retries until all bytes land, so load_edits reads it whole."""

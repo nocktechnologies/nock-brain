@@ -190,8 +190,20 @@ def append_edit(path: Path, row: "dict[str, Any]") -> None:
                         "short write to history sidecar "
                         f"({written}/{len(payload)} bytes)")
                 written += n
-        except OSError:
-            os.ftruncate(fd, pre_size)  # roll back the partial row
+        except OSError as write_err:
+            # The rollback itself can fail (CR:195): if ftruncate ALSO raises,
+            # the torn bytes stay on disk (load_edits skips the malformed
+            # line) and this row's revert target is gone. That must be loud,
+            # not silent — surface BOTH failures, chaining the original write
+            # error as the cause so neither masks the other.
+            try:
+                os.ftruncate(fd, pre_size)  # roll back the partial row
+            except OSError as rollback_err:
+                raise OSError(
+                    "history append failed AND rollback failed — "
+                    f"{path} may retain a torn row past byte {pre_size} "
+                    f"(append: {write_err}; rollback: {rollback_err})"
+                ) from write_err
             raise
     finally:
         os.close(fd)
