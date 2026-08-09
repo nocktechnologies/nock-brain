@@ -179,6 +179,36 @@ def audit(
     }
 
 
+# Blocking-condition constants — the vocabulary every exit path speaks.
+BLOCK_INVALID = "invalid_events"
+BLOCK_RESURRECTED = "resurrected"
+BLOCK_UNATTESTED = "unattested_superseded"
+
+
+def blocking_findings(report: "dict[str, Any]", *,
+                      strict_unattested: bool = False) -> "list[str]":
+    """The reasons an audit report must NOT exit success — the single place
+    the exit invariant lives.
+
+    Every consumer (verify-facts, backfill, and any future one) routes its
+    success/failure decision through this instead of hand-rolling the check at
+    each exit, which is how three invalid_events gaps slipped past on three
+    exit paths in one PR. Resurrection and invalid (tampered/unverifiable)
+    events are ALWAYS blocking. Legacy unattested marks block only under
+    ``strict_unattested`` — they are a warn-by-default state, not tampering.
+
+    Returns an ordered list of blocking reason keys (empty == clean).
+    """
+    findings: "list[str]" = []
+    if report.get(BLOCK_INVALID):
+        findings.append(BLOCK_INVALID)
+    if report.get(BLOCK_RESURRECTED):
+        findings.append(BLOCK_RESURRECTED)
+    if strict_unattested and report.get(BLOCK_UNATTESTED):
+        findings.append(BLOCK_UNATTESTED)
+    return findings
+
+
 def resolve_signing_key() -> "SigningKey | None":
     """The store's signing key, or None when unavailable (mark-only mode).
 
