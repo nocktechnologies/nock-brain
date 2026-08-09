@@ -79,6 +79,43 @@ def load_degradations(path: Path | None, *, now: Any = None,
             "recent_24h": recent, "last_at": last_at}
 
 
+def contradiction_queue_health(path: Path | None, *, max_age_h: float = 26.0,
+                               now: Any = None) -> dict[str, Any]:
+    """Freshness of the nightly contradiction queue.
+
+    The F2 failure mode: the schedule fires, the artifact never appears, and
+    nothing alarms — the queue just quietly stays absent or ages out. This
+    turns that silence into numbers: exists, age_hours, and stale (missing or
+    older than one nightly cycle + slack)."""
+    from datetime import datetime, timezone
+
+    exists = bool(path and path.exists())
+    age_h = None
+    generated_at = ""
+    if exists:
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(doc, dict):  # a malformed artifact must not crash health
+                generated_at = str(doc.get("generated_at", ""))
+        except (OSError, json.JSONDecodeError):
+            pass
+        now = now or datetime.now(timezone.utc)
+        try:
+            stamp = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            age_h = (now - stamp).total_seconds() / 3600.0
+        except ValueError:
+            age_h = None
+    # Negative age = the artifact claims to be from the FUTURE (host-clock
+    # disagreement in the just-written direction) — suspicious, never "fresh".
+    stale = (not exists) or age_h is None or age_h < 0 or age_h > max_age_h
+    return {"path": str(path) if path else "", "exists": exists,
+            "generated_at": generated_at,
+            "age_hours": round(age_h, 1) if age_h is not None else None,
+            "max_age_hours": max_age_h, "stale": stale}
+
+
 def malformed_facts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     bad = []
     for fact in facts:
@@ -161,6 +198,8 @@ def build_report(
     scan_roots: list[Path] | None = None,
     degradations_path: Path | None = None,
     degradation_threshold: int = 3,
+    contradictions_path: Path | None = None,
+    contradictions_max_age_h: float = 26.0,
 ) -> dict[str, Any]:
     events, malformed_event_lines = load_events(events_path)
     facts = load_json(facts_path, [])
@@ -208,6 +247,9 @@ def build_report(
     # N recent degraded reads = fleet memory silently blind on every recall.
     degradations["flagged"] = degradations["recent_24h"] >= degradation_threshold
     report["recall_degradations"] = degradations
+    if contradictions_path is not None:
+        report["contradiction_queue"] = contradiction_queue_health(
+            contradictions_path, max_age_h=contradictions_max_age_h)
     return report
 
 
@@ -238,6 +280,25 @@ def render_text(report: dict[str, Any]) -> str:
         lines.append(
             f"- Recall degradations (24h): {degradations.get('recent_24h', 0)}"
         )
+    queue = report.get("contradiction_queue")
+    if queue is not None:
+        if queue["stale"]:
+            if not queue["exists"]:
+                reason = "missing"
+            elif queue["age_hours"] is None:
+                reason = "unreadable generated_at"
+            elif queue["age_hours"] < 0:
+                reason = f"future-dated ({queue['age_hours']}h)"
+            else:
+                reason = f"age {queue['age_hours']}h > {queue['max_age_hours']}h"
+            lines.append(
+                f"- CONTRADICTION QUEUE STALE: {reason} "
+                "— the nightly is firing without producing output"
+            )
+        else:
+            lines.append(
+                f"- Contradiction queue: fresh ({queue['age_hours']}h old)"
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -254,13 +315,30 @@ def run(argv: list[str] | None = None) -> int:
                         help="recall-degradations.jsonl (default: next to --facts)")
     parser.add_argument("--degradation-threshold", type=int, default=3,
                         help="recent degraded reads that flag RECALL DEGRADED")
+    parser.add_argument("--expect-contradictions", action="store_true",
+                        help="flag when the nightly contradiction queue is "
+                             "missing or older than --contradictions-max-age-h")
+    parser.add_argument("--contradictions", type=Path, default=None,
+                        help="contradiction-candidates.json (default: "
+                             "<facts dir>/review/contradiction-candidates.json)")
+    parser.add_argument("--contradictions-max-age-h", type=float, default=26.0)
     args = parser.parse_args(argv)
+    import math
+    if not math.isfinite(args.contradictions_max_age_h) \
+            or args.contradictions_max_age_h <= 0:
+        parser.error("--contradictions-max-age-h must be a finite positive number")
 
     degradations = args.degradations or args.facts.parent / "recall-degradations.jsonl"
+    contradictions = None
+    if args.expect_contradictions:
+        contradictions = args.contradictions or (
+            args.facts.parent / "review" / "contradiction-candidates.json")
     report = build_report(args.events, args.facts, args.notes_dir, args.stats,
                           args.env_file, args.scan_root,
                           degradations_path=degradations,
-                          degradation_threshold=args.degradation_threshold)
+                          degradation_threshold=args.degradation_threshold,
+                          contradictions_path=contradictions,
+                          contradictions_max_age_h=args.contradictions_max_age_h)
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:

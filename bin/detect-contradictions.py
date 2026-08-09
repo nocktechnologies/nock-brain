@@ -88,6 +88,7 @@ def find_candidates(
     max_overlap: float = DEFAULT_MAX_OVERLAP,
     max_pairs: int = DEFAULT_MAX_PAIRS,
     kinds: "tuple[str, ...]" = DEFAULT_KINDS,
+    stats: "dict | None" = None,
 ) -> "list[dict]":
     """Pair live facts that share topic but are not near-duplicates.
 
@@ -127,6 +128,9 @@ def find_candidates(
     candidates.sort(
         key=lambda c: (-c["overlap"], str(c["earlier"].get("id", "")), str(c["later"].get("id", "")))
     )
+    if stats is not None:
+        stats["dropped_pairs"] = max(0, len(candidates) - max_pairs)
+        stats["max_pairs"] = max_pairs
     if len(candidates) > max_pairs:
         dropped = len(candidates) - max_pairs
         print(
@@ -163,15 +167,22 @@ def make_claude_judge(model: str = DEFAULT_LLM_MODEL,
     return _judge
 
 
-def classify(candidates: "list[dict]", judge=None) -> "list[dict]":
+def classify(candidates: "list[dict]", judge=None,
+             llm_top: "int | None" = None) -> "list[dict]":
     """Turn candidate pairs into review rows.
 
     Without a judge every pair is ``unreviewed`` (structural evidence only).
     With a judge: yes -> confirmed when the date gap is >=1 day, else
     borderline (same-date convention); no -> dropped; unclear, unparseable, or
-    a failed call -> borderline."""
+    a failed call -> borderline.
+
+    ``llm_top`` bounds the judge to the strongest N candidates (they arrive
+    sorted by overlap); the rest classify structurally as unreviewed rather
+    than being dropped. Without a bound, a large store means hundreds of
+    sequential claude -p calls and the nightly can never finish — the F2
+    silent-death mode."""
     rows: "list[dict]" = []
-    for c in candidates:
+    for index, c in enumerate(candidates):
         earlier, later = c["earlier"], c["later"]
         row = {
             "earlier_id": earlier.get("id", ""),
@@ -191,7 +202,8 @@ def classify(candidates: "list[dict]", judge=None) -> "list[dict]":
                 f"({later.get('source_date', 'undated')})'"
             ),
         }
-        if judge is None:
+        judged = judge is not None and (llm_top is None or index < llm_top)
+        if not judged:
             row["classification"] = "unreviewed"
             row["verdict_source"] = "structural"
         else:
@@ -210,7 +222,9 @@ def classify(candidates: "list[dict]", judge=None) -> "list[dict]":
     return rows
 
 
-def write_queue(rows: "list[dict]", queue_dir: Path, *, llm: bool) -> None:
+def write_queue(rows: "list[dict]", queue_dir: Path, *, llm: bool,
+                llm_top: "int | None" = None,
+                stats: "dict | None" = None) -> None:
     generated_at = datetime.now(timezone.utc).isoformat()
     counts = {"confirmed": 0, "borderline": 0, "unreviewed": 0}
     for row in rows:
@@ -218,6 +232,9 @@ def write_queue(rows: "list[dict]", queue_dir: Path, *, llm: bool) -> None:
     doc = {
         "generated_at": generated_at,
         "llm": llm,
+        "llm_top": llm_top,
+        "max_pairs": stats.get("max_pairs") if stats else None,
+        "dropped_pairs": stats.get("dropped_pairs", 0) if stats else 0,
         "candidate_count": len(rows),
         "counts": counts,
         "candidates": rows,
@@ -261,6 +278,10 @@ def main() -> None:
     parser.add_argument("--max-pairs", type=int, default=DEFAULT_MAX_PAIRS)
     parser.add_argument("--llm", action="store_true",
                         help="judge candidates with Haiku via claude -p (subscription path)")
+    parser.add_argument("--llm-top", type=int, default=25,
+                        help="judge only the strongest N candidates with the "
+                             "LLM (bounds nightly runtime); rest stay "
+                             "structural. 0 = judge all")
     parser.add_argument("--model", default=DEFAULT_LLM_MODEL)
     parser.add_argument("--timeout", type=float, default=DEFAULT_LLM_TIMEOUT)
     args = parser.parse_args()
@@ -277,18 +298,23 @@ def main() -> None:
 
     kinds = tuple(k.strip() for k in args.kinds.split(",") if k.strip())
     facts = store.load_facts()
+    stats: dict = {}
     candidates = find_candidates(
         facts,
         min_overlap=args.min_overlap,
         max_overlap=args.max_overlap,
         max_pairs=args.max_pairs,
         kinds=kinds,
+        stats=stats,
     )
+    if args.llm_top < 0:
+        parser.error("--llm-top must be >= 0 (0 = judge all)")
     judge = make_claude_judge(args.model, args.timeout) if args.llm else None
-    rows = classify(candidates, judge=judge)
+    llm_top = None if (not args.llm or args.llm_top == 0) else args.llm_top
+    rows = classify(candidates, judge=judge, llm_top=llm_top)
 
     queue_dir = args.queue_dir or args.facts.parent / "review"
-    write_queue(rows, queue_dir, llm=args.llm)
+    write_queue(rows, queue_dir, llm=args.llm, llm_top=llm_top, stats=stats)
     counts = {"confirmed": 0, "borderline": 0, "unreviewed": 0}
     for row in rows:
         counts[row["classification"]] += 1

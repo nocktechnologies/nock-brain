@@ -80,3 +80,78 @@ def test_health_without_log_is_clean(nockbrain_health, tmp_path):
     )
     assert report["recall_degradations"]["flagged"] is False
     assert report["recall_degradations"]["total"] == 0
+
+
+# ── F2: contradiction-queue freshness (silence made visible) ─────────────────
+def _queue_file(tmp_path, generated_at):
+    import pathlib
+    review = tmp_path / "review"; review.mkdir(exist_ok=True)
+    p = review / "contradiction-candidates.json"
+    p.write_text(json.dumps({"generated_at": generated_at, "candidates": []}))
+    return p
+
+
+def test_fresh_queue_not_stale(nockbrain_health, tmp_path):
+    now = datetime.now(timezone.utc)
+    p = _queue_file(tmp_path, (now - timedelta(hours=5)).isoformat())
+    q = nockbrain_health.contradiction_queue_health(p)
+    assert q["stale"] is False
+    assert 4 < q["age_hours"] < 6
+
+
+def test_old_queue_is_stale(nockbrain_health, tmp_path):
+    now = datetime.now(timezone.utc)
+    p = _queue_file(tmp_path, (now - timedelta(hours=50)).isoformat())
+    q = nockbrain_health.contradiction_queue_health(p)
+    assert q["stale"] is True
+
+
+def test_missing_queue_is_stale(nockbrain_health, tmp_path):
+    q = nockbrain_health.contradiction_queue_health(
+        tmp_path / "review" / "contradiction-candidates.json")
+    assert q["exists"] is False and q["stale"] is True
+
+
+def test_garbage_timestamp_is_stale(nockbrain_health, tmp_path):
+    p = _queue_file(tmp_path, "not-a-date")
+    assert nockbrain_health.contradiction_queue_health(p)["stale"] is True
+
+
+def test_report_renders_stale_flag(nockbrain_health, tmp_path):
+    (tmp_path / "facts.json").write_text("[]")
+    report = nockbrain_health.build_report(
+        facts_path=tmp_path / "facts.json",
+        degradations_path=tmp_path / "recall-degradations.jsonl",
+        contradictions_path=tmp_path / "review" / "contradiction-candidates.json",
+    )
+    text = nockbrain_health.render_text(report)
+    assert "CONTRADICTION QUEUE STALE" in text
+
+
+def test_future_dated_queue_is_stale_not_fresh(nockbrain_health, tmp_path):
+    """B1: a queue stamped LATER than now (host-clock skew in the just-written
+    direction) must never read fresh — that's the exact silence F2 surfaces."""
+    future = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
+    p = _queue_file(tmp_path, future)
+    q = nockbrain_health.contradiction_queue_health(p)
+    assert q["stale"] is True
+
+
+def test_non_dict_queue_doc_does_not_crash(nockbrain_health, tmp_path):
+    """B2: a malformed artifact (JSON list/str/null) must degrade to stale,
+    never crash the health checker."""
+    review = tmp_path / "review"; review.mkdir(exist_ok=True)
+    p = review / "contradiction-candidates.json"
+    for payload in ('["a-list"]', '"a-string"', 'null'):
+        p.write_text(payload)
+        q = nockbrain_health.contradiction_queue_health(p)
+        assert q["stale"] is True, payload
+
+
+def test_max_age_validation_rejects_nonfinite(nockbrain_health, tmp_path, capsys):
+    import pytest
+    (tmp_path / "facts.json").write_text("[]")
+    for bad in ("inf", "nan", "0", "-5"):
+        with pytest.raises(SystemExit):
+            nockbrain_health.run(["--facts", str(tmp_path / "facts.json"),
+                                  "--contradictions-max-age-h", bad])
