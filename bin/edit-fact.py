@@ -280,6 +280,18 @@ def _revert(args, store, facts: "list[dict]", edits_path: Path, key) -> None:
         sys.exit(1)
 
     current = str(fact.get("content", ""))
+    # Already at the restore target? A prior revert's store write landed but its
+    # audit row may not have (CR:302 — store-first leaves that window). Treat it
+    # as done: backfill the missing revert row if absent, and no-op the store.
+    # This makes revert idempotent and self-healing rather than refusing the
+    # retry as an out-of-band change.
+    if _sha256(current) == last.get("old_sha256") and last.get("op") != "revert":
+        row = build_edit_row(fid, "human", current, prior)
+        row["op"] = "revert"
+        append_edit(edits_path, row)
+        print(f"{fid} is already at the reverted content; recorded the missing "
+              "revert row (no store change).")
+        return
     # The store may have been changed out-of-band since the last recorded edit
     # (a direct write, a distill rebuild). Reverting then would restore stale
     # content OVER an unexpected current — silent data loss. Only revert when

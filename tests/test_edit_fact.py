@@ -403,3 +403,41 @@ def test_failed_revert_is_retryable(edit_fact, sign_lib, tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["edit-fact.py", "--revert", "f1", "--facts", str(store)])
     edit_fact.main()
     assert json.loads(store.read_text())[0]["content"] == "value alpha here"
+
+
+def test_revert_self_heals_missing_audit_row(edit_fact, sign_lib, tmp_path, monkeypatch):
+    """CR:302 — if a revert's store write lands but the audit append fails, a
+    retry must RECOGNIZE the fact is already reverted, backfill the missing
+    row, and no-op the store — not refuse as an out-of-band change."""
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps([_fact("f1", "value alpha here")]))
+    edits = tmp_path / "fact-edits.jsonl"
+    import sys
+    # edit alpha -> beta
+    monkeypatch.setattr(sys, "argv",
+                        ["edit-fact.py", "f1", "--replace", "alpha", "--with", "beta",
+                         "--actor", "agent", "--facts", str(store)])
+    edit_fact.main()
+
+    # Simulate: store write landed (content -> alpha) but the audit append was lost.
+    facts = json.loads(store.read_text())
+    facts[0]["content"] = "value alpha here"
+    # re-sign so the store stays verifiable
+    import _sign
+    _sign.sign_fact(facts[0], key, facts_by_id={"f1": facts[0]})
+    store.write_text(json.dumps(facts))
+    # (no revert row written — the lost-append state)
+    rows_before = [json.loads(l) for l in edits.read_text().splitlines()]
+    assert not any(r.get("op") == "revert" for r in rows_before)
+
+    # Retry the revert: should self-heal, not refuse.
+    monkeypatch.setattr(sys, "argv", ["edit-fact.py", "--revert", "f1", "--facts", str(store)])
+    edit_fact.main()
+
+    assert json.loads(store.read_text())[0]["content"] == "value alpha here"  # unchanged
+    rows_after = [json.loads(l) for l in edits.read_text().splitlines()]
+    assert any(r.get("op") == "revert" for r in rows_after)  # audit row backfilled
