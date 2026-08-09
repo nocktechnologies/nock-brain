@@ -487,8 +487,12 @@ def test_append_edit_failed_rollback_surfaces_both_errors(edit_fact, tmp_path,
     calls = {"n": 0}
     def flaky_write(fd, data):
         calls["n"] += 1
-        if calls["n"] == 1 and len(data) > 3:
-            return real_write(fd, data[:3])   # partial progress
+        if calls["n"] == 1 and len(data) > 1:
+            # CR's REAL torn-tail case: everything but the trailing LF lands,
+            # so the fragment left behind by the FAILED rollback is VALID
+            # JSON minus only its newline — LF termination, not JSON
+            # parsing, is what must keep it out of loaded history.
+            return real_write(fd, data[:-1])
         raise OSError("device error mid-append")  # then fail
     def broken_truncate(fd, size):
         raise OSError("injected ftruncate failure")
