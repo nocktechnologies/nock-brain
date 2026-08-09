@@ -441,3 +441,109 @@ def test_revert_self_heals_missing_audit_row(edit_fact, sign_lib, tmp_path, monk
     assert json.loads(store.read_text())[0]["content"] == "value alpha here"  # unchanged
     rows_after = [json.loads(l) for l in edits.read_text().splitlines()]
     assert any(r.get("op") == "revert" for r in rows_after)  # audit row backfilled
+
+
+def test_append_edit_rolls_back_partial_row_on_failure(edit_fact, tmp_path, monkeypatch):
+    """CR:188 — a write that makes partial progress then FAILS must leave NO
+    torn row: ftruncate rolls back to the pre-append size (all-or-nothing)."""
+    import os, json as _json
+    edits = tmp_path / "fact-edits.jsonl"
+    # seed one good complete row first
+    edit_fact.append_edit(edits, {"fact_id": "f0", "actor": "human",
+                                  "old_excerpt": "x", "new_excerpt": "y"})
+    good_bytes = edits.read_bytes()
+    real_write = os.write
+    calls = {"n": 0}
+    def flaky_write(fd, data):
+        calls["n"] += 1
+        if calls["n"] == 1 and len(data) > 1:
+            # CR's REAL torn-tail case: everything but the trailing LF lands,
+            # so the fragment on disk is VALID JSON minus only its newline —
+            # exactly what a splitlines()-based load_edits would resurrect.
+            return real_write(fd, data[:-1])
+        raise OSError("device error mid-append")  # then fail
+    monkeypatch.setattr(edit_fact.os, "write", flaky_write)
+    with pytest.raises(OSError):
+        edit_fact.append_edit(edits, {"fact_id": "f1", "actor": "agent",
+                                      "old_excerpt": "a", "new_excerpt": "b"})
+    # the file is exactly the pre-append content — no torn f1 row
+    assert edits.read_bytes() == good_bytes
+    rows = [_json.loads(l) for l in edits.read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["fact_id"] == "f0"
+
+
+def test_append_edit_failed_rollback_surfaces_both_errors(edit_fact, tmp_path,
+                                                          monkeypatch):
+    """CR:195 — partial write, then the ftruncate rollback ALSO fails: the
+    torn bytes can't be removed, so the failure must be loud. The raised
+    error names the rollback failure and chains the original write failure
+    as its cause, and the torn fragment is never readable as valid history."""
+    import os
+    edits = tmp_path / "fact-edits.jsonl"
+    # seed one good complete row first
+    edit_fact.append_edit(edits, {"fact_id": "f0", "actor": "human",
+                                  "old_excerpt": "x", "new_excerpt": "y"})
+    real_write = os.write
+    calls = {"n": 0}
+    def flaky_write(fd, data):
+        calls["n"] += 1
+        if calls["n"] == 1 and len(data) > 3:
+            return real_write(fd, data[:3])   # partial progress
+        raise OSError("device error mid-append")  # then fail
+    def broken_truncate(fd, size):
+        raise OSError("injected ftruncate failure")
+    monkeypatch.setattr(edit_fact.os, "write", flaky_write)
+    monkeypatch.setattr(edit_fact.os, "ftruncate", broken_truncate)
+    with pytest.raises(OSError) as excinfo:
+        edit_fact.append_edit(edits, {"fact_id": "f1", "actor": "agent",
+                                      "old_excerpt": "a", "new_excerpt": "b"})
+    # BOTH failures surface: the raised error names each, and the original
+    # write failure is the explicit cause (raise ... from write_err).
+    err = excinfo.value
+    assert "device error mid-append" in str(err)
+    assert "injected ftruncate failure" in str(err)
+    assert isinstance(err.__cause__, OSError)
+    assert "device error mid-append" in str(err.__cause__)
+    # The torn fragment on disk IS valid JSON (minus only its LF) — but it
+    # is not LF-terminated, so load_edits treats it as uncommitted and the
+    # good row is intact. This is the CR:206 phantom-row regression guard.
+    rows = edit_fact.load_edits(edits)
+    assert len(rows) == 1 and rows[0]["fact_id"] == "f0"
+
+
+def test_load_edits_ignores_unterminated_tail(edit_fact, tmp_path):
+    """CR:206 — a torn tail that is VALID JSON minus only its trailing LF must
+    never load as a committed history row. splitlines() did exactly that;
+    only LF-terminated records count. An LF-terminated file still loads every
+    row (the trailing "" split element is never treated as data)."""
+    import json
+    edits = tmp_path / "fact-edits.jsonl"
+    edit_fact.append_edit(edits, {"fact_id": "f0", "actor": "human",
+                                  "old_excerpt": "x", "new_excerpt": "y"})
+    torn = json.dumps({"fact_id": "phantom", "actor": "agent",
+                       "old_excerpt": "a", "new_excerpt": "b"},
+                      ensure_ascii=False).encode("utf-8")
+    with open(edits, "ab") as fh:
+        fh.write(torn)  # no trailing LF — an uncommitted torn tail
+    rows = edit_fact.load_edits(edits)
+    assert [r["fact_id"] for r in rows] == ["f0"]
+
+
+def test_append_edit_survives_short_write(edit_fact, tmp_path, monkeypatch):
+    """CR:176 (post-merge) — a short os.write must not truncate the history
+    row; the loop retries until all bytes land, so load_edits reads it whole."""
+    import os
+    edits = tmp_path / "fact-edits.jsonl"
+    real_write = os.write
+    state = {"first": True}
+    def short_write(fd, data):
+        # write only the first byte once, then behave normally
+        if state["first"] and len(data) > 1:
+            state["first"] = False
+            return real_write(fd, data[:1])
+        return real_write(fd, data)
+    monkeypatch.setattr(edit_fact.os, "write", short_write)
+    edit_fact.append_edit(edits, {"fact_id": "f1", "actor": "agent",
+                                  "old_excerpt": "a", "new_excerpt": "b"})
+    rows = [__import__("json").loads(l) for l in edits.read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["fact_id"] == "f1"  # not truncated

@@ -173,19 +173,61 @@ def append_edit(path: Path, row: "dict[str, Any]") -> None:
         # Tighten BEFORE writing: an already-existing file created with broad
         # perms would otherwise expose the new excerpts between write and chmod.
         os.fchmod(fd, FILE_MODE)
-        os.write(fd, (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8"))
+        # All-or-nothing append: a single os.write can short-write, and a
+        # write that makes partial progress then fails would leave a truncated
+        # JSONL row that load_edits skips — losing a --revert restore target
+        # (the history-loss class we harden everywhere). Loop until every byte
+        # lands; on ANY failure, ftruncate back to the pre-append size so the
+        # row is either fully present or fully absent, never torn.
+        pre_size = os.fstat(fd).st_size
+        payload = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
+        written = 0
+        try:
+            while written < len(payload):
+                n = os.write(fd, payload[written:])
+                if n <= 0:
+                    raise OSError(
+                        "short write to history sidecar "
+                        f"({written}/{len(payload)} bytes)")
+                written += n
+        except OSError as write_err:
+            # The rollback itself can fail (CR:195): if ftruncate ALSO raises,
+            # the torn bytes stay on disk and this row's revert target is
+            # gone. The torn tail can even be VALID JSON (payload minus only
+            # its trailing LF) — load_edits ignores it not because it is
+            # malformed but because only LF-terminated records count as
+            # committed rows. That must be loud,
+            # not silent — surface BOTH failures, chaining the original write
+            # error as the cause so neither masks the other.
+            try:
+                os.ftruncate(fd, pre_size)  # roll back the partial row
+            except OSError as rollback_err:
+                raise OSError(
+                    "history append failed AND rollback failed — "
+                    f"{path} may retain a torn row past byte {pre_size} "
+                    f"(append: {write_err}; rollback: {rollback_err})"
+                ) from write_err
+            raise
     finally:
         os.close(fd)
 
 
 def load_edits(path: Path) -> "list[dict[str, Any]]":
     """Load the append-only history, skipping any malformed line (lenient by
-    design — one bad row must never hide the rest of a fact's history)."""
+    design — one bad row must never hide the rest of a fact's history).
+
+    Only LF-terminated records count as committed rows: append_edit always
+    writes ``json + "\n"``, and its failed-rollback path can leave a torn
+    tail of ``payload[:-1]`` — the row minus ONLY its trailing LF, which is
+    still VALID JSON. splitlines() would resurrect that tail as a phantom
+    history row, corrupting the --revert target; ``split("\n")[:-1]`` drops
+    the unterminated tail instead (an LF-terminated file yields a final ""
+    element, so no committed row is ever lost)."""
     path = Path(path)
     if not path.exists():
         return []
     rows: "list[dict[str, Any]]" = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").split("\n")[:-1]:
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
