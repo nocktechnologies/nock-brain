@@ -317,3 +317,67 @@ def test_llm_top_none_enriches_every_cluster(synthesize):
     )
     assert len(calls) == 2  # no cap -> both clusters enriched
     assert all(i["synthesized_by"] == "llm" for i in ins)
+
+
+# ── F3: shape-gate chat artifacts + sign insights ────────────────────────────
+def test_is_valid_lesson_rejects_the_live_pollution(synthesize):
+    # the actual polluted entry from the store
+    assert synthesize.is_valid_lesson(
+        "Once you share those, I'll return the single-sentence lesson and the "
+        "yes/no/unclear verdict with reasoning.") is False
+
+
+def test_is_valid_lesson_rejects_chat_and_meta_shapes(synthesize):
+    bad = [
+        "", "too short",
+        "What did we decide about pricing?",              # question
+        "Please share the two facts and I'll compare them.",
+        "As an AI, I don't have access to that.",
+        "I need the earlier and later facts to judge.",
+        "Let me know which files you want me to read.",
+        "Here are the facts you asked for: ...",
+    ]
+    for t in bad:
+        assert synthesize.is_valid_lesson(t) is False, t
+
+
+def test_is_valid_lesson_accepts_real_lessons(synthesize):
+    good = [
+        "Always run the recall suite before flipping the semantic tier on.",
+        "Merges to main require green CI and a CodeRabbit pass first.",
+        "Never store secrets in facts; the ingest scrubber redacts KEY=value dumps.",
+    ]
+    for t in good:
+        assert synthesize.is_valid_lesson(t) is True, t
+
+
+def test_synthesizer_falls_back_when_llm_returns_chat_shape(synthesize, monkeypatch):
+    monkeypatch.setattr(synthesize, "_call_claude",
+                        lambda p, m, t: "Once you share those, I'll return the lesson.")
+    synth = synthesize.make_claude_synthesizer()
+    cluster = [{"id": "a", "kind": "decision", "content": "x"},
+               {"id": "b", "kind": "decision", "content": "y"}]
+    assert synth(cluster, "heuristic fallback") == ""  # rejected -> heuristic
+
+
+def test_sign_insights_roundtrip_verifies(synthesize, sign_lib, tmp_path, monkeypatch):
+    key = sign_lib.load_or_create_key(
+        tmp_path / "signing-key", tmp_path / "signing-key.pub", alg=sign_lib.ALG_HMAC)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "signing-key"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "signing-key.pub"))
+    insights = [{"id": "ins_1", "kind": "insight", "content": "a durable lesson",
+                 "evidence": []}]
+    signed = synthesize._sign_insights(insights)
+    assert signed is not None
+    result = sign_lib.verify_facts(signed, key)
+    assert result["valid"] == 1 and result["tampered"] == 0
+    # tamper the content -> verify fails
+    signed[0]["content"] = "poisoned"
+    assert sign_lib.verify_facts(signed, key)["tampered"] == 1
+
+
+def test_sign_insights_no_key_returns_none(synthesize, monkeypatch, tmp_path):
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "missing"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "missing.pub"))
+    assert synthesize._sign_insights([{"id": "i", "kind": "insight",
+                                       "content": "x", "evidence": []}]) is None
