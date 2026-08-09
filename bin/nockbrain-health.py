@@ -16,6 +16,7 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from _facts import REQUIRED_FACT_FIELDS
+from _projection import load_receipts, last_status
 
 SENSITIVE_ENV_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
 SENSITIVE_ENV_NAMES = {"API_KEY", "TOKEN", "SECRET", "PASSWORD"}
@@ -116,6 +117,27 @@ def contradiction_queue_health(path: Path | None, *, max_age_h: float = 26.0,
             "max_age_hours": max_age_h, "stale": stale}
 
 
+def load_projection_receipts(path: Path | None) -> dict[str, Any]:
+    """Aggregate projection readback receipts (projection-receipts.jsonl).
+
+    Every derived/projection write leaves a receipt that is "applied" only when
+    the file read back with the intended content hash; a stale or failed write
+    leaves "ambiguous". This rolls the ledger up to the NEWEST receipt per
+    artifact and lists any whose latest write did not read back clean — the
+    silent-projection-failure class that froze Mira's memory for three days."""
+    receipts = load_receipts(path) if path else []
+    artifacts = sorted({str(r.get("artifact_path", "")) for r in receipts
+                        if r.get("artifact_path")})
+    ambiguous = [a for a in artifacts if last_status(receipts, a) == "ambiguous"]
+    last_at = ""
+    for receipt in receipts:
+        stamp = str(receipt.get("at", ""))
+        if stamp > last_at:
+            last_at = stamp
+    return {"path": str(path) if path else "", "total": len(receipts),
+            "artifacts": len(artifacts), "ambiguous": ambiguous, "last_at": last_at}
+
+
 def malformed_facts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     bad = []
     for fact in facts:
@@ -200,6 +222,7 @@ def build_report(
     degradation_threshold: int = 3,
     contradictions_path: Path | None = None,
     contradictions_max_age_h: float = 26.0,
+    receipts_path: Path | None = None,
 ) -> dict[str, Any]:
     events, malformed_event_lines = load_events(events_path)
     facts = load_json(facts_path, [])
@@ -250,6 +273,14 @@ def build_report(
     if contradictions_path is not None:
         report["contradiction_queue"] = contradiction_queue_health(
             contradictions_path, max_age_h=contradictions_max_age_h)
+    # Projection-receipts check is default off (opt in with --projection-receipts):
+    # only surfaces when a caller points it at the ledger, mirroring the
+    # recall-degradations wiring.
+    if receipts_path is not None:
+        projection = load_projection_receipts(receipts_path)
+        # A stale/failed projection is a silent outage until someone reads it.
+        projection["flagged"] = bool(projection["ambiguous"])
+        report["projection_receipts"] = projection
     return report
 
 
@@ -299,6 +330,19 @@ def render_text(report: dict[str, Any]) -> str:
             lines.append(
                 f"- Contradiction queue: fresh ({queue['age_hours']}h old)"
             )
+    projection = report.get("projection_receipts")
+    if projection is not None:
+        if projection.get("flagged"):
+            lines.append(
+                f"- PROJECTION AMBIGUOUS: {len(projection['ambiguous'])} artifact(s) "
+                f"failed readback (last {projection['last_at']}): "
+                + ", ".join(projection["ambiguous"])
+            )
+        else:
+            lines.append(
+                f"- Projection receipts: {projection['total']} row(s), "
+                f"{projection['artifacts']} artifact(s) applied"
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -322,6 +366,8 @@ def run(argv: list[str] | None = None) -> int:
                         help="contradiction-candidates.json (default: "
                              "<facts dir>/review/contradiction-candidates.json)")
     parser.add_argument("--contradictions-max-age-h", type=float, default=26.0)
+    parser.add_argument("--projection-receipts", type=Path, default=None,
+                        help="projection-receipts.jsonl to flag ambiguous readbacks (default off)")
     args = parser.parse_args(argv)
     import math
     if not math.isfinite(args.contradictions_max_age_h) \
@@ -338,7 +384,8 @@ def run(argv: list[str] | None = None) -> int:
                           degradations_path=degradations,
                           degradation_threshold=args.degradation_threshold,
                           contradictions_path=contradictions,
-                          contradictions_max_age_h=args.contradictions_max_age_h)
+                          contradictions_max_age_h=args.contradictions_max_age_h,
+                          receipts_path=args.projection_receipts)
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
