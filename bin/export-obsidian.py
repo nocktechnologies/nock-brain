@@ -19,6 +19,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,53 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-from _store import secure_copyfile, secure_mkdir, secure_write_text
+from _store import (
+    secure_copyfile,
+    secure_copyfile_verified,
+    secure_mkdir,
+    secure_write_json,
+    secure_write_text,
+    secure_write_text_verified,
+)
+
+
+# --- S4: projection receipts with verified readback -------------------------
+# When a receipt list is active, every artifact write is read back and
+# hash-verified; unverifiable writes surface as state "ambiguous" in the
+# receipt instead of being silently assumed ok. With receipts=None the
+# historical (plain) writers run, byte-identical to the pre-S4 export.
+
+
+def _emit_text(path: Path, text: str, receipts: list[dict[str, Any]] | None) -> None:
+    if receipts is None:
+        secure_write_text(path, text, encoding="utf-8")
+    else:
+        receipts.append(secure_write_text_verified(path, text, encoding="utf-8"))
+
+
+def _emit_copy(src: Path, dst: Path, receipts: list[dict[str, Any]] | None) -> None:
+    if receipts is None:
+        secure_copyfile(src, dst)
+    else:
+        receipts.append(secure_copyfile_verified(src, dst))
+
+
+def write_projection_receipt(path: Path, artifacts: list[dict[str, Any]]) -> bool:
+    """Write the S4 projection receipt (plain writer — never self-verifying).
+
+    Returns True when every artifact passed readback verification.
+    """
+    all_verified = all(artifact.get("verified") for artifact in artifacts)
+    secure_write_json(
+        path,
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "artifacts": artifacts,
+            "all_verified": all_verified,
+        },
+        indent=2,
+    )
+    return all_verified
 
 
 # --- Known-entity registry -------------------------------------------------
@@ -193,6 +240,7 @@ def write_fact_notes(
     facts: list[dict[str, Any]],
     vault: Path,
     fact_links: dict[str, dict[str, list[str]]],
+    receipts: list[dict[str, Any]] | None = None,
 ) -> list[Path]:
     facts_dir = vault / "facts"
     secure_mkdir(facts_dir)
@@ -201,7 +249,7 @@ def write_fact_notes(
         name = fact_note_name(fact)
         path = facts_dir / name
         links = fact_links.get(fact.get("id", ""), {})
-        secure_write_text(path, fact_note(fact, links), encoding="utf-8")
+        _emit_text(path, fact_note(fact, links), receipts)
         written.append(path)
     return written
 
@@ -281,6 +329,7 @@ def write_entity_notes(
     entities: dict[str, dict[str, Any]],
     vault: Path,
     session_links: dict[str, list[str]],
+    receipts: list[dict[str, Any]] | None = None,
 ) -> dict[str, int]:
     counts = {folder: 0 for folder in ENTITY_KIND_FOLDER.values()}
     # Pre-create folders so the vault structure is stable even with zero hits.
@@ -289,14 +338,16 @@ def write_entity_notes(
     for entity in entities.values():
         folder = ENTITY_KIND_FOLDER[entity["kind"]]
         path = vault / folder / f"{slugify(entity['name'])}.md"
-        secure_write_text(
-            path, entity_note(entity, session_links.get(entity["name"], [])), encoding="utf-8"
-        )
+        _emit_text(path, entity_note(entity, session_links.get(entity["name"], [])), receipts)
         counts[folder] += 1
     return counts
 
 
-def write_decision_notes(facts: list[dict[str, Any]], vault: Path) -> int:
+def write_decision_notes(
+    facts: list[dict[str, Any]],
+    vault: Path,
+    receipts: list[dict[str, Any]] | None = None,
+) -> int:
     """Emit a decisions/ folder: one note per decision/directive/correction fact."""
     decisions_dir = vault / "decisions"
     secure_mkdir(decisions_dir)
@@ -321,23 +372,27 @@ def write_decision_notes(facts: list[dict[str, Any]], vault: Path) -> int:
             "",
             "Tags: #decision " + f"#{slugify(str(kind))}",
         ]) + "\n"
-        secure_write_text(decisions_dir / f"{target}.md", text, encoding="utf-8")
+        _emit_text(decisions_dir / f"{target}.md", text, receipts)
         count += 1
     return count
 
 
-def copy_markdown_dir(src: Path | None, dst: Path) -> int:
+def copy_markdown_dir(
+    src: Path | None, dst: Path, receipts: list[dict[str, Any]] | None = None
+) -> int:
     secure_mkdir(dst)
     if not src or not src.exists():
         return 0
     count = 0
     for path in sorted(src.glob("*.md")):
-        secure_copyfile(path, dst / path.name)
+        _emit_copy(path, dst / path.name, receipts)
         count += 1
     return count
 
 
-def write_index(vault: Path, counts: dict[str, int]) -> None:
+def write_index(
+    vault: Path, counts: dict[str, int], receipts: list[dict[str, Any]] | None = None
+) -> None:
     lines = [
         "# NockBrain Vault",
         "",
@@ -365,7 +420,7 @@ def write_index(vault: Path, counts: dict[str, int]) -> None:
         "- [[concepts]]",
         "",
     ]
-    secure_write_text(vault / "index.md", "\n".join(lines), encoding="utf-8")
+    _emit_text(vault / "index.md", "\n".join(lines), receipts)
 
 
 def export_vault(
@@ -373,16 +428,17 @@ def export_vault(
     vault: Path,
     sessions: Path | None = None,
     review: Path | None = None,
+    receipts: list[dict[str, Any]] | None = None,
 ) -> dict[str, int]:
     secure_mkdir(vault)
     entities, fact_links = build_entity_index(facts)
     session_links = session_links_for_facts(facts)
 
-    fact_paths = write_fact_notes(facts, vault, fact_links)
-    session_count = copy_markdown_dir(sessions, vault / "sessions")
-    review_count = copy_markdown_dir(review, vault / "review")
-    entity_counts = write_entity_notes(entities, vault, session_links)
-    decision_count = write_decision_notes(facts, vault)
+    fact_paths = write_fact_notes(facts, vault, fact_links, receipts)
+    session_count = copy_markdown_dir(sessions, vault / "sessions", receipts)
+    review_count = copy_markdown_dir(review, vault / "review", receipts)
+    entity_counts = write_entity_notes(entities, vault, session_links, receipts)
+    decision_count = write_decision_notes(facts, vault, receipts)
 
     counts = {
         "facts": len(fact_paths),
@@ -391,7 +447,7 @@ def export_vault(
         "decisions": decision_count,
         **entity_counts,
     }
-    write_index(vault, counts)
+    write_index(vault, counts, receipts)
     return counts
 
 
@@ -401,14 +457,32 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--sessions", type=Path, default=None)
     parser.add_argument("--review", type=Path, default=None)
     parser.add_argument("--vault", type=Path, required=True)
+    parser.add_argument(
+        "--receipt",
+        type=Path,
+        default=None,
+        help="write a readback-verified projection receipt JSON here; "
+        "exits non-zero if any artifact cannot be verified",
+    )
     args = parser.parse_args(argv)
 
     if not args.facts.exists():
         print(f"Facts file not found: {args.facts}")
         return 1
 
-    counts = export_vault(load_facts(args.facts), args.vault, args.sessions, args.review)
+    receipts: list[dict[str, Any]] | None = None if args.receipt is None else []
+    counts = export_vault(load_facts(args.facts), args.vault, args.sessions, args.review, receipts)
     print(f"Wrote vault to {args.vault}: {counts}")
+
+    if receipts is not None:
+        all_verified = write_projection_receipt(args.receipt, receipts)
+        if not all_verified:
+            ambiguous = [r["path"] for r in receipts if not r.get("verified")]
+            print(
+                f"AMBIGUOUS: {len(ambiguous)} artifact(s) failed readback: {', '.join(ambiguous)}"
+            )
+            return 1
+        print(f"Receipt: {args.receipt} (all artifacts verified)")
     return 0
 
 

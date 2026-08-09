@@ -143,6 +143,11 @@ def storeback():
 
 
 @pytest.fixture(scope="session")
+def store_lib():
+    return _load("_store")
+
+
+@pytest.fixture(scope="session")
 def migrate_store():
     return _load("migrate-store")
 

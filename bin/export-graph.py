@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Export NockBrain facts as a Graphify-compatible conversation-memory graph."""
+# Deferred annotations keep this importable on Python 3.9 (stock macOS
+# /usr/bin/python3, which non-interactive shells resolve): PEP 604 unions
+# in signatures are a def-time TypeError before 3.10.
 from __future__ import annotations
 
 import argparse
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +17,12 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-from _store import secure_mkdir, secure_write_text
+from _store import (
+    secure_mkdir,
+    secure_write_json,
+    secure_write_text,
+    secure_write_text_verified,
+)
 
 STOPWORDS = {
     "about", "after", "also", "code", "fact", "fixed", "found", "from", "into",
@@ -83,10 +92,35 @@ def graph_from_facts(facts: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def write_projection_receipt(path: Path, artifacts: list[dict[str, Any]]) -> bool:
+    """Write the S4 projection receipt (plain writer — never self-verifying).
+
+    Returns True when every artifact passed readback verification.
+    """
+    all_verified = all(artifact.get("verified") for artifact in artifacts)
+    secure_write_json(
+        path,
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "artifacts": artifacts,
+            "all_verified": all_verified,
+        },
+        indent=2,
+    )
+    return all_verified
+
+
 def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Export a Graphify-compatible memory graph")
     parser.add_argument("--facts", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--receipt",
+        type=Path,
+        default=None,
+        help="write a readback-verified projection receipt JSON here; "
+        "exits non-zero if any artifact cannot be verified",
+    )
     args = parser.parse_args(argv)
 
     if not args.facts.exists():
@@ -94,9 +128,23 @@ def run(argv: list[str] | None = None) -> int:
         return 1
 
     graph = graph_from_facts(load_facts(args.facts))
+    payload = json.dumps(graph, indent=2, ensure_ascii=False)
     secure_mkdir(args.output.parent)
-    secure_write_text(args.output, json.dumps(graph, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    if args.receipt is None:
+        # No receipt requested: byte-identical to the historical export path.
+        secure_write_text(args.output, payload, encoding="utf-8")
+        print(f"Wrote graph with {len(graph['nodes'])} node(s) and {len(graph['edges'])} edge(s)")
+        return 0
+
+    artifacts = [secure_write_text_verified(args.output, payload, encoding="utf-8")]
+    all_verified = write_projection_receipt(args.receipt, artifacts)
     print(f"Wrote graph with {len(graph['nodes'])} node(s) and {len(graph['edges'])} edge(s)")
+    if not all_verified:
+        ambiguous = [a["path"] for a in artifacts if not a.get("verified")]
+        print(f"AMBIGUOUS: {len(ambiguous)} artifact(s) failed readback: {', '.join(ambiguous)}")
+        return 1
+    print(f"Receipt: {args.receipt} (all artifacts verified)")
     return 0
 
 
