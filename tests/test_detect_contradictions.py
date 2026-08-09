@@ -9,6 +9,8 @@ pairs are at most borderline."""
 import json
 import sys
 
+import pytest
+
 OLD_RULE = "Updates to Kevin go out as spoken audio clips only, no typed notes."
 NEW_RULE = "Updates to Kevin go out as both a spoken audio clip and a typed note."
 UNRELATED = "The staging database is rebuilt from the nightly snapshot."
@@ -265,3 +267,33 @@ def test_cli_llm_top_wired(detect_contradictions, tmp_path, monkeypatch):
     assert len(calls) == 3
     queue = json.loads((queue_dir / "contradiction-candidates.json").read_text())
     assert queue["llm_top"] == 3
+
+
+def test_negative_llm_top_is_an_error(detect_contradictions, tmp_path, monkeypatch):
+    import sys
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps(_pair_facts()))
+    monkeypatch.setattr(sys, "argv",
+                        ["detect-contradictions.py", "--facts", str(store),
+                         "--llm", "--llm-top", "-1"])
+    with pytest.raises(SystemExit):
+        detect_contradictions.main()
+
+
+def test_queue_doc_records_max_pairs_truncation(detect_contradictions, tmp_path, monkeypatch):
+    """The artifact must tell the whole truth: pairs dropped by --max-pairs are
+    recorded in the doc, not just whispered to stderr."""
+    base = "kevin update delivery rule for channel"
+    facts = [_fact(f"f{i}", f"{base} variant {i} extra token{i}",
+                   source_date=f"2026-06-{i + 1:02d}") for i in range(6)]
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps(facts))
+    queue_dir = tmp_path / "review"
+
+    _run_main(detect_contradictions, monkeypatch,
+              ["--facts", str(store), "--queue-dir", str(queue_dir),
+               "--max-pairs", "3"])
+
+    queue = json.loads((queue_dir / "contradiction-candidates.json").read_text())
+    assert queue["max_pairs"] == 3
+    assert queue["dropped_pairs"] > 0

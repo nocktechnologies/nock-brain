@@ -95,7 +95,8 @@ def contradiction_queue_health(path: Path | None, *, max_age_h: float = 26.0,
     if exists:
         try:
             doc = json.loads(path.read_text(encoding="utf-8"))
-            generated_at = str(doc.get("generated_at", ""))
+            if isinstance(doc, dict):  # a malformed artifact must not crash health
+                generated_at = str(doc.get("generated_at", ""))
         except (OSError, json.JSONDecodeError):
             pass
         now = now or datetime.now(timezone.utc)
@@ -106,7 +107,9 @@ def contradiction_queue_health(path: Path | None, *, max_age_h: float = 26.0,
             age_h = (now - stamp).total_seconds() / 3600.0
         except ValueError:
             age_h = None
-    stale = (not exists) or age_h is None or age_h > max_age_h
+    # Negative age = the artifact claims to be from the FUTURE (host-clock
+    # disagreement in the just-written direction) — suspicious, never "fresh".
+    stale = (not exists) or age_h is None or age_h < 0 or age_h > max_age_h
     return {"path": str(path) if path else "", "exists": exists,
             "generated_at": generated_at,
             "age_hours": round(age_h, 1) if age_h is not None else None,
@@ -280,11 +283,17 @@ def render_text(report: dict[str, Any]) -> str:
     queue = report.get("contradiction_queue")
     if queue is not None:
         if queue["stale"]:
+            if not queue["exists"]:
+                reason = "missing"
+            elif queue["age_hours"] is None:
+                reason = "unreadable generated_at"
+            elif queue["age_hours"] < 0:
+                reason = f"future-dated ({queue['age_hours']}h)"
+            else:
+                reason = f"age {queue['age_hours']}h > {queue['max_age_hours']}h"
             lines.append(
-                "- CONTRADICTION QUEUE STALE: "
-                + ("missing" if not queue["exists"]
-                   else f"age {queue['age_hours']}h > {queue['max_age_hours']}h")
-                + " — the nightly is firing without producing output"
+                f"- CONTRADICTION QUEUE STALE: {reason} "
+                "— the nightly is firing without producing output"
             )
         else:
             lines.append(
@@ -314,6 +323,10 @@ def run(argv: list[str] | None = None) -> int:
                              "<facts dir>/review/contradiction-candidates.json)")
     parser.add_argument("--contradictions-max-age-h", type=float, default=26.0)
     args = parser.parse_args(argv)
+    import math
+    if not math.isfinite(args.contradictions_max_age_h) \
+            or args.contradictions_max_age_h <= 0:
+        parser.error("--contradictions-max-age-h must be a finite positive number")
 
     degradations = args.degradations or args.facts.parent / "recall-degradations.jsonl"
     contradictions = None

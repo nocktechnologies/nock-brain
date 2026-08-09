@@ -88,6 +88,7 @@ def find_candidates(
     max_overlap: float = DEFAULT_MAX_OVERLAP,
     max_pairs: int = DEFAULT_MAX_PAIRS,
     kinds: "tuple[str, ...]" = DEFAULT_KINDS,
+    stats: "dict | None" = None,
 ) -> "list[dict]":
     """Pair live facts that share topic but are not near-duplicates.
 
@@ -127,6 +128,9 @@ def find_candidates(
     candidates.sort(
         key=lambda c: (-c["overlap"], str(c["earlier"].get("id", "")), str(c["later"].get("id", "")))
     )
+    if stats is not None:
+        stats["dropped_pairs"] = max(0, len(candidates) - max_pairs)
+        stats["max_pairs"] = max_pairs
     if len(candidates) > max_pairs:
         dropped = len(candidates) - max_pairs
         print(
@@ -219,7 +223,8 @@ def classify(candidates: "list[dict]", judge=None,
 
 
 def write_queue(rows: "list[dict]", queue_dir: Path, *, llm: bool,
-                llm_top: "int | None" = None) -> None:
+                llm_top: "int | None" = None,
+                stats: "dict | None" = None) -> None:
     generated_at = datetime.now(timezone.utc).isoformat()
     counts = {"confirmed": 0, "borderline": 0, "unreviewed": 0}
     for row in rows:
@@ -228,6 +233,8 @@ def write_queue(rows: "list[dict]", queue_dir: Path, *, llm: bool,
         "generated_at": generated_at,
         "llm": llm,
         "llm_top": llm_top,
+        "max_pairs": stats.get("max_pairs") if stats else None,
+        "dropped_pairs": stats.get("dropped_pairs", 0) if stats else 0,
         "candidate_count": len(rows),
         "counts": counts,
         "candidates": rows,
@@ -291,19 +298,23 @@ def main() -> None:
 
     kinds = tuple(k.strip() for k in args.kinds.split(",") if k.strip())
     facts = store.load_facts()
+    stats: dict = {}
     candidates = find_candidates(
         facts,
         min_overlap=args.min_overlap,
         max_overlap=args.max_overlap,
         max_pairs=args.max_pairs,
         kinds=kinds,
+        stats=stats,
     )
+    if args.llm_top < 0:
+        parser.error("--llm-top must be >= 0 (0 = judge all)")
     judge = make_claude_judge(args.model, args.timeout) if args.llm else None
-    llm_top = None if (not args.llm or args.llm_top == 0) else max(1, args.llm_top)
+    llm_top = None if (not args.llm or args.llm_top == 0) else args.llm_top
     rows = classify(candidates, judge=judge, llm_top=llm_top)
 
     queue_dir = args.queue_dir or args.facts.parent / "review"
-    write_queue(rows, queue_dir, llm=args.llm, llm_top=llm_top)
+    write_queue(rows, queue_dir, llm=args.llm, llm_top=llm_top, stats=stats)
     counts = {"confirmed": 0, "borderline": 0, "unreviewed": 0}
     for row in rows:
         counts[row["classification"]] += 1
