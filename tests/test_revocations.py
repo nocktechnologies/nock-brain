@@ -510,3 +510,46 @@ def test_backfill_refuses_on_invalid_sidecar_even_with_nothing_to_mint(
     with pytest.raises(SystemExit) as exc:
         bf.main()
     assert exc.value.code == 1
+
+
+# ── consolidated exit-condition pass (_revoke.blocking_findings) ─────────────
+# One predicate is the single source of truth for "must not exit success", so
+# a new exit path can't silently skip a condition (the class of bug that hit
+# three exit paths in one PR). This table enumerates it exhaustively.
+@pytest.mark.parametrize("report,strict,expected", [
+    # clean -> nothing blocks
+    ({"invalid_events": 0, "resurrected": [], "unattested_superseded": []}, False, []),
+    ({"invalid_events": 0, "resurrected": [], "unattested_superseded": []}, True, []),
+    # invalid always blocks, both modes
+    ({"invalid_events": 1, "resurrected": [], "unattested_superseded": []}, False, ["invalid_events"]),
+    ({"invalid_events": 2, "resurrected": [], "unattested_superseded": []}, True, ["invalid_events"]),
+    # resurrected always blocks, both modes
+    ({"invalid_events": 0, "resurrected": ["x"], "unattested_superseded": []}, False, ["resurrected"]),
+    ({"invalid_events": 0, "resurrected": ["x"], "unattested_superseded": []}, True, ["resurrected"]),
+    # unattested blocks ONLY under strict
+    ({"invalid_events": 0, "resurrected": [], "unattested_superseded": ["y"]}, False, []),
+    ({"invalid_events": 0, "resurrected": [], "unattested_superseded": ["y"]}, True, ["unattested_superseded"]),
+    # all three, strict -> ordered union
+    ({"invalid_events": 1, "resurrected": ["x"], "unattested_superseded": ["y"]}, True,
+     ["invalid_events", "resurrected", "unattested_superseded"]),
+    # all three, non-strict -> unattested omitted
+    ({"invalid_events": 1, "resurrected": ["x"], "unattested_superseded": ["y"]}, False,
+     ["invalid_events", "resurrected"]),
+])
+def test_blocking_findings_truth_table(revoke_lib, report, strict, expected):
+    assert revoke_lib.blocking_findings(report, strict_unattested=strict) == expected
+
+
+def test_blocking_findings_tolerates_missing_keys(revoke_lib):
+    assert revoke_lib.blocking_findings({}) == []
+    assert revoke_lib.blocking_findings({}, strict_unattested=True) == []
+
+
+def test_verify_and_backfill_route_through_the_predicate(revoke_lib):
+    """Guard against a future exit path hand-rolling the check: both CLIs must
+    import and use blocking_findings, not re-derive the invariant inline."""
+    import pathlib
+    bindir = pathlib.Path(__file__).resolve().parent.parent / "bin"
+    for name in ("verify-facts.py", "backfill-revocations.py"):
+        src = (bindir / name).read_text()
+        assert "blocking_findings" in src, f"{name} must route through the predicate"

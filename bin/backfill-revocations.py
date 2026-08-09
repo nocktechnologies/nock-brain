@@ -28,6 +28,7 @@ from _revoke import (  # noqa: E402
     REVOCATIONS_FILENAME,
     append_revocation,
     audit,
+    blocking_findings,
     load_revocations,
     resolve_signing_key,
     sign_revocation,
@@ -61,13 +62,14 @@ def main() -> None:
     report = audit(facts, load_revocations(sidecar), key)
     unattested = report["unattested_superseded"]
 
-    # invalid_events is the S1 tampering/exit-4 class: a corrupt or tampered
-    # sidecar must fail LOUDLY even when there is nothing to mint — otherwise
-    # a poisoned sidecar with no unattested facts would exit success.
-    if report["invalid_events"]:
-        print(f"Sidecar has {report['invalid_events']} INVALID revocation "
-              "event(s) (tampered or wrong key) — refusing to proceed; "
-              "investigate before trusting strict verification.",
+    # Single exit invariant (see _revoke.blocking_findings): a poisoned sidecar
+    # — invalid or resurrected — fails LOUDLY on EVERY path out of this tool,
+    # including the "nothing to mint" early return, so it can never exit
+    # success. unattested is expected here (it's what we mint), not blocking.
+    blocking = blocking_findings(report)
+    if blocking:
+        print(f"Sidecar not clean before backfill ({', '.join(blocking)}) — "
+              "refusing to proceed; investigate before trusting verification.",
               file=sys.stderr)
         sys.exit(1)
 
@@ -104,10 +106,9 @@ def main() -> None:
           f"{after['invalid_events']} invalid, "
           f"{len(after['unattested_superseded'])} unattested, "
           f"{len(after['resurrected'])} resurrected.")
-    # invalid_events is the S1 tampering/exit-4 class: a corrupt or tampered
-    # sidecar must fail the backfill loudly, not slip through as success.
-    if (after["resurrected"] or after["unattested_superseded"]
-            or after["invalid_events"]):
+    # Post-backfill the store must be fully clean — every legacy mark should
+    # now be attested — so unattested is blocking too here (strict).
+    if blocking_findings(after, strict_unattested=True):
         print("WARNING: post-backfill audit is not clean — investigate before "
               "trusting strict verification.", file=sys.stderr)
         sys.exit(1)
