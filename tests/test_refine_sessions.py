@@ -43,6 +43,7 @@ def test_events_to_facts_preserves_v1_fields_and_evidence(refine_sessions):
     assert fact["source_date"] == "2026-06-11"
     assert fact["source_file"] == "session.jsonl"
     assert fact["session"] == "s1"
+    assert fact["machine"]  # host provenance tag stamped on the JSONL path too
     assert "budget-capped recall" in fact["content"]
     assert fact["evidence"] == [
         {

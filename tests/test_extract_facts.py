@@ -39,6 +39,19 @@ def test_classify_bullet_skips_operational_noise(extract_facts):
     assert extract_facts.classify_bullet("Claude Code sent via Telegram an update") is None
 
 
+def test_machine_tag_stamped_and_overridable(extract_facts, tmp_path, monkeypatch):
+    # Cross-machine provenance: every minted fact carries a machine tag;
+    # NOCKBRAIN_MACHINE pins a stable fleet name over the raw hostname.
+    monkeypatch.setenv("NOCKBRAIN_MACHINE", "fleet-test")
+    assert extract_facts.machine_tag() == "fleet-test"
+    md = tmp_path / "2026-06-01.md"
+    md.write_text("## Session 10:00\n- [DECISION] Kevin chose Postgres\n")
+    facts = extract_facts.parse_file(md)
+    assert facts and all(f["machine"] == "fleet-test" for f in facts)
+    monkeypatch.delenv("NOCKBRAIN_MACHINE")
+    assert extract_facts.machine_tag()  # falls back to short hostname, never empty
+
+
 def test_make_id_deterministic(extract_facts):
     a = extract_facts.make_id("same content", "2026-06-01")
     b = extract_facts.make_id("same content", "2026-06-01")

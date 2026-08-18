@@ -25,6 +25,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 import sys
 from datetime import datetime, timezone
@@ -110,6 +111,17 @@ def make_id(content: str, date: str) -> str:
     return hashlib.sha256(f"{date}:{content[:200]}".encode()).hexdigest()[:12]
 
 
+def machine_tag() -> str:
+    """Short host tag stamped on every fact for cross-machine provenance
+    (step 1.5 of the 2026-08-18 memory consolidation; Mira msg 59545).
+
+    Provenance only, never identity: make_id stays content+date derived so the
+    same fact minted on two machines still collapses to one on store merge.
+    NOCKBRAIN_MACHINE overrides for stable fleet names (e.g. "fleet-02").
+    """
+    return os.environ.get("NOCKBRAIN_MACHINE") or platform.node().split(".")[0].lower()
+
+
 def classify_bullet(text: str) -> tuple[str, float] | None:
     for skip in SKIP_PATTERNS:
         if re.search(skip, text, re.IGNORECASE):
@@ -174,6 +186,7 @@ def parse_file(filepath: Path, since_date: str | None = None) -> list[dict]:
                     "source_date": file_date,
                     "session": current_session,
                     "session_anchor": current_anchor[:200] if current_anchor else "",
+                    "machine": machine_tag(),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     # Same anchor shape as refine-sessions.py's event_evidence;
                     # the markdown path has no evidence-event layer, so no id.
