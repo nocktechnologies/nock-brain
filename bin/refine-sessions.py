@@ -127,6 +127,7 @@ def fact_from_event(event: dict[str, Any], extract_facts=None) -> dict[str, Any]
         "source_date": source_date,
         "session": event.get("source", {}).get("session_id", ""),
         "session_anchor": event_anchor(event),
+        "machine": extract_facts.machine_tag(),
         "created_at": created_at,
         "last_seen_at": created_at,
         "subject": event.get("actor", ""),

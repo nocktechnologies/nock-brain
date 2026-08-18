@@ -110,6 +110,34 @@ def make_id(content: str, date: str) -> str:
     return hashlib.sha256(f"{date}:{content[:200]}".encode()).hexdigest()[:12]
 
 
+# The machine provenance enum (step 1.5, Mira msgs 59545/59574). CLOSED set,
+# deliberately: free-form host strings drift ("mac-kevin" vs "macbook") and
+# poison cross-machine reconciliation. Adding a machine = adding a line here,
+# in a PR, on purpose.
+KNOWN_MACHINES = {"mac-kevin", "fleet-02"}
+
+
+def machine_tag() -> str:
+    """Enum-validated host tag stamped on every fact for cross-machine
+    provenance. Requires NOCKBRAIN_MACHINE in KNOWN_MACHINES — unset or unknown
+    raises, so extraction on an unregistered machine fails LOUDLY at mint time
+    instead of silently minting drifting provenance (the failure mode behind
+    the 2026-08 store divergence). Recall never calls this; only the distiller
+    paths do.
+
+    Provenance only, never identity: make_id stays content+date derived so the
+    same fact minted on two machines still collapses to one on store merge.
+    """
+    tag = os.environ.get("NOCKBRAIN_MACHINE", "")
+    if tag not in KNOWN_MACHINES:
+        raise ValueError(
+            f"NOCKBRAIN_MACHINE={tag!r} is not a registered machine "
+            f"(known: {sorted(KNOWN_MACHINES)}). Set it in the distiller's "
+            "environment; add new machines to KNOWN_MACHINES via PR."
+        )
+    return tag
+
+
 def classify_bullet(text: str) -> tuple[str, float] | None:
     for skip in SKIP_PATTERNS:
         if re.search(skip, text, re.IGNORECASE):
@@ -174,6 +202,7 @@ def parse_file(filepath: Path, since_date: str | None = None) -> list[dict]:
                     "source_date": file_date,
                     "session": current_session,
                     "session_anchor": current_anchor[:200] if current_anchor else "",
+                    "machine": machine_tag(),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     # Same anchor shape as refine-sessions.py's event_evidence;
                     # the markdown path has no evidence-event layer, so no id.
