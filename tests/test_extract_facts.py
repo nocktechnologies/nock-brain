@@ -39,17 +39,24 @@ def test_classify_bullet_skips_operational_noise(extract_facts):
     assert extract_facts.classify_bullet("Claude Code sent via Telegram an update") is None
 
 
-def test_machine_tag_stamped_and_overridable(extract_facts, tmp_path, monkeypatch):
-    # Cross-machine provenance: every minted fact carries a machine tag;
-    # NOCKBRAIN_MACHINE pins a stable fleet name over the raw hostname.
-    monkeypatch.setenv("NOCKBRAIN_MACHINE", "fleet-test")
-    assert extract_facts.machine_tag() == "fleet-test"
+def test_machine_tag_enum_enforced(extract_facts, tmp_path, monkeypatch):
+    # Cross-machine provenance is a CLOSED enum: registered names stamp every
+    # minted fact; unset or free-form host strings fail loudly at mint time.
+    import pytest
+
+    monkeypatch.setenv("NOCKBRAIN_MACHINE", "fleet-02")
+    assert extract_facts.machine_tag() == "fleet-02"
     md = tmp_path / "2026-06-01.md"
     md.write_text("## Session 10:00\n- [DECISION] Kevin chose Postgres\n")
     facts = extract_facts.parse_file(md)
-    assert facts and all(f["machine"] == "fleet-test" for f in facts)
+    assert facts and all(f["machine"] == "fleet-02" for f in facts)
+
+    monkeypatch.setenv("NOCKBRAIN_MACHINE", "macbook")  # unregistered free-form
+    with pytest.raises(ValueError, match="not a registered machine"):
+        extract_facts.machine_tag()
     monkeypatch.delenv("NOCKBRAIN_MACHINE")
-    assert extract_facts.machine_tag()  # falls back to short hostname, never empty
+    with pytest.raises(ValueError, match="not a registered machine"):
+        extract_facts.machine_tag()
 
 
 def test_make_id_deterministic(extract_facts):

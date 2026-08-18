@@ -25,6 +25,9 @@ def _isolate_signing_key_env(monkeypatch, tmp_path):
     missing = tmp_path / "no-such-signing-key"
     monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(missing))
     monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(missing) + ".pub")
+    # machine_tag() requires a registered NOCKBRAIN_MACHINE (closed enum) and
+    # raises otherwise; give every test a valid one so mint paths work.
+    monkeypatch.setenv("NOCKBRAIN_MACHINE", "mac-kevin")
 
 
 @pytest.fixture(scope="session")
