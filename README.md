@@ -9,7 +9,7 @@ Built by [Nock Technologies](https://nocktechnologies.com) from patterns running
 Most Claude Code sessions start from zero. nock-brain fixes that.
 
 1. **Ingest** — Converts raw Claude Code JSONL into sanitized evidence events, including `tool_use.input` payloads, with source anchors.
-2. **Extract** — Parses markdown transcripts or sanitized events into structured facts: decisions, directives, corrections, architecture changes, merges, bug fixes.
+2. **Extract** — Parses markdown transcripts or sanitized events into structured facts: decisions, directives, corrections, architecture changes, bug fixes. Fleet-activity events (merges, status ticks, dispatches) are recognized and dropped — they are a transaction log, not knowledge.
 3. **Synthesize** — Periodically reviews the fact store, clusters recurring same-kind facts, and writes consolidated *insights* ("you've corrected this 3 times") to a higher tier. This is the consolidation layer that keeps the store from becoming a giant unreadable log. Heuristic and dependency-free by default; structured so an LLM-backed synthesizer can drop in.
 4. **Review** — Suggests promotion candidates for durable rules or skills, but never rewrites agent behavior without human approval.
 5. **Export** — Writes derived Obsidian vault and Graphify-compatible graph views for audit and exploration.
