@@ -16,10 +16,21 @@ def test_classify_bullet_inferred_natural_language(extract_facts):
     assert res[0] == "correction"
 
 
-def test_classify_bullet_merge_pattern(extract_facts):
-    res = extract_facts.classify_bullet("merged PR #42 to main after review")
-    assert res is not None
-    assert res[0] == "merge"
+def test_classify_bullet_drops_event_kinds(extract_facts):
+    # merge/status/dispatch are fleet activity, not knowledge — dropped at
+    # classification (both tagged and inferred forms), never written.
+    assert extract_facts.classify_bullet("merged PR #42 to main after review") is None
+    assert extract_facts.classify_bullet("[MERGE] shipped PR #7 to main") is None
+    assert extract_facts.classify_bullet("[STATUS] fleet idle, 0 PRs open") is None
+    assert extract_facts.classify_bullet("[DISPATCH] sent Mason on N575") is None
+    assert extract_facts.classify_bullet("dispatched a builder agent on N12") is None
+
+
+def test_classify_bullet_event_tag_never_reclassified(extract_facts):
+    # A tagged [MERGE] bullet whose text also matches a non-event inferred
+    # pattern must be dropped, not fall through to the other kind.
+    res = extract_facts.classify_bullet("[MERGE] schema migration changed and merged PR #9")
+    assert res is None
 
 
 def test_classify_bullet_skips_operational_noise(extract_facts):
