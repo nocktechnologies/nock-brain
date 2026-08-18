@@ -419,3 +419,50 @@ def test_replace_flag_allows_intentional_shrink(rebuild_store, tmp_path, monkeyp
         merge=False,
     )
     assert result["promote"] is not None  # promoted, no shrink-abort
+
+
+def test_contradiction_scan_flags_but_never_blocks(rebuild_store, tmp_path, monkeypatch):
+    """Write-discipline policy: the contradiction scan surfaces a count in the
+    build result (and summary) but a scanner failure must not kill the build."""
+    staging = tmp_path / "staging"
+
+    def fake_run_cli(script, args):
+        if script == "ingest-jsonl.py":
+            return _FakeProc('{"stats": {}}')
+        if script == "detect-contradictions.py":
+            return _FakeProc("3 candidate(s): 1 confirmed, 2 borderline, 0 unreviewed.")
+        if script == "nockbrain-health.py":
+            return _FakeProc(json.dumps(_healthy_report()))
+        if script == "refine-sessions.py":
+            fp = Path(args[args.index("--facts") + 1])
+            fp.write_text(json.dumps([{"id": "A", "content": "x"}]), encoding="utf-8")
+        return _FakeProc("")
+
+    monkeypatch.setattr(rebuild_store, "_run_cli", fake_run_cli)
+    build = rebuild_store.build_staging(
+        staging, [Path("x.jsonl")], key_path=tmp_path / "k", pub_path=tmp_path / "k.pub"
+    )
+    assert build["contradictions"] == 3
+
+    # Scanner crash: degrade to -1 (summary prints "scan FAILED"), build survives.
+    def failing_run_cli(script, args):
+        if script == "detect-contradictions.py":
+            raise rebuild_store.RebuildError("boom")
+        return fake_run_cli(script, args)
+
+    monkeypatch.setattr(rebuild_store, "_run_cli", failing_run_cli)
+    build = rebuild_store.build_staging(
+        tmp_path / "staging2", [Path("x.jsonl")], key_path=tmp_path / "k", pub_path=tmp_path / "k.pub"
+    )
+    assert build["contradictions"] == -1
+
+    summary = rebuild_store.render_summary(
+        transcripts=1, health=_healthy_report(), dry_run=True,
+        promote_result=None, contradictions=-1,
+    )
+    assert "scan FAILED" in summary
+    ok = rebuild_store.render_summary(
+        transcripts=1, health=_healthy_report(), dry_run=True,
+        promote_result=None, contradictions=3,
+    )
+    assert "Contradiction candidates (review queue): 3" in ok
