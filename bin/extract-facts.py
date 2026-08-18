@@ -58,6 +58,14 @@ TAGGED_PATTERNS = [
 ]
 
 AUTHORITY_KINDS = {"decision", "directive", "correction"}
+
+# Fleet-activity events, not durable knowledge. Measured 2026-08-18 they were
+# 58% of the Mac store (merge 651 + status 579 + dispatch 218 of 2,509) with
+# zero recall value — a transaction log wearing a fact-base costume. Dropped at
+# classification so neither the markdown nor the JSONL path can mint them; a
+# bullet explicitly tagged [MERGE] is still recognized first and then dropped,
+# never reclassified by fall-through into another kind.
+EVENT_KINDS = {"merge", "status", "dispatch"}
 USER_AUTHORITY_RE = re.compile(r"\b(?:user|kevin|founder|owner)\b", re.IGNORECASE)
 
 INFERRED_PATTERNS = [
@@ -108,10 +116,10 @@ def classify_bullet(text: str) -> tuple[str, float] | None:
             return None
     for pattern, kind, conf in TAGGED_PATTERNS:
         if re.search(pattern, text):
-            return kind, conf
+            return None if kind in EVENT_KINDS else (kind, conf)
     for pattern, kind, conf in INFERRED_PATTERNS:
         if re.search(pattern, text, re.IGNORECASE):
-            return kind, conf
+            return None if kind in EVENT_KINDS else (kind, conf)
     return None
 
 
