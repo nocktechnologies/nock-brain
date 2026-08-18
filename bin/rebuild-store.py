@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess  # nosec B404 - only invokes trusted sibling bin/ CLIs (no shell, no untrusted input)
 import sys
@@ -253,6 +254,23 @@ def build_staging(
         ["--facts", str(sp["facts"]), "--output", str(sp["review"])],
     )
 
+    # 2c. Contradiction scan -> staging review queue. FLAG + SURFACE, never
+    # block, never mutate (write-discipline policy, Mira msgs 59574/59579):
+    # candidates land in the promoted review queue as proposed supersede
+    # commands, and the count is surfaced in the rebuild summary. A scanner
+    # crash must not kill the rebuild — it degrades to contradictions=-1
+    # (printed as "scan failed"), which is loud without being a gate.
+    contradiction_count = -1
+    try:
+        contra_proc = _run_cli(
+            "detect-contradictions.py",
+            ["--facts", str(sp["facts"]), "--queue-dir", str(sp["review"])],
+        )
+        m = re.search(r"(\d+)\s+candidate", contra_proc.stdout)
+        contradiction_count = int(m.group(1)) if m else 0
+    except RebuildError as exc:
+        print(f"[rebuild] contradiction scan failed (non-blocking): {exc}", file=sys.stderr)
+
     # 3. Health on staging (JSON). This is the gate input.
     health_proc = _run_cli(
         "nockbrain-health.py",
@@ -268,6 +286,7 @@ def build_staging(
     return {
         "health": health,
         "ingest_stats": ingest_stats,
+        "contradictions": contradiction_count,
         "stage_paths": sp,
         "key_path": key_path,
         "pub_path": pub_path,
@@ -397,6 +416,7 @@ def render_summary(
     health: dict[str, Any],
     dry_run: bool,
     promote_result: dict[str, Any] | None,
+    contradictions: int = -1,
 ) -> str:
     findings = health.get("privacy", {}).get("live_secret_findings", 0)
     lines = [
@@ -405,6 +425,10 @@ def render_summary(
         f"- Facts (staging): {health.get('facts', {}).get('count', 0)}",
         f"- Notes (staging): {health.get('notes', {}).get('count', 0)}",
         f"- Live-secret findings: {findings}",
+        # Flagged, never blocking: candidates + proposed supersede commands
+        # land in review/contradiction-candidates.{json,md}. -1 = scan failed.
+        f"- Contradiction candidates (review queue): "
+        f"{'scan FAILED' if contradictions < 0 else contradictions}",
         f"- Recall ready: {str(health.get('recall_ready', False)).lower()}",
     ]
     if dry_run:
@@ -509,6 +533,7 @@ def rebuild(
             health=build["health"],
             dry_run=dry_run,
             promote_result=promote_result,
+            contradictions=build.get("contradictions", -1),
         )
         return {
             "health": build["health"],
