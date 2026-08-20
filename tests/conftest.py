@@ -168,3 +168,8 @@ def store_parity():
 @pytest.fixture(scope="session")
 def projection_lib():
     return _load("_projection")
+
+
+@pytest.fixture(scope="session")
+def apply_promotion_batch():
+    return _load("apply-promotion-batch")
