@@ -634,15 +634,50 @@ def sign_fact(
     return fact
 
 
-def sign_facts(facts: list[dict[str, Any]], key: SigningKey) -> list[dict[str, Any]]:
-    """Sign every fact in a store.
+def is_v2_claim_fact(fact: dict[str, Any]) -> bool:
+    """True iff ``fact`` carries claim authority that MUST be signed with the v2
+    contract (``sign_claim_fact_v2``) rather than the legacy ``sign_fact``.
 
-    Two-pass so parent hashes commit to the parents' CORE (independent of
-    signing order). Parent hashing uses ``canonical_fact_hash`` which does not
-    depend on the attestation, so a single pass over a stable map is correct."""
+    Two signals, either sufficient:
+
+    - its attestation already declares the v2 schema, or
+    - it carries any of the v2-only authority fields.
+
+    This is the routing predicate: ``verify_fact``'s legacy branch rejects
+    (``TAMPERED``) any fact that carries a v2-only authority field (see
+    ``_CLAIM_V2_ONLY_AUTHORITY_FIELDS.intersection(fact)`` there), so bulk-signing
+    such a fact with ``sign_fact`` drops it out of recall. Callers that sign a
+    whole store (``sign_facts``, ``sign-facts.py``) and ``edit-fact.py`` share
+    this one predicate so the rule lives in exactly one place."""
+    if not isinstance(fact, dict):
+        return False
+    att = fact.get("attestation")
+    if isinstance(att, dict) and att.get("schema") == CLAIM_ATTESTATION_V2_SCHEMA:
+        return True
+    return bool(_CLAIM_V2_ONLY_AUTHORITY_FIELDS.intersection(fact))
+
+
+def sign_facts(facts: list[dict[str, Any]], key: SigningKey) -> list[dict[str, Any]]:
+    """Sign every fact in a store, routing each to the correct contract.
+
+    A fact carrying v2 claim authority (``is_v2_claim_fact``) is signed with
+    ``sign_claim_fact_v2``; every other fact keeps the legacy ``sign_fact``
+    scheme. This matters because ``verify_fact`` rejects a v2-authority fact that
+    was legacy-signed as ``TAMPERED`` — bulk-signing the whole store with
+    ``sign_fact`` would silently drop those facts from recall. A malformed
+    v2-authority fact makes ``sign_claim_fact_v2`` raise ``ClaimAttestationError``
+    here (fail-closed) rather than mint a fact that will not verify.
+
+    Legacy signing is single-pass over a stable id map: parent hashing uses
+    ``canonical_fact_hash`` which does not depend on the attestation, so the
+    parents' CORE is committed independent of signing order."""
     facts_by_id = {f.get("id", ""): f for f in facts if isinstance(f, dict)}
     for fact in facts:
-        if isinstance(fact, dict):
+        if not isinstance(fact, dict):
+            continue
+        if is_v2_claim_fact(fact):
+            sign_claim_fact_v2(fact, key)
+        else:
             sign_fact(fact, key, facts_by_id=facts_by_id)
     return facts
 
