@@ -11,6 +11,7 @@ touch the live store or the live signing key.
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import sys
 from pathlib import Path
@@ -95,6 +96,21 @@ def test_sign_facts_routes_v2_authority_fact_to_valid(sign, tmp_path):
     assert sign.verify_fact(fact, key) == sign.VALID
 
 
+# (a2) A malformed v2-authority fact aborts sign_facts fail-closed. It carries
+#      v2 authority (so it routes to sign_claim_fact_v2) but is structurally
+#      invalid for claim_payload_v2, so the bulk signer raises rather than
+#      minting a fact that would verify TAMPERED.
+def test_sign_facts_raises_on_malformed_v2_authority_fact(sign, tmp_path):
+    key = sign.load_or_create_key(tmp_path / "key", tmp_path / "key.pub")
+    fact = make_v2_claim_fact()
+    # Non-canonical source_time keeps the v2 authority routing but breaks
+    # claim_payload_v2.
+    fact["source_time"] = "2026-08-04"
+
+    with pytest.raises(sign.ClaimAttestationError):
+        sign.sign_facts([fact], key)
+
+
 # (b) A legacy-signed v2 fact, fed to the corrective script's core function,
 #     comes out VALID with the v2 schema.
 def test_corrective_resign_repairs_legacy_signed_v2_fact(sign, resign, tmp_path):
@@ -105,6 +121,8 @@ def test_corrective_resign_repairs_legacy_signed_v2_fact(sign, resign, tmp_path)
     sign.sign_fact(fact, key)
     assert "schema" not in fact["attestation"]
     assert sign.verify_fact(fact, key) == sign.TAMPERED
+    # Snapshot the complete fact before repair; only the attestation may change.
+    before = copy.deepcopy(fact)
 
     summary = resign.resign_wrongly_signed_facts([fact], key)
 
@@ -116,6 +134,13 @@ def test_corrective_resign_repairs_legacy_signed_v2_fact(sign, resign, tmp_path)
     # Independently re-verify with the sign module.
     assert fact["attestation"]["schema"] == sign.CLAIM_ATTESTATION_V2_SCHEMA
     assert sign.verify_fact(fact, key) == sign.VALID
+    # The repair touches ONLY the attestation — every other field of the fact
+    # (content, evidence, revision ids, authority fields) is byte-for-byte the
+    # same as before the corrective re-sign.
+    assert fact["attestation"] != before["attestation"]
+    after_core = {k: v for k, v in fact.items() if k != "attestation"}
+    before_core = {k: v for k, v in before.items() if k != "attestation"}
+    assert after_core == before_core
 
 
 # (c) A plain, non-v2 fact still round-trips VALID through sign_facts() with the

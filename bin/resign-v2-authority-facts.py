@@ -222,7 +222,15 @@ def run(argv: "list[str] | None" = None) -> int:
         print(f"{args.facts}: expected a JSON list of facts", file=sys.stderr)
         return 1
 
-    key = load_or_create_key(args.key, args.pub)
+    try:
+        key = load_or_create_key(args.key, args.pub, create=False)
+    except FileNotFoundError as exc:
+        print(
+            f"Signing key not found ({exc}); refusing to mint a new key for a "
+            "corrective re-sign. Point --key/--pub at the existing signing key.",
+            file=sys.stderr,
+        )
+        return 1
     summary = resign_wrongly_signed_facts(data, key)
     _print_summary(summary, applied=args.apply)
 
