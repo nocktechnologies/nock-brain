@@ -408,6 +408,39 @@ def promote(build: dict[str, Any], store_dir: Path) -> dict[str, Any]:
     return {"stamp": stamp, "backed_up": backed_up, "promoted": promoted}
 
 
+def refresh_semantic_sidecar(store_dir: Path) -> str:
+    """Post-promote semantic-sidecar sync via embed-facts.py (incremental:
+    embeds only facts missing from the sidecar, prunes deleted ones).
+
+    The dense tier is optional and recall degrades to flat BM25 without it,
+    so this NEVER gates or fails the rebuild — it exists because the sidecar
+    otherwise ages silently (it sat frozen 2026-07-11 -> 08-19 with nothing
+    feeding it while recall kept fusing stale vectors). Runs under the store's
+    venv python (numpy/tokenizers live there, not in the system interpreter).
+    Returns a short status string surfaced in the rebuild summary.
+    """
+    if not (store_dir / "semantic-on").exists():
+        return "off (no semantic-on)"
+    venv_py = store_dir / "venv" / "bin" / "python"
+    interpreter = str(venv_py) if venv_py.exists() else sys.executable
+    cmd = [
+        interpreter, str(BIN_DIR / "embed-facts.py"),
+        "--facts", str(store_dir / "facts.json"),
+        "--sidecar", str(store_dir / "embeddings.npz"),
+        "--model-dir", str(store_dir / "model"),
+    ]
+    try:
+        # nosec B603 - fixed interpreter + sibling bin/ script, no untrusted input
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=False)  # nosec B603
+    except subprocess.TimeoutExpired:
+        return "FAILED (timeout after 1800s)"
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return f"FAILED ({detail[-1][:80] if detail else f'exit {proc.returncode}'})"
+    m = re.search(r"embedded (\d+), kept (\d+), pruned (\d+)", proc.stdout)
+    return f"embedded {m.group(1)}, pruned {m.group(3)}" if m else "ok"
+
+
 # --- summary / schedule ----------------------------------------------------
 
 def render_summary(
@@ -417,6 +450,7 @@ def render_summary(
     dry_run: bool,
     promote_result: dict[str, Any] | None,
     contradictions: int = -1,
+    semantic: str = "off (no semantic-on)",
 ) -> str:
     findings = health.get("privacy", {}).get("live_secret_findings", 0)
     lines = [
@@ -429,6 +463,9 @@ def render_summary(
         # land in review/contradiction-candidates.{json,md}. -1 = scan failed.
         f"- Contradiction candidates (review queue): "
         f"{'scan FAILED' if contradictions < 0 else contradictions}",
+        # Dense-tier freshness: sync runs post-promote, never gates. "FAILED"
+        # here means recall is silently on flat BM25 — loud, not fatal.
+        f"- Semantic sidecar: {semantic}",
         f"- Recall ready: {str(health.get('recall_ready', False)).lower()}",
     ]
     if dry_run:
@@ -525,8 +562,10 @@ def rebuild(
         sign_and_export(build)
 
         promote_result = None
+        semantic_status = "skipped (dry run)"
         if not dry_run:
             promote_result = promote(build, store_dir)
+            semantic_status = refresh_semantic_sidecar(store_dir)
 
         summary = render_summary(
             transcripts=len(transcripts),
@@ -534,6 +573,7 @@ def rebuild(
             dry_run=dry_run,
             promote_result=promote_result,
             contradictions=build.get("contradictions", -1),
+            semantic=semantic_status,
         )
         return {
             "health": build["health"],
