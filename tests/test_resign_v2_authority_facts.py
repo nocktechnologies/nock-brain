@@ -202,3 +202,21 @@ def test_corrective_resign_is_idempotent(sign, resign, tmp_path):
     assert second["legacy_untouched"] == 1
     assert sign.verify_fact(legacy_v2, key) == sign.VALID
     assert sign.verify_fact(plain, key) == sign.VALID
+
+
+# Load-only: a corrective re-sign against an absent signing key must abort — it
+# must NEVER mint a fresh key and sign the store with it. The CLI exits non-zero
+# and writes no key/pub file.
+def test_resign_cli_refuses_to_mint_a_missing_signing_key(resign, tmp_path):
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]", encoding="utf-8")
+    key = tmp_path / "absent-key"
+    pub = tmp_path / "absent-key.pub"
+
+    rc = resign.run(
+        ["--facts", str(facts), "--key", str(key), "--pub", str(pub), "--apply"]
+    )
+
+    assert rc == 1
+    assert not key.exists()
+    assert not pub.exists()
