@@ -499,3 +499,31 @@ def test_semantic_sidecar_refresh_never_blocks(rebuild_store, tmp_path, monkeypa
         promote_result=None, contradictions=0, semantic="embedded 39, pruned 12",
     )
     assert "- Semantic sidecar: embedded 39, pruned 12" in summary
+
+
+def test_insights_refresh_regenerates_and_never_blocks(rebuild_store, tmp_path, monkeypatch):
+    """Insights are a derived view: post-promote regeneration keeps them in
+    lockstep with the store; failure degrades to a summary string."""
+    store = tmp_path / "store"
+    store.mkdir()
+
+    def fake_run_cli(script, args):
+        assert script == "synthesize.py"
+        out = Path(args[args.index("--output") + 1])
+        out.write_text(json.dumps([{"id": "i1"}, {"id": "i2"}]), encoding="utf-8")
+
+    monkeypatch.setattr(rebuild_store, "_run_cli", fake_run_cli)
+    assert rebuild_store.refresh_insights(store) == "regenerated 2"
+
+    def failing_run_cli(script, args):
+        raise rebuild_store.RebuildError("synthesize exploded")
+
+    monkeypatch.setattr(rebuild_store, "_run_cli", failing_run_cli)
+    assert rebuild_store.refresh_insights(store).startswith("FAILED")
+
+    summary = rebuild_store.render_summary(
+        transcripts=1, health=_healthy_report(), dry_run=True,
+        promote_result=None, contradictions=0, semantic="ok",
+        insights_status="regenerated 114",
+    )
+    assert "- Insights (derived view): regenerated 114" in summary
