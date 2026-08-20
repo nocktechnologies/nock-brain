@@ -408,6 +408,28 @@ def promote(build: dict[str, Any], store_dir: Path) -> dict[str, Any]:
     return {"stamp": stamp, "backed_up": backed_up, "promoted": promoted}
 
 
+def refresh_insights(store_dir: Path) -> str:
+    """Post-promote insight regeneration (synthesize.py --sign, heuristic,
+    dependency-free). Insights are a DERIVED VIEW of the fact store — when the
+    store changes and this doesn't run, the view goes stale and keeps injecting
+    what the store no longer says (insights.json froze 2026-06-23 and served
+    pre-cleanup event chatter into recall for two months; recall ranks insights
+    FIRST, so a stale view outshouts a clean store). Never gates the rebuild;
+    failure surfaces in the summary and recall falls back to raw facts.
+    """
+    try:
+        _run_cli("synthesize.py", [
+            "--facts", str(store_dir / "facts.json"),
+            "--output", str(store_dir / "insights.json"),
+            "--sign",
+        ])
+        raw = json.loads((store_dir / "insights.json").read_text(encoding="utf-8"))
+        items = raw if isinstance(raw, list) else raw.get("insights", [])
+        return f"regenerated {len(items)}"
+    except (RebuildError, OSError, ValueError) as exc:
+        return f"FAILED ({str(exc)[:80]})"
+
+
 def refresh_semantic_sidecar(store_dir: Path) -> str:
     """Post-promote semantic-sidecar sync via embed-facts.py (incremental:
     embeds only facts missing from the sidecar, prunes deleted ones).
@@ -451,6 +473,7 @@ def render_summary(
     promote_result: dict[str, Any] | None,
     contradictions: int = -1,
     semantic: str = "off (no semantic-on)",
+    insights_status: str = "not run",
 ) -> str:
     findings = health.get("privacy", {}).get("live_secret_findings", 0)
     lines = [
@@ -466,6 +489,8 @@ def render_summary(
         # Dense-tier freshness: sync runs post-promote, never gates. "FAILED"
         # here means recall is silently on flat BM25 — loud, not fatal.
         f"- Semantic sidecar: {semantic}",
+        # Derived-view freshness: stale insights outshout a clean store.
+        f"- Insights (derived view): {insights_status}",
         f"- Recall ready: {str(health.get('recall_ready', False)).lower()}",
     ]
     if dry_run:
@@ -563,9 +588,11 @@ def rebuild(
 
         promote_result = None
         semantic_status = "skipped (dry run)"
+        insights_status = "skipped (dry run)"
         if not dry_run:
             promote_result = promote(build, store_dir)
             semantic_status = refresh_semantic_sidecar(store_dir)
+            insights_status = refresh_insights(store_dir)
 
         summary = render_summary(
             transcripts=len(transcripts),
@@ -574,6 +601,7 @@ def rebuild(
             promote_result=promote_result,
             contradictions=build.get("contradictions", -1),
             semantic=semantic_status,
+            insights_status=insights_status,
         )
         return {
             "health": build["health"],
