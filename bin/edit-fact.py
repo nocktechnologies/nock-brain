@@ -46,8 +46,7 @@ if str(BIN_DIR) not in sys.path:
 
 from _revoke import resolve_signing_key
 from _sign import (
-    CLAIM_ATTESTATION_V2_SCHEMA,
-    _CLAIM_V2_ONLY_AUTHORITY_FIELDS,
+    is_v2_claim_fact,
     sign_fact,
 )
 from _store import FILE_MODE
@@ -138,11 +137,11 @@ def _raw_record_count(store_path: Path) -> "int | None":
 def _is_v2_claim(fact: "dict[str, Any]") -> bool:
     """True if a fact carries the v2 claim attestation schema or its authority
     fields — the legacy sign_fact cannot safely re-sign it (verify_fact would
-    return TAMPERED), so edit-fact refuses rather than silently corrupt."""
-    att = fact.get("attestation")
-    if isinstance(att, dict) and att.get("schema") == CLAIM_ATTESTATION_V2_SCHEMA:
-        return True
-    return bool(_CLAIM_V2_ONLY_AUTHORITY_FIELDS.intersection(fact))
+    return TAMPERED), so edit-fact refuses rather than silently corrupt.
+
+    Thin wrapper over the shared ``_sign.is_v2_claim_fact`` so the routing rule
+    lives in exactly one place (the bulk signer uses the same predicate)."""
+    return is_v2_claim_fact(fact)
 
 
 def _child_ids(facts: "list[dict]", parent_id: str) -> "list[str]":
