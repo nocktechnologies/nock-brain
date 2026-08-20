@@ -466,3 +466,36 @@ def test_contradiction_scan_flags_but_never_blocks(rebuild_store, tmp_path, monk
         promote_result=None, contradictions=3,
     )
     assert "Contradiction candidates (review queue): 3" in ok
+
+
+def test_semantic_sidecar_refresh_never_blocks(rebuild_store, tmp_path, monkeypatch):
+    """Dense-tier sync: off without semantic-on; parses embed counts on success;
+    a failure degrades to a loud summary string, never an exception."""
+    store = tmp_path / "store"
+    store.mkdir()
+    assert rebuild_store.refresh_semantic_sidecar(store) == "off (no semantic-on)"
+
+    (store / "semantic-on").touch()
+
+    class _P:
+        def __init__(self, rc, out="", err=""):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    monkeypatch.setattr(
+        rebuild_store.subprocess, "run",
+        lambda *a, **k: _P(0, "sync: 1044 vector(s) (embedded 39, kept 1005, pruned 12) model=potion dim=256"),
+    )
+    assert rebuild_store.refresh_semantic_sidecar(store) == "embedded 39, pruned 12"
+
+    monkeypatch.setattr(
+        rebuild_store.subprocess, "run",
+        lambda *a, **k: _P(1, err="embed-facts: numpy missing"),
+    )
+    out = rebuild_store.refresh_semantic_sidecar(store)
+    assert out.startswith("FAILED") and "numpy missing" in out
+
+    summary = rebuild_store.render_summary(
+        transcripts=1, health=_healthy_report(), dry_run=True,
+        promote_result=None, contradictions=0, semantic="embedded 39, pruned 12",
+    )
+    assert "- Semantic sidecar: embedded 39, pruned 12" in summary
