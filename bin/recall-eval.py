@@ -44,6 +44,7 @@ import shutil
 import statistics
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 BIN_DIR = Path(__file__).resolve().parent
@@ -58,6 +59,14 @@ DEFAULT_KEY = REPO / "tests" / "fixtures" / "recall-eval-key.pub"
 # Production operating point (crm-mira/core/hooks/memory-inject.sh).
 PROD_BUDGET = 400
 PROD_MAX_PER_DATE = 4
+
+# Frozen reference instant for recency decay. select_recall() otherwise resolves
+# wall-clock time, so on an unchanged fixture/commit a per-kind recency boundary
+# crossing midnight could shift recall or the cap-lever result over time —
+# breaking the hermeticity the eval exists to guarantee. Pin it to the fixture's
+# era (2026-08-22, the pilot/design date) so results depend only on the code and
+# the committed corpus, never on the clock.
+EVAL_NOW = datetime(2026, 8, 22, tzinfo=timezone.utc)
 
 # Committed regression floors (see docs/evals/README.md for the rationale).
 # Set below the measured fixture baselines with headroom for BM25 noise across
@@ -80,15 +89,17 @@ def _session_key(f: dict) -> str:
     return str(f.get("session") or f.get("session_anchor") or "")
 
 
-def _selection(br, query, store, *, budget, max_per_date, semantic, graph):
+def _selection(br, query, store, *, budget, max_per_date, semantic, graph,
+               now=EVAL_NOW):
     return br.select_recall(
         query, store, budget=budget,
         graph_expand=graph, max_per_date=max_per_date, semantic=semantic,
+        now=now,
     )
 
 
 def evaluate(br, store: Path, queries: dict, *, budget, max_per_date,
-             semantic, graph):
+             semantic, graph, now=EVAL_NOW):
     """Return recall + companionship + per-query detail for one config."""
     facts = json.loads(store.read_text())
     sib_of_session: dict[str, set] = collections.defaultdict(set)
@@ -106,7 +117,8 @@ def evaluate(br, store: Path, queries: dict, *, budget, max_per_date,
     rows = []
     for gid, query in queries.items():
         sel = _selection(br, query, store, budget=budget,
-                         max_per_date=max_per_date, semantic=semantic, graph=graph)
+                         max_per_date=max_per_date, semantic=semantic,
+                         graph=graph, now=now)
         included = {f["id"] for f in sel["included"]} if sel else set()
         found = gid in included
         hits += 1 if found else 0
@@ -151,15 +163,15 @@ def evaluate(br, store: Path, queries: dict, *, budget, max_per_date,
     }
 
 
-def self_test(br, store: Path, queries: dict) -> dict:
+def self_test(br, store: Path, queries: dict, *, now=EVAL_NOW) -> dict:
     """Validate the instrument by reproducing the documented cap lever
     (max_per_date=2 materially below >=4) and confirming every fixture fact
     verifies. If the cap lever direction inverts, the harness is broken and any
     downstream technique measurement is untrustworthy."""
     cap2 = evaluate(br, store, queries, budget=PROD_BUDGET, max_per_date=2,
-                    semantic=False, graph=True)["recall"]
+                    semantic=False, graph=True, now=now)["recall"]
     cap4 = evaluate(br, store, queries, budget=PROD_BUDGET, max_per_date=4,
-                    semantic=False, graph=True)["recall"]
+                    semantic=False, graph=True, now=now)["recall"]
     lever = round(cap4 - cap2, 4)
     ok = cap2 < cap4 and lever >= 0.05
     return {"cap2_recall": cap2, "cap4_recall": cap4, "cap_lever_pts": lever,

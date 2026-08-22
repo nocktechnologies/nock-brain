@@ -67,6 +67,16 @@ def _load(name: str):
     return mod
 
 
+def _non_negative_int(value: str) -> int:
+    """argparse type that rejects negatives. A negative --distractors would make
+    `extra[:n]` slice from the tail (e.g. -1 keeps nearly all same-date facts),
+    silently bloating the fixture with the very date-flood the slice bounds."""
+    n = int(value)
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {n}")
+    return n
+
+
 def session_key(f: dict) -> str:
     return str(f.get("session") or f.get("session_anchor") or "")
 
@@ -75,8 +85,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--source", type=Path, default=DEFAULT_SOURCE,
                     help="source store, read-only (default: live store)")
-    ap.add_argument("--distractors", type=int, default=10,
-                    help="max same-date distractor facts per gold date")
+    ap.add_argument("--distractors", type=_non_negative_int, default=10,
+                    help="max same-date distractor facts per gold date (>= 0)")
     ap.add_argument("--gold", type=Path, default=GOLD)
     ap.add_argument("--out", type=Path, default=OUT)
     args = ap.parse_args()
