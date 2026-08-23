@@ -133,7 +133,7 @@ shrink guard — the only intentional way to shrink the store.
 | `_dense_recall.py` | RRF fusion of BM25 seeds with dense cosine + reserved slots | `fuse(...)` → `(fused, reserved_ids)`; RRF k=60, dense top 40, 3 reserved slots (empirically pinned) |
 | `_graph_recall.py` | Graph-neighbor expansion over the export-graph structure | `expand(...)`; neighbors always strictly below the weakest seed |
 | `_projection.py` | Readback receipts for derived-artifact writes (S4) | `write_with_receipt` — "applied" only after hash-verified readback; mismatch = "ambiguous", recorded never raised |
-| `_window.py` | Nonce-bound watermarked job windows (S3+S8) for idempotent nightlies | `inputs_digest`, `open_window`, `settle` — **currently wired into NOTHING; only its test imports it** (§12) |
+| `_window.py` | Nonce-bound watermarked job windows (S3+S8) for idempotent nightlies | `inputs_digest`, `open_window`, `settle` — **RESERVED, deliberately unwired** (operator call 2026-08-23, PR #86); only its test imports it (§11) |
 
 Per-module invariants worth memorizing:
 
@@ -192,7 +192,6 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 | `detect-contradictions.py` | Nightly stale-fact pass, propose-ONLY, never writes the store. Output actions are literal `supersede-fact.py` commands. `--llm` judge sees scrubbed content; failures degrade to borderline |
 | `supersede-fact.py` | The manual apply-target; mints a signed revocation event via `_revoke` |
 | `purge-fact.py` | HARD delete across facts/events/notes/vault/sidecar (GDPR-style). Dry-run default |
-| `consolidate-may19.py` | One-off, fully hardcoded to the live store path, superseded by `consolidate-facts.py`. Deletion candidate |
 
 **Recall** (see §6 for exact ranking order)
 | Script | Notes |
@@ -390,34 +389,45 @@ CI (`.github/workflows/ci.yml`): pytest → classifier smoke →
 
 ---
 
-## 11. Known gaps & sharp edges (verified 2026-08-23)
+## 11. Known gaps & sharp edges
 
-1. **`bin/_window.py` is orphaned** — implemented + tested, imported by zero
-   scripts. The nightlies it was built for don't use it.
-2. **`budget-recall.py` line 32 imports `_facts.load_facts` and never calls
-   it** (dead since the `_storeback` cutover).
-3. **Two competing write paths into the store**: `extract-facts.py` writes
-   live and additive; `propose-facts`→`approve-proposals` is the gated route
-   for the identical extraction. Nothing prevents using the ungated one.
-4. **`review-promotions.py` has no applier** — deliberate; the queue's
+Found in the 2026-08-23 full sweep; triaged with the operator (bus msgs
+66653/66657) and resolved in PRs #85/#86 where marked.
+
+**Open by design / watch list:**
+
+1. **`bin/_window.py` is RESERVED, deliberately unwired** (operator call:
+   nightlies are fail-closed with backups; no double-run harm observed; wire
+   only when a real double-run shows up — PR #86 docstring says so). The
+   separate nightly problem — `--llm` jobs killed by the seat's 300s cap →
+   silent heuristic fallback (N9709) — is an operate-side timeout/detach fix,
+   not a `_window` use case.
+2. **Two competing write paths into the store**: `extract-facts.py` writes
+   live and additive (now with a stderr nudge, PR #86);
+   `propose-facts`→`approve-proposals` is the gated route. Intended
+   end-state: the gated route becomes the only writer — that hard-gate is a
+   Kevin-approved change, not a cleanup.
+3. **`review-promotions.py` has no applier** — deliberate; the queue's
    terminal step (editing CLAUDE.md/AGENTS.md) is manual.
-5. **Dry-run polarity is inconsistent**: `--apply` (dedup/purge/migrate/
-   backfill-revocations/resign) vs `--execute`+ack (consolidate-*) vs
-   `--dry-run` opt-in (backfill-source, apply-promotion-batch, rebuild-store)
-   vs no gate at all (extract-facts, sign-facts, ingest-curated-memory).
-6. **Dangling `reports/` references**: `docs/evals/README.md` and
-   `recall-eval.py` cite `reports/2026-08-22-*.md` files; no `reports/` dir
-   exists in the repo.
-7. **`consolidate-may19.py`** is hardcoded to the live store path (no
-   `--facts`), superseded — deletion candidate.
-8. **The hook has no timeout** despite its own <2s contract; only SQLite's
-   2s busy_timeout is enforced.
-9. **CI never exercises the real 3.9 floor** — the stock-interpreter smoke
-   test is skipif-gated on `/usr/bin/python3` and effectively macOS-only;
-   ubuntu runners get only the AST-level check.
-10. `conftest.py` defines `projection` and `projection_lib` as duplicate
-    fixtures.
-11. Silent-degradation paths to watch: degraded SQLite read → empty recall
-    (visible only via health); dense/graph unavailability → flat BM25
-    (stderr only, discarded by hook); corrupt store → `[]`; ambiguous
-    projection receipts (health check default-off).
+4. **The hook has no timeout** despite its own <2s contract — accepted
+   (wontfix): the operator has never observed this hook hang, and a bash
+   watchdog adds more risk than it removes. Only SQLite's 2s busy_timeout is
+   enforced.
+5. **Dry-run polarity is inconsistent** across CLIs (`--apply` vs
+   `--execute`+ack vs opt-in `--dry-run` vs no gate) — accepted (wontfix):
+   documenting it here beats a breaking CLI change. Check each tool's gate
+   before running it.
+6. **Silent-degradation paths to watch**: degraded SQLite read → empty
+   recall (visible only via health); dense/graph unavailability → flat BM25
+   (stderr only, discarded by hook); corrupt store → `[]`; ambiguous
+   projection receipts (health check default-off).
+7. **The two 2026-08-22 recall-pilot reports are external** — internal
+   working documents kept outside this repo (refs reworded in PR #86);
+   `docs/tracking/nockcc-nocks.md` is historical through 2026-06-12 by
+   choice (banner, PR #85) — the live NockCC board is the source of truth
+   for nock state.
+
+**Resolved 2026-08-23:** dead `load_facts` import in budget-recall (#85) ·
+duplicate `projection_lib` conftest fixture (#85) · `consolidate-may19.py`
+deleted (#85) · CI now exercises the real 3.9 floor via the `floor` job and
+`NOCKBRAIN_FLOOR_PYTHON` (#85) · dangling `reports/` paths reworded (#86).
