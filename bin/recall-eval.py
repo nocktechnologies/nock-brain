@@ -2,8 +2,9 @@
 """Committed recall eval: run the reconstructed n=36 gold query set against a
 COMMITTED, SIGNED fixture store and report two metrics.
 
-This is the CI-hardened successor to the throwaway pilot harness (see
-reports/2026-08-22-openviking-recall-pilot.md). It drives the REAL production
+This is the CI-hardened successor to the throwaway pilot harness (documented
+in the internal report "2026-08-22-openviking-recall-pilot", kept outside
+this repo). It drives the REAL production
 selection path (`budget-recall.select_recall`), so what it measures is exactly
 what the injection hook would emit — but hermetically, against
 tests/fixtures/recall-eval-store.json, never the live ~/.nock-brain store.
