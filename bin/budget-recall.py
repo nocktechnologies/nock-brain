@@ -29,7 +29,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-from _facts import RECALL_ITEM_FIELDS, fact_currently_valid, fact_source, load_facts
+from _facts import RECALL_ITEM_FIELDS, fact_currently_valid, fact_source
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 DEFAULT_INSIGHTS = Path.home() / ".nock-brain" / "insights.json"

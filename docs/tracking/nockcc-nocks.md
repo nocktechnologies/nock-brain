@@ -2,6 +2,12 @@
 
 This file records NockCC items filed for NockBrain v2 so local docs and the board stay aligned.
 
+> **Historical through 2026-06-12.** This log covers the v2 compiler and the
+> OWASP remediation (through N8054) and was not extended for later work —
+> the semantic tier, signed revocations, claims v2, the E2 SQLite store,
+> edit-fact, projections, or the CI recall eval (PRs #63–#83). For current
+> structure read `docs/REPO-MAP.md`; for change history use `git log`.
+
 ## 2026-06-11
 
 - N8011: NockBrain v2: review and approve Conversation Memory Compiler spec

@@ -186,14 +186,14 @@ def test_obsidian_export_writes_applied_receipt(export_obsidian, projection, tmp
     assert projection.last_status(rows, vault / "index.md") == "applied"
 
 
-def test_load_receipts_skips_non_dict_lines(projection_lib, tmp_path):
+def test_load_receipts_skips_non_dict_lines(projection, tmp_path):
     """CR #73: a malformed receipt line (null / [] / scalar) must be skipped,
     not appended — else last_status().get() crashes the health command."""
     p = tmp_path / "projection-receipts.jsonl"
     good = '{"artifact_path": "graph.json", "sha256": "a", "status": "applied"}'
     p.write_text("\n".join([good, "null", "[]", '"a-string"', "42", good]) + "\n")
-    receipts = projection_lib.load_receipts(p)
+    receipts = projection.load_receipts(p)
     assert len(receipts) == 2  # only the two dict rows
     assert all(isinstance(r, dict) for r in receipts)
     # last_status must not raise on the mixed file
-    assert projection_lib.last_status(receipts, "graph.json") == "applied"
+    assert projection.last_status(receipts, "graph.json") == "applied"
