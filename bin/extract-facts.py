@@ -286,6 +286,16 @@ def main():
     for kind, count in sorted(by_kind.items(), key=lambda x: -x[1]):
         print(f"  {kind}: {count}")
 
+    if new_facts:
+        # ponytail: nudge only — the gated route becoming the sole writer is a
+        # separate, operator-approved change (bus msg 66657).
+        print(
+            "note: extract-facts writes the store directly; the gated route is "
+            "propose-facts.py -> approve-proposals.py and is intended to become "
+            "the only writer.",
+            file=sys.stderr,
+        )
+
 
 if __name__ == "__main__":
     main()

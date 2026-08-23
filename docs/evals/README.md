@@ -1,9 +1,10 @@
 # Recall evals
 
 Committed, CI-gated evaluation of nock-brain recall quality. This is the
-hardened successor to the throwaway pilot harness described in
-`reports/2026-08-22-openviking-recall-pilot.md`; the design it enables is
-`reports/2026-08-22-recall-session-hierarchy-design.md` (Phase 1).
+hardened successor to a throwaway pilot harness; the pilot write-up
+("2026-08-22-openviking-recall-pilot") and the session-hierarchy design it
+enables ("2026-08-22-recall-session-hierarchy-design", Phase 1) are internal
+working reports kept outside this repo.
 
 ## Run it
 
