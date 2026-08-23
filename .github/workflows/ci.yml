@@ -42,3 +42,25 @@ jobs:
         run: bandit -r bin
       - name: Gitleaks scan
         run: gitleaks detect --source . --redact --config .gitleaks.toml --no-banner
+
+  floor:
+    # The hook's real floor is stock macOS python3 = 3.9; the test matrix
+    # above (3.11/3.12) never exercises it, so 3.10-only import-time syntax
+    # passed CI twice and then broke recall on a real Mac. This job runs the
+    # floor tests under a genuine 3.9 interpreter: NOCKBRAIN_FLOOR_PYTHON
+    # points the import-smoke subprocess at it, and the classifier smoke
+    # executes a real hook entrypoint. No numpy on purpose — the stock
+    # interpreter the hook falls back to has none either, so every closure
+    # module must import without it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.9"
+      - name: Install test deps
+        run: pip install pytest==8.4.1
+      - name: Floor tests under 3.9
+        run: NOCKBRAIN_FLOOR_PYTHON="$(command -v python3)" python3 -m pytest -q tests/test_python_floor.py
+      - name: Classifier smoke under 3.9
+        run: python3 bin/recall-classifier.py --test

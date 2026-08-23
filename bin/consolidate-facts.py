@@ -4,7 +4,8 @@
 Extract-time dedup is exact-match within a single run, so the store slowly
 accumulates semantically identical facts extracted on different dates ("we use
 Postgres 14" three times over months). This tool generalizes the one-off May-19
-consolidation (consolidate-may19.py, N8382): it clusters near-identical CURRENT
+consolidation (consolidate-may19.py, N8382 — removed 2026-08, see git
+history): it clusters near-identical CURRENT
 facts of durable kinds by normalized-content similarity, keeps the
 highest-confidence member as canonical, and flips the rest to
 status=superseded with a superseded_by pointer to the canonical fact plus a
