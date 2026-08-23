@@ -1,5 +1,10 @@
 """Nonce-bound, watermarked job windows (S3+S8).
 
+RESERVED — not wired into any job yet (operator call, 2026-08-23): the
+nightlies already run fail-closed with backups, and no double-run harm has
+been observed. Keep the module and its tests; wire it only when a real
+double-run shows up. Do not delete as "dead code".
+
 A nightly job that mutates the store must be idempotent and non-interleaving:
 run twice on the same inputs and the second run is a no-op, not a double
 mutation. This adapts Mira's harness admission-window pattern and Letta's
