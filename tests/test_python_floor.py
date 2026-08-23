@@ -20,6 +20,7 @@ Two layers pin the floor:
   import under it.
 """
 import ast
+import os
 import subprocess
 from pathlib import Path
 
@@ -33,7 +34,10 @@ HOOK_ENTRYPOINTS = ["recall-classifier.py", "budget-recall.py"]
 
 # The interpreter the hook gets on a stock Mac. Anything under 3.10 exercises
 # the real floor; a newer one still adds an import smoke test at no cost.
-STOCK_PYTHON = Path("/usr/bin/python3")
+# CI overrides via NOCKBRAIN_FLOOR_PYTHON to point at a genuine 3.9
+# interpreter — ubuntu runners' /usr/bin/python3 is newer, so without the
+# override the smoke tests only ever ran on developer Macs.
+STOCK_PYTHON = Path(os.environ.get("NOCKBRAIN_FLOOR_PYTHON", "/usr/bin/python3"))
 
 
 def _local_module_refs(path: Path) -> "set[str]":
