@@ -6,10 +6,12 @@ tests pin its contract:
 
 - a warm cache skips the signature operations (and ONLY those — the committed-
   hash comparisons still run, so tampering is caught even on a warm cache);
-- any store mutation invalidates the cache via the (mtime_ns, size) guard;
-- a tampered fact is still detected after invalidation — including the forged
-  variant where the attacker recomputes the committed hashes and fakes the
-  sidecar's freshness stat;
+- a store rewrite does not wipe the digest set: unchanged facts stay cache
+  hits (each digest is content-bound) and only new/changed facts re-verify;
+  a dirty save prunes to digests hit-or-added this run;
+- a tampered fact is still detected after a store rewrite — including the
+  forged variant where the attacker recomputes the committed hashes and fakes
+  the sidecar's store stamp;
 - --strict-verify semantics are unchanged: the cache only accelerates the
   VALID determination, never alters a status;
 - a forged sidecar cannot bypass verification: the digest is an HMAC keyed
@@ -122,8 +124,8 @@ def test_unsigned_only_store_creates_no_sidecar(
     assert not sidecar_for(facts_file).exists()
 
 
-# --- store mutation invalidates ------------------------------------------------
-def test_store_mutation_invalidates_cache(
+# --- store mutation retains unrelated digests ---------------------------------
+def test_store_mutation_does_not_wipe_unrelated_digests(
         budget_recall, sign_lib, signing_key, tmp_path, verify_calls):
     facts = [signable_fact("f-1", "ed25519 rollout was approved"),
              signable_fact("f-2", "ed25519 rollout owner is mira")]
@@ -138,12 +140,77 @@ def test_store_mutation_invalidates_cache(
     verify_calls["n"] = 0
     out = budget_recall.budget_recall("ed25519 rollout", facts_file)
     assert "runbook" in out
-    # (mtime_ns, size) guard tripped -> the whole store re-verifies.
-    assert verify_calls["n"] == 3
+    # Store stamp moved, but each digest is content-bound: only the new fact
+    # misses and re-verifies. The two unchanged facts stay cache hits.
+    assert verify_calls["n"] == 1
 
     verify_calls["n"] = 0
     budget_recall.budget_recall("ed25519 rollout", facts_file)
-    assert verify_calls["n"] == 0  # cache re-warmed under the new stat
+    assert verify_calls["n"] == 0  # fully warm again, including the new fact
+
+
+def test_append_retains_cached_digests_of_unchanged_facts(
+        budget_recall, sign_lib, signing_key, tmp_path, verify_calls):
+    """Issue #47: rewriting facts.json must not discard cached digests of
+    unchanged facts. Each digest is bound to that fact's current content and
+    parents, so a one-fact append re-verifies only the new fact; the old
+    facts stay hits and their digests are still in the sidecar after save."""
+    facts = [signable_fact("f-1", "ed25519 rollout was approved"),
+             signable_fact("f-2", "ed25519 rollout owner is mira")]
+    sign_lib.sign_facts(facts, signing_key)
+    facts_file = write_facts(tmp_path, facts)
+    budget_recall.budget_recall("ed25519 rollout", facts_file)  # warm
+
+    sidecar = sidecar_for(facts_file)
+    warm_digests = set(json.loads(sidecar.read_text(encoding="utf-8"))["digests"])
+    assert len(warm_digests) == 2
+    warm_stamp = json.loads(sidecar.read_text(encoding="utf-8"))["store"]
+
+    new = signable_fact("f-3", "ed25519 rollout gained a runbook")
+    sign_lib.sign_fact(new, signing_key, facts_by_id={})
+    write_facts(tmp_path, facts + [new])
+    # The rewrite moved the store stamp — under the old wholesale-wipe this
+    # discarded both cached digests. It must not.
+    new_st = facts_file.stat()
+    assert {"mtime_ns": new_st.st_mtime_ns, "size": new_st.st_size} != warm_stamp
+
+    verify_calls["n"] = 0
+    out = budget_recall.budget_recall("ed25519 rollout", facts_file)
+    assert "runbook" in out
+    assert "approved" in out
+    assert verify_calls["n"] == 1  # only the appended fact
+
+    saved = json.loads(sidecar.read_text(encoding="utf-8"))
+    saved_digests = set(saved["digests"])
+    assert warm_digests <= saved_digests  # old facts' digests retained
+    assert len(saved_digests) == 3  # plus the new fact's digest
+    assert saved["store"] == {"mtime_ns": new_st.st_mtime_ns,
+                              "size": new_st.st_size}
+
+    verify_calls["n"] = 0
+    budget_recall.budget_recall("ed25519 rollout", facts_file)
+    assert verify_calls["n"] == 0
+
+
+def test_dirty_save_prunes_digests_not_live_this_run(
+        budget_recall, sign_lib, signing_key, tmp_path):
+    """A facts.json rewrite that DROPS a fact must not keep accumulating its
+    digest: the dirty save after the stamp change persists only hit-or-added
+    digests from this run."""
+    keep = signable_fact("f-keep", "ed25519 rollout was approved")
+    drop = signable_fact("f-drop", "ed25519 rollout owner is mira")
+    sign_lib.sign_facts([keep, drop], signing_key)
+    facts_file = write_facts(tmp_path, [keep, drop])
+    budget_recall.budget_recall("ed25519 rollout", facts_file)
+    sidecar = sidecar_for(facts_file)
+    warm_digests = set(json.loads(sidecar.read_text(encoding="utf-8"))["digests"])
+    assert len(warm_digests) == 2
+
+    write_facts(tmp_path, [keep])  # drop f-drop; store stamp changes
+    budget_recall.budget_recall("ed25519 rollout", facts_file)
+    saved_digests = set(json.loads(sidecar.read_text(encoding="utf-8"))["digests"])
+    assert len(saved_digests) == 1
+    assert saved_digests <= warm_digests
 
 
 def test_tampered_fact_detected_after_cache_invalidation(
@@ -166,8 +233,9 @@ def test_tampered_fact_detected_after_cache_invalidation(
     assert "approved for signing" in out
     assert "excluded 1 tampered" in err
     # The tampered fact fails the committed-hash comparison BEFORE any
-    # signature work; only the intact fact reaches verify_bytes.
-    assert verify_calls["n"] == 1
+    # signature work. The intact fact hits its retained digest — a store
+    # rewrite is not a wholesale wipe — so verify_bytes is never reached.
+    assert verify_calls["n"] == 0
 
 
 def test_forged_hashes_and_faked_guard_still_detected(
