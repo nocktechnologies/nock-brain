@@ -20,6 +20,7 @@ Usage:
     python3 eval-graph-recall.py --graph                  # BM25 vs graph
     python3 eval-graph-recall.py --queries docs/evals/curated-recall-suite.json
     python3 eval-graph-recall.py --json out.json
+    python3 eval-graph-recall.py --self-test              # cache-warmup A/B check
 """
 from __future__ import annotations
 
@@ -76,17 +77,111 @@ def first_hit_rank(items: list, ground: str):
     return None
 
 
-def run_mode(br, query: str, args, graph: bool, semantic: bool):
-    t0 = time.perf_counter()
+def _select(br, query: str, args, graph: bool, semantic: bool):
+    """One production select_recall; no timing. Used for cache warmup and by
+    run_mode so both timed arms share a single call site."""
     selection = br.select_recall(
         query, args.facts, args.budget,
         insights_file=args.insights if args.insights.exists() else None,
         graph_expand=graph, semantic=semantic,
     )
-    secs = time.perf_counter() - t0
     if selection is None:
-        return [], [], secs
-    return selection["included"], selection["results"], secs
+        return [], []
+    return selection["included"], selection["results"]
+
+
+def run_mode(br, query: str, args, graph: bool, semantic: bool):
+    t0 = time.perf_counter()
+    included, results = _select(br, query, args, graph, semantic)
+    secs = time.perf_counter() - t0
+    return included, results, secs
+
+
+def _warm_then_time(br, query: str, args, graph: bool, semantic: bool):
+    """Time both A/B arms from an identically warm verification cache.
+
+    The sidecar is store-level: a cold baseline run writes it, and the
+    variant then inherits the ~0.4-0.8s signature saving — which is not a
+    graph/semantic effect (issue #51). One discarded dry run per query
+    pays that cost before either arm is timed.
+    """
+    _select(br, query, args, False, False)
+    off = run_mode(br, query, args, False, False)
+    on = run_mode(br, query, args, graph, semantic)
+    return off, on
+
+
+def _self_test() -> int:
+    """Hermetic check that both timed arms skip the cold signature pass.
+
+    Runs the same warm-then-time order as the live harness against the
+    committed recall-eval fixture (copied to a temp dir so the sidecar
+    never lands in the tree). A cold load must perform signature ops; both
+    timed arms must then perform none.
+    """
+    import os
+    import shutil
+    import tempfile
+
+    repo = BIN_DIR.parent
+    fixture = repo / "tests" / "fixtures" / "recall-eval-store.json"
+    key = repo / "tests" / "fixtures" / "recall-eval-key.pub"
+    if not fixture.exists() or not key.exists():
+        print("self-test: committed fixture or key missing", file=sys.stderr)
+        return 2
+
+    import _sign
+    calls = {"n": 0}
+    real = _sign.SigningKey.verify_bytes
+
+    def counting(self, payload, signature_hex):
+        calls["n"] += 1
+        return real(self, payload, signature_hex)
+
+    saved_pub = os.environ.get("NOCKBRAIN_SIGNING_PUB")
+    saved_key = os.environ.get("NOCKBRAIN_SIGNING_KEY")
+    _sign.SigningKey.verify_bytes = counting
+    try:
+        os.environ["NOCKBRAIN_SIGNING_PUB"] = str(key)
+        os.environ.pop("NOCKBRAIN_SIGNING_KEY", None)
+        br = _load_budget_recall()
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td) / "facts.json"
+            shutil.copy2(fixture, store)
+            args = argparse.Namespace(
+                facts=store,
+                insights=Path(td) / "insights.json",
+                budget=800,
+            )
+            query = "how are customer payments handled"
+            calls["n"] = 0
+            _select(br, query, args, False, False)
+            warmup_ops = calls["n"]
+            calls["n"] = 0
+            run_mode(br, query, args, False, False)
+            off_ops = calls["n"]
+            calls["n"] = 0
+            run_mode(br, query, args, False, True)
+            on_ops = calls["n"]
+    finally:
+        _sign.SigningKey.verify_bytes = real
+        if saved_pub is None:
+            os.environ.pop("NOCKBRAIN_SIGNING_PUB", None)
+        else:
+            os.environ["NOCKBRAIN_SIGNING_PUB"] = saved_pub
+        if saved_key is None:
+            os.environ.pop("NOCKBRAIN_SIGNING_KEY", None)
+        else:
+            os.environ["NOCKBRAIN_SIGNING_KEY"] = saved_key
+
+    ok = warmup_ops > 0 and off_ops == 0 and on_ops == 0
+    verdict = "PASS" if ok else "FAIL"
+    print(f"eval-graph-recall self-test  [{verdict}]")
+    print(f"  warmup signature ops : {warmup_ops}")
+    print(f"  timed baseline ops   : {off_ops}")
+    print(f"  timed variant ops    : {on_ops}")
+    print("  both timed arms must be warm (issue #51: verify-cache A/B skew)")
+    return 0 if ok else 1
 
 
 def main():
@@ -100,7 +195,13 @@ def main():
                         help="JSON list of [label, query, ground] where "
                              "ground is 'token:x' or 'id:x'")
     parser.add_argument("--json", type=Path, help="write per-query detail")
+    parser.add_argument("--self-test", action="store_true",
+                        help="hermetic check: both timed A/B arms see a "
+                             "warm verification cache (issue #51)")
     args = parser.parse_args()
+
+    if args.self_test:
+        sys.exit(_self_test())
 
     if not args.facts.exists():
         print(f"No fact store at {args.facts}.", file=sys.stderr)
@@ -118,10 +219,8 @@ def main():
     print(f"{'Q':<4}{'OFF inj':>8} {'hit@inj':>8} | {'ON inj':>7} "
           f"{'hit@inj':>8} {'added':>6} {'+tgt':>5} | {'off_s':>6} {'on_s':>6}")
     for label, query, ground in queries:
-        off_inj, off_all, off_t = run_mode(br, query, args, False, False)
-        on_inj, on_all, on_t = run_mode(
-            br, query, args, graph=args.graph,
-            semantic=not args.graph)
+        (off_inj, off_all, off_t), (on_inj, on_all, on_t) = _warm_then_time(
+            br, query, args, graph=args.graph, semantic=not args.graph)
         off_ids = {f.get("id") for f in off_inj}
         added = [f for f in on_inj if f.get("id") not in off_ids]
         added_tgt = [f for f in added if ground_matches(f, ground)]
