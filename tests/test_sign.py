@@ -233,6 +233,72 @@ def test_merkle_parent_revoked_makes_child_parent_suspect(sign, tmp_path):
     assert statuses["child-1"] == sign.PARENT_SUSPECT
 
 
+def test_parent_suspect_is_cached_and_repair_forces_reverify(sign, tmp_path):
+    """Issue #48: a stable PARENT_SUSPECT determination must be cached (the
+    redundant Ed25519 op skipped on a warm hit), and a later repair of the
+    parent's content must still force a real re-verification — never a stale
+    cache hit that silently upgrades or holds a resolved determination."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_verify_cache", BIN / "_verify_cache.py")
+    vc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vc)
+
+    key = sign.load_or_create_key(tmp_path / "k", tmp_path / "k.pub")
+    pub = sign.load_public_key(tmp_path / "k.pub")
+
+    parent = make_fact("parent-1", content="Original pricing: $29/mo")
+    child = make_fact("child-1", content="Derived: terminal tier is $29/mo")
+    child["parent_fact_ids"] = ["parent-1"]
+    facts = [parent, child]
+    sign.sign_facts(facts, key)
+
+    # Tamper the parent so the child resolves PARENT_SUSPECT.
+    facts[0]["content"] = "Forged pricing: $299/mo"
+    facts_by_id = {f["id"]: f for f in facts}
+
+    cache = vc.VerifiedSignatureCache(
+        tmp_path / "cache.json", pub.key_id, pub.alg, {"mtime_ns": 1, "size": 1}, set()
+    )
+
+    real_verify = sign.SigningKey.verify_bytes
+    calls = {"n": 0}
+
+    def counting(self, payload, sig):
+        calls["n"] += 1
+        return real_verify(self, payload, sig)
+
+    sign.SigningKey.verify_bytes = counting
+    try:
+        calls["n"] = 0
+        status_cold = sign.verify_fact(child, pub, facts_by_id=facts_by_id, verified_cache=cache)
+        ops_cold = calls["n"]
+
+        calls["n"] = 0
+        status_warm = sign.verify_fact(child, pub, facts_by_id=facts_by_id, verified_cache=cache)
+        ops_warm = calls["n"]
+
+        assert status_cold == sign.PARENT_SUSPECT
+        assert status_warm == sign.PARENT_SUSPECT
+        assert ops_cold == 1, "first determination must run the real signature op"
+        assert ops_warm == 0, "a stable PARENT_SUSPECT must hit the cache, not re-verify"
+
+        # Repair the parent -> the payload's embedded parent hash changes ->
+        # digest miss -> a real re-verification, landing on VALID.
+        facts[0]["content"] = "Original pricing: $29/mo"
+        facts_by_id = {f["id"]: f for f in facts}
+        calls["n"] = 0
+        status_repaired = sign.verify_fact(
+            child, pub, facts_by_id=facts_by_id, verified_cache=cache
+        )
+        ops_repaired = calls["n"]
+
+        assert status_repaired == sign.VALID
+        assert ops_repaired == 1, "a repaired parent must force a real re-verification"
+    finally:
+        sign.SigningKey.verify_bytes = real_verify
+
+
 def test_merkle_child_intact_when_parent_intact(sign, tmp_path):
     key = sign.load_or_create_key(tmp_path / "k", tmp_path / "k.pub")
     pub = sign.load_public_key(tmp_path / "k.pub")

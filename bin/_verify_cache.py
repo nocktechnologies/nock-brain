@@ -3,27 +3,36 @@
 Verifying every fact's attestation inside budget-recall (the OWASP F5 closure)
 costs ~160us per Ed25519 signature — ~0.4-0.8s over a 2,500-fact store, paid on
 EVERY recall for inputs that almost never change between recalls, blowing the
-memory-inject hook's <2s budget. This cache remembers which signatures have
-already been proven, so each one is verified once per content change instead of
-once per recall. (The offline auditor, verify-facts.py, deliberately never uses
-it: an audit always does the full cryptographic pass.)
+memory-inject hook's <2s budget. This cache remembers which signature
+determinations have already been made, so each one is verified once per
+content change instead of once per recall. (The offline auditor,
+verify-facts.py, deliberately never uses it: an audit always does the full
+cryptographic pass.)
 
 What a cache entry means — and what stays uncached:
 
-- Only a POSITIVE signature verification is recorded, as an opaque digest
-  binding the exact proof: an HMAC over (alg, key_id, signature, signed
-  payload) KEYED under the verifying key material — see _sign.cache_digest. The
-  payload embeds the attestation's committed fact/source hashes and the CURRENT
-  parent hashes, so editing a fact's attested content, its evidence, a parent,
-  the signature itself, or rotating the key all change the digest -> miss -> a
-  real signature verification. The HMAC keying is what makes a forged sidecar
-  useless without read access to the key file (see the threat model below).
+- A signature-op determination is recorded as an opaque digest binding the
+  exact proof: an HMAC over (alg, key_id, signature, signed payload [, status
+  for non-VALID]) KEYED under the verifying key material — see
+  _sign.cache_digest. The payload embeds the attestation's committed
+  fact/source hashes and the CURRENT parent hashes, so editing a fact's
+  attested content, its evidence, a parent, the signature itself, or rotating
+  the key all change the digest -> miss -> a real signature verification. The
+  HMAC keying is what makes a forged sidecar useless without read access to
+  the key file (see the threat model below).
+- VALID proofs use the historical preimage (no status field) so existing
+  sidecars keep hitting. PARENT_SUSPECT and signature-fail TAMPERED bind the
+  status into the HMAC so an attacker-writable sidecar cannot upgrade a
+  cached failure to VALID by rewriting the digest set. A later store change
+  that repairs ancestry changes the payload's parent hashes -> miss ->
+  re-verify, which is the required direction.
 - The content-hash comparisons in _sign.verify_fact (recomputing the fact's
   canonical hash against the committed hash — the check that actually catches
   F5 content poisoning) run on EVERY recall regardless of cache state; a hit
   only skips the redundant public-key operation. A tampered fact is therefore
   detected immediately, warm cache or not.
-- TAMPERED / UNSIGNED / PARENT_SUSPECT results are never cached.
+- UNSIGNED results are never cached (no signature to digest). Committed-hash
+  TAMPERED results are not cached either — those checks run every recall.
 
 Store stamp: the sidecar records the store file's (mtime_ns, size), captured
 BEFORE the store is read, as informational metadata only — it is NOT a hard
@@ -88,9 +97,10 @@ class VerifiedSignatureCache:
 
     `hit`/`add` are the only calls on the verification hot loop; `save` runs
     once per store load and rewrites the sidecar only when something changed
-    (a new signature proven, an untrustworthy sidecar being replaced, or the
-    store stamp moving — informational, but we persist the new stamp and
-    prune to this run's live set)."""
+    (a new signature determination recorded, an untrustworthy sidecar being
+    replaced, or the store stamp moving — informational, but we persist the
+    new stamp and prune to this run's live set). Digests are opaque: VALID
+    proofs and status-bound non-VALID proofs share the same set."""
 
     def __init__(self, path: Path, key_id: str, alg: str,
                  store_sig: dict, digests: "set[str]", dirty: bool = False):

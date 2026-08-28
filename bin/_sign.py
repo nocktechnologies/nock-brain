@@ -795,33 +795,79 @@ def is_cacheable_signature(signature_hex: Any) -> bool:
         return False
 
 
-def cache_digest(key: SigningKey, signature_hex: str, payload: bytes) -> str:
-    """Digest naming one successful signature verification, for the recall hot
+def cache_digest(key: SigningKey, signature_hex: str, payload: bytes,
+                 status: str = VALID) -> str:
+    """Digest naming one signature-op determination, for the recall hot
     path's sidecar cache (_verify_cache). It binds everything the proof
     depended on — algorithm, key, signature, and the exact signed payload
     (which itself embeds the committed fact/source hashes and the CURRENT
     parent hashes) — so any change to any of them yields a different digest,
     a cache miss, and a real verification.
 
+    VALID proofs use the historical preimage (no status field) so existing
+    sidecars keep hitting. Non-VALID determinations (PARENT_SUSPECT, or
+    TAMPERED when the public-key op itself failed) insert ``status`` before
+    the payload: the sidecar is attacker-writable, and binding the outcome
+    into the HMAC means rewriting a cached PARENT_SUSPECT digest cannot mint
+    a VALID hit. A later store change that repairs ancestry changes the
+    payload's embedded parent hashes, so the digest misses and re-verifies.
+
     It is an HMAC keyed under ``key.cache_key_material()`` (NOT a bare hash of
-    public inputs): a sidecar is attacker-writable, and every non-keyed input
-    here (alg, the public key_id fingerprint, the signature, the payload) is
-    computable by anyone who can read facts.json. Keying the digest under the
-    verifying key material means a forged sidecar entry cannot mint a VALID
-    result without read access to the key file — restoring the intended
-    'forging the cache needs the same access as replacing the key' property
-    even when the key sits on a protected path. ``signature_hex`` is a
-    caller-validated hex string (see is_cacheable_signature), so the NUL-joined
-    field encoding is unambiguous (hex/alg/fingerprint bytes contain no NUL and
-    the variable-length payload comes last)."""
-    preimage = b"\0".join([
+    public inputs): every non-keyed input here (alg, the public key_id
+    fingerprint, the signature, the payload, the status label) is computable
+    by anyone who can read facts.json. Keying the digest under the verifying
+    key material means a forged sidecar entry cannot mint a VALID result
+    without read access to the key file — restoring the intended 'forging
+    the cache needs the same access as replacing the key' property even when
+    the key sits on a protected path. ``signature_hex`` is a caller-validated
+    hex string (see is_cacheable_signature), so the NUL-joined field encoding
+    is unambiguous (hex/alg/fingerprint/status bytes contain no NUL and the
+    variable-length payload comes last)."""
+    fields = [
         _CACHE_DOMAIN,
         key.alg.encode("utf-8"),
         key.key_id.encode("utf-8"),
         signature_hex.encode("utf-8"),
-        payload,
-    ])
+    ]
+    if status != VALID:
+        # Closed enum (tampered / parent-suspect): ASCII, no NUL.
+        fields.append(status.encode("utf-8"))
+    fields.append(payload)
+    preimage = b"\0".join(fields)
     return hmac.new(key.cache_key_material(), preimage, hashlib.sha256).hexdigest()
+
+
+def _cached_signature_status(
+    key: SigningKey,
+    signature: str,
+    payload: bytes,
+    verified_cache,
+    fail_status: str,
+) -> str:
+    """Run (or reuse) the public-key operation for ``payload``.
+
+    Returns VALID if the signature verifies, otherwise ``fail_status``
+    (PARENT_SUSPECT when ancestry is the only remaining variable, TAMPERED
+    otherwise). ``verified_cache`` skips a previously recorded determination
+    for this (key, signature, payload) tuple; committed-hash / freshness
+    checks are the caller's job and must already have run.
+    """
+    digest_valid = None
+    digest_fail = None
+    if verified_cache is not None and is_cacheable_signature(signature):
+        digest_valid = cache_digest(key, signature, payload)
+        if verified_cache.hit(digest_valid):
+            return VALID
+        digest_fail = cache_digest(key, signature, payload, fail_status)
+        if verified_cache.hit(digest_fail):
+            return fail_status
+    if key.verify_bytes(payload, signature):
+        if digest_valid is not None:
+            verified_cache.add(digest_valid)
+        return VALID
+    if digest_fail is not None:
+        verified_cache.add(digest_fail)
+    return fail_status
 
 
 def verify_fact(
@@ -842,10 +888,11 @@ def verify_fact(
 
     ``verified_cache`` (a _verify_cache.VerifiedSignatureCache, or anything
     with hit/add) short-circuits ONLY the public-key signature operation, for
-    (key, signature, payload) triples this store has already proven VALID. The
-    committed-hash comparisons below run unconditionally either way, so a
-    tampered fact is still caught with a warm cache; only VALID results are
-    ever recorded."""
+    (key, signature, payload) triples this store has already resolved — VALID,
+    PARENT_SUSPECT, or signature-fail TAMPERED. The committed-hash comparisons
+    below run unconditionally either way, so a tampered fact is still caught
+    with a warm cache. UNSIGNED and committed-hash TAMPERED are not cached
+    (no signature op to skip)."""
     facts_by_id = facts_by_id or {}
     if "attestation" not in fact:
         return UNSIGNED
@@ -874,16 +921,9 @@ def verify_fact(
         signed_payload = CLAIM_ATTESTATION_V2_DOMAIN + canonical_contract_json(
             payload
         )
-        digest = None
-        if verified_cache is not None and is_cacheable_signature(signature):
-            digest = cache_digest(key, signature, signed_payload)
-            if verified_cache.hit(digest):
-                return VALID
-        if key.verify_bytes(signed_payload, signature):
-            if digest is not None:
-                verified_cache.add(digest)
-            return VALID
-        return TAMPERED
+        return _cached_signature_status(
+            key, signature, signed_payload, verified_cache, TAMPERED
+        )
 
     if _CLAIM_V2_ONLY_AUTHORITY_FIELDS.intersection(fact):
         return TAMPERED
@@ -925,16 +965,6 @@ def verify_fact(
     if key.alg != att.get("alg"):
         # Algorithm mismatch between key and attestation -> cannot have produced it.
         return TAMPERED
-    digest = None
-    if verified_cache is not None and is_cacheable_signature(att["signature"]):
-        digest = cache_digest(key, att["signature"], payload_now)
-        if verified_cache.hit(digest):
-            return VALID
-    if key.verify_bytes(payload_now, att["signature"]):
-        if digest is not None:
-            verified_cache.add(digest)
-        return VALID
-
     # 3. Signature failed even though the fact's OWN committed hashes still match
     #    its current content (checked in step 1). The signed payload is
     #    fact_hash + source_hash (both taken from the committed attestation) +
@@ -942,9 +972,13 @@ def verify_fact(
     #    remaining variable that could have changed is the parent set -> the
     #    break is in ancestry. With parents that is PARENT_SUSPECT (a parent was
     #    edited/revoked); with no parents the signature itself is bad -> TAMPERED.
-    if parent_ids:
-        return PARENT_SUSPECT
-    return TAMPERED
+    #    The cache records that determination (status-bound digest) so a stable
+    #    Merkle-broken child does not re-run Ed25519 on every recall; a repaired
+    #    parent changes payload_now -> miss -> re-verify.
+    fail_status = PARENT_SUSPECT if parent_ids else TAMPERED
+    return _cached_signature_status(
+        key, att["signature"], payload_now, verified_cache, fail_status
+    )
 
 
 def verify_facts(

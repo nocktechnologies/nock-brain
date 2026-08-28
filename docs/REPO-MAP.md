@@ -152,11 +152,14 @@ Per-module invariants worth memorizing:
   system**; only `nockbrain-health.py` surfaces it. Round-trip rule: values
   occupy typed columns only when SQLite affinity returns them unchanged;
   everything else spills to `extra` (so `1` never becomes `1.0`).
-- `_verify_cache`: only positive verifications are cached; a hit skips only
-  the public-key op — the content-hash comparison (the actual anti-poisoning
+- `_verify_cache`: VALID, PARENT_SUSPECT, and signature-fail TAMPERED
+  determinations are cached (non-VALID digests bind the status into the HMAC
+  so a sidecar rewrite cannot upgrade a failure); a hit skips only the
+  public-key op — the content-hash comparison (the actual anti-poisoning
   check) runs on every recall, warm or cold. Store (mtime_ns, size) is
   metadata, not a wipe key: unchanged facts stay hits across rewrites; a
-  dirty save prunes to digests hit-or-added this run.
+  dirty save prunes to digests hit-or-added this run. UNSIGNED and
+  committed-hash TAMPERED are not cached.
 - `_dense_recall`: recency must NEVER multiply cosine (it buried perfect
   paraphrase matches). All dense gates are filter-only.
 - `_graph_recall`: `min_shared_terms >= 2` is a vacuous setting that silently
