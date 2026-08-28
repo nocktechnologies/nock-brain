@@ -360,6 +360,10 @@ def render_text(report: dict[str, Any]) -> str:
             lines.append("- Verification cache: missing (cold start)")
         elif cache.get("fresh"):
             lines.append("- Verification cache: present, fresh, writable")
+        elif cache.get("reason") == "oversized":
+            lines.append("- Verification cache: present, oversized, writable")
+        elif cache.get("reason") == "unreadable":
+            lines.append("- Verification cache: present, unreadable, writable")
         else:
             lines.append("- Verification cache: present, stale stamp, writable")
     return "\n".join(lines) + "\n"
