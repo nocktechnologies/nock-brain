@@ -21,6 +21,7 @@ if str(BIN_DIR) not in sys.path:
 from _embed import DEFAULT_SIDECAR, EmbedUnavailable, load_sidecar, save_sidecar
 from _facts import load_facts
 from _store import secure_write_json, secure_write_text
+from _verify_cache import cache_path_for, unlink_for_store
 
 DEFAULT_ROOT = Path.home() / ".nock-brain"
 
@@ -163,6 +164,31 @@ def run(argv: list[str] | None = None) -> int:
     sidecar_note, removed_vectors = purge_sidecar(
         args.sidecar, removed_ids, args.apply)
 
+    cache_path = cache_path_for(args.facts)
+    cache_note = ""
+    if args.apply:
+        # Rewrite the store first so a concurrent recall that loaded the old
+        # facts.json cannot save() the sidecar back: save() re-stats and skips
+        # when the stamp moved. Then drop the sidecar (opaque digests; next
+        # recall cold-starts). Dry-run never reaches here.
+        secure_write_json(args.facts, kept_facts, indent=2, default=str)
+        if removed_facts:
+            # Always unlink so leftover `{sidecar}.*.tmp` files are swept even
+            # when an interrupted cache write never produced the sidecar.
+            had_cache = cache_path.exists()
+            unlinked = unlink_for_store(args.facts)
+            if had_cache:
+                cache_note = (
+                    f"deleted verification cache {cache_path}" if unlinked
+                    else f"could not delete verification cache {cache_path}"
+                )
+        if args.events.exists():
+            secure_write_text(args.events, kept_events, encoding="utf-8")
+        for path, text in {**note_rewrites, **vault_rewrites}.items():
+            secure_write_text(path, text, encoding="utf-8")
+    elif removed_facts and cache_path.exists():
+        cache_note = f"would delete verification cache {cache_path}"
+
     print(
         f"{'would remove' if not args.apply else 'removed'} "
         f"{removed_facts} fact(s), {removed_events} event(s), "
@@ -171,15 +197,8 @@ def run(argv: list[str] | None = None) -> int:
     )
     if sidecar_note:
         print(sidecar_note, file=sys.stderr)
-
-    if not args.apply:
-        return 0
-
-    secure_write_json(args.facts, kept_facts, indent=2, default=str)
-    if args.events.exists():
-        secure_write_text(args.events, kept_events, encoding="utf-8")
-    for path, text in {**note_rewrites, **vault_rewrites}.items():
-        secure_write_text(path, text, encoding="utf-8")
+    if cache_note:
+        print(cache_note, file=sys.stderr)
     return 0
 
 

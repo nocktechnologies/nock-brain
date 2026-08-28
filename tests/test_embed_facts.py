@@ -138,6 +138,59 @@ def test_corrupt_sidecar_loads_as_none(embed_mod, tmp_path):
     assert embed_mod.load_sidecar(sidecar) is None
 
 
+def test_save_sidecar_resolves_store_under_direct_module_load(
+        tmp_path, monkeypatch):
+    """save_sidecar does `from _store import secure_replace_bytes` at call
+    time. This file loads _embed via spec_from_file_location without putting
+    bin/ on sys.path; that must still resolve the sibling."""
+    import sys
+    bin_resolved = BIN.resolve()
+    monkeypatch.setattr(
+        sys, "path",
+        [p for p in sys.path if Path(p).resolve() != bin_resolved],
+    )
+    stored = sys.modules.pop("_store", None)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_embed_direct_load", BIN / "_embed.py")
+        embed = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(embed)
+        sidecar = tmp_path / "embeddings.npz"
+        mat = numpy.zeros((1, 8), dtype=numpy.float32)
+        embed.save_sidecar(sidecar, ["a"], ["deadbeef"], "stub-hash-32", mat)
+        assert sidecar.exists()
+        loaded = embed.load_sidecar(sidecar)
+        assert loaded is not None
+        assert loaded["ids"] == ["a"]
+    finally:
+        if stored is not None:
+            sys.modules["_store"] = stored
+
+
+def test_save_sidecar_uses_store_atomic_write(embed_mod, tmp_path, monkeypatch):
+    """Issue #54: embeddings.npz must write through _store.secure_replace_bytes."""
+    import sys
+    if str(BIN) not in sys.path:
+        sys.path.insert(0, str(BIN))
+    import _store
+    called = []
+    real = _store.secure_replace_bytes
+
+    def fake(path, data, **kwargs):
+        called.append(path)
+        return real(path, data, **kwargs)
+
+    monkeypatch.setattr(_store, "secure_replace_bytes", fake)
+    sidecar = tmp_path / "embeddings.npz"
+    mat = numpy.zeros((1, 8), dtype=numpy.float32)
+    embed_mod.save_sidecar(sidecar, ["a"], ["deadbeef"], "stub-hash-32", mat)
+    assert called == [sidecar]
+    assert sidecar.exists()
+    loaded = embed_mod.load_sidecar(sidecar)
+    assert loaded is not None
+    assert loaded["ids"] == ["a"]
+
+
 def test_purge_removes_vector_with_fact(embed_mod, embed_facts, purge_fact,
                                         store, tmp_path, capsys):
     facts_path, sidecar = store

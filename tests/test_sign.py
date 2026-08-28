@@ -327,6 +327,53 @@ def test_parent_suspect_is_cached_and_repair_forces_reverify(sign, tmp_path):
         sign.SigningKey.verify_bytes = real_verify
 
 
+def test_verify_facts_threads_verified_cache(sign, tmp_path):
+    """Issue #53: verify_facts is cache-aware so caching is a property of
+    verification, not of one caller. A warm cache skips the public-key op;
+    passing None (the offline-auditor path) does not."""
+    spec = importlib.util.spec_from_file_location(
+        "_verify_cache", BIN / "_verify_cache.py")
+    vc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vc)
+
+    key = sign.load_or_create_key(tmp_path / "k", tmp_path / "k.pub")
+    pub = sign.load_public_key(tmp_path / "k.pub")
+    facts = [make_fact("f-1", content="ed25519 rollout was approved"),
+             make_fact("f-2", content="ed25519 rollout owner is mira")]
+    sign.sign_facts(facts, key)
+
+    cache = vc.VerifiedSignatureCache(
+        tmp_path / "cache.json", pub.key_id, pub.alg,
+        {"mtime_ns": 1, "size": 1}, set(),
+    )
+    real_verify = sign.SigningKey.verify_bytes
+    calls = {"n": 0}
+
+    def counting(self, payload, sig):
+        calls["n"] += 1
+        return real_verify(self, payload, sig)
+
+    sign.SigningKey.verify_bytes = counting
+    try:
+        calls["n"] = 0
+        cold = sign.verify_facts(facts, pub, verified_cache=cache)
+        ops_cold = calls["n"]
+        assert cold["valid"] == 2
+        assert ops_cold == 2
+
+        calls["n"] = 0
+        warm = sign.verify_facts(facts, pub, verified_cache=cache)
+        assert warm["valid"] == 2
+        assert calls["n"] == 0, "warm verify_facts must skip the public-key op"
+
+        calls["n"] = 0
+        uncached = sign.verify_facts(facts, pub)
+        assert uncached["valid"] == 2
+        assert calls["n"] == 2, "verified_cache=None is a full cryptographic pass"
+    finally:
+        sign.SigningKey.verify_bytes = real_verify
+
+
 def test_merkle_child_intact_when_parent_intact(sign, tmp_path):
     key = sign.load_or_create_key(tmp_path / "k", tmp_path / "k.pub")
     pub = sign.load_public_key(tmp_path / "k.pub")
