@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -269,3 +270,72 @@ def test_stale_cache_save_during_purge_cannot_revive_purged_digest(
     assert not cache.exists(), (
         "a stale cache save must not recreate the sidecar with a purged digest"
     )
+
+
+def test_purge_apply_sweeps_stale_cache_tmp_without_sidecar(tmp_path):
+    """An interrupted cache write can leave `{sidecar}.*.tmp` with no sidecar.
+    Applied matching purges must still call unlink_for_store so the sweep runs.
+    """
+    facts = tmp_path / "facts.json"
+    events = tmp_path / "events.jsonl"
+    notes = tmp_path / "sessions"
+    vault = tmp_path / "vault"
+    notes.mkdir()
+    vault.mkdir()
+    facts.write_text(json.dumps([
+        {
+            "id": "leaky",
+            "kind": "decision",
+            "status": "current",
+            "confidence": 0.9,
+            "content": "Kevin removed leaked-secret-value from memory",
+            "source_date": "2026-06-12",
+            "evidence": [],
+        },
+        {
+            "id": "keep",
+            "kind": "decision",
+            "status": "current",
+            "confidence": 0.9,
+            "content": "Kevin kept safe memory",
+            "source_date": "2026-06-12",
+            "evidence": [],
+        },
+    ]))
+    events.write_text("")
+
+    sidecar = facts.with_name(facts.name + ".verified-cache.json")
+    leftover = tmp_path / (sidecar.name + ".interrupted.tmp")
+    leftover.write_text("stale tmp from interrupted cache write", encoding="utf-8")
+    # _sweep_stale_tmps leaves files younger than STALE_TMP_AGE_SEC (60s)
+    # as a concurrent-writer guard; age this leftover past that cutoff.
+    old = time.time() - 90
+    os.utime(leftover, (old, old))
+    assert not sidecar.exists()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO / "bin" / "purge-fact.py"),
+            "--pattern", "leaked-secret-value",
+            "--facts", str(facts),
+            "--events", str(events),
+            "--notes-dir", str(notes),
+            "--vault", str(vault),
+            "--sidecar", str(tmp_path / "embeddings.npz"),
+            "--apply",
+        ],
+        cwd=REPO,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert not leftover.exists(), (
+        "applied matching purge must sweep leftover cache tmp files"
+    )
+    assert [fact["id"] for fact in json.loads(facts.read_text())] == ["keep"]
+    assert "removed 1 fact" in result.stdout
+    assert "verification cache" not in result.stderr
+

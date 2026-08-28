@@ -172,12 +172,16 @@ def run(argv: list[str] | None = None) -> int:
         # when the stamp moved. Then drop the sidecar (opaque digests; next
         # recall cold-starts). Dry-run never reaches here.
         secure_write_json(args.facts, kept_facts, indent=2, default=str)
-        if removed_facts and cache_path.exists():
+        if removed_facts:
+            # Always unlink so leftover `{sidecar}.*.tmp` files are swept even
+            # when an interrupted cache write never produced the sidecar.
+            had_cache = cache_path.exists()
             unlinked = unlink_for_store(args.facts)
-            cache_note = (
-                f"deleted verification cache {cache_path}" if unlinked
-                else f"could not delete verification cache {cache_path}"
-            )
+            if had_cache:
+                cache_note = (
+                    f"deleted verification cache {cache_path}" if unlinked
+                    else f"could not delete verification cache {cache_path}"
+                )
         if args.events.exists():
             secure_write_text(args.events, kept_events, encoding="utf-8")
         for path, text in {**note_rewrites, **vault_rewrites}.items():
