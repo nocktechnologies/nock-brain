@@ -14,6 +14,11 @@ tests pin its contract:
   the sidecar's store stamp;
 - --strict-verify semantics are unchanged: the cache only accelerates the
   VALID determination, never alters a status;
+- a stale save cannot clobber a newer sidecar: A loaded v1, B saved v2, A's
+  later save skips (re-stat mismatch) so B's digests survive, including
+  status-bound non-VALID entries that share the digest set;
+- same-stamp concurrent saves union on-disk digests (append-only within one
+  store stat) rather than last-writer-wins;
 - a forged sidecar cannot bypass verification: the digest is an HMAC keyed
   under key material an attacker without the key file cannot reproduce, so a
   planted digest never hits (even under --strict-verify);
@@ -21,14 +26,32 @@ tests pin its contract:
   NEVER crash recall — a pathologically nested sidecar (RecursionError), an
   oversized one, a non-hex signature (surrogate), or a save error all degrade
   gracefully;
+- an unwritable sidecar directory degrades to in-memory caching: one
+  diagnostic per process, a second recall in the same process still hits,
+  and the process does not crash;
 - any cache doubt (corrupt sidecar, missing key) fails closed to a full
   verification pass, never to skipped verification.
 """
 import importlib
+import importlib.util
 import json
 import stat
+from pathlib import Path
 
 import pytest
+
+_BIN = Path(__file__).resolve().parent.parent / "bin"
+
+
+def _load_verify_cache():
+    """Load bin/_verify_cache.py without depending on another test having
+    put bin/ on sys.path, and without replacing sys.modules['_verify_cache']
+    that budget-recall already imported."""
+    spec = importlib.util.spec_from_file_location(
+        f"_verify_cache_direct_{id(object())}", _BIN / "_verify_cache.py")
+    vc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vc)
+    return vc
 
 
 def signable_fact(fid, content, kind="decision", source_date="2026-07-01"):
@@ -423,6 +446,43 @@ def test_oversized_sidecar_is_refused(
     assert "approved" in out  # oversized sidecar ignored, recall works
 
 
+def test_peer_digests_refuses_oversized_sidecar(tmp_path, monkeypatch):
+    """_peer_digests must not read a sidecar larger than MAX_SIDECAR_BYTES.
+    A well-formed oversized file would otherwise union its digests (and
+    can MemoryError on the save path)."""
+    vc = _load_verify_cache()
+    monkeypatch.setattr(vc, "MAX_SIDECAR_BYTES", 64)
+    sidecar = tmp_path / "facts.json.verified-cache.json"
+    store_sig = {"mtime_ns": 1, "size": 1}
+    sidecar.write_text(json.dumps({
+        "version": vc.CACHE_VERSION, "alg": "ed25519", "key_id": "k",
+        "store": store_sig,
+        "digests": ["deadbeef"],
+    }), encoding="utf-8")
+    assert sidecar.stat().st_size > 64
+    assert vc._peer_digests(sidecar, "k", "ed25519", store_sig) == set()
+
+
+def test_sidecar_status_oversized_is_not_fresh(tmp_path, monkeypatch):
+    """sidecar_status must not read a sidecar larger than MAX_SIDECAR_BYTES.
+    A well-formed oversized file would otherwise look fresh."""
+    vc = _load_verify_cache()
+    monkeypatch.setattr(vc, "MAX_SIDECAR_BYTES", 64)
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]", encoding="utf-8")
+    st = facts.stat()
+    sidecar = vc.cache_path_for(facts)
+    sidecar.write_text(json.dumps({
+        "version": vc.CACHE_VERSION, "alg": "ed25519", "key_id": "k",
+        "store": {"mtime_ns": st.st_mtime_ns, "size": st.st_size},
+        "digests": ["deadbeef"],
+    }), encoding="utf-8")
+    assert sidecar.stat().st_size > 64
+    status = vc.sidecar_status(facts)
+    assert status["present"] is True
+    assert status["fresh"] is False
+
+
 def test_non_hex_signature_is_tampered_not_a_crash(
         budget_recall, sign_lib, signing_key, tmp_path, capsys):
     """A fact whose attestation signature is a non-hex string (here a lone
@@ -446,7 +506,7 @@ def test_non_hex_signature_is_tampered_not_a_crash(
 def test_save_failure_does_not_raise(sign_lib, tmp_path, capsys, monkeypatch):
     """save() must degrade to a stderr note, never raise — budget-recall calls
     it unguarded on the hot path. Force a non-OSError from json.dump."""
-    vc = importlib.import_module("_verify_cache")
+    vc = _load_verify_cache()
     cache = vc.VerifiedSignatureCache(
         tmp_path / "facts.json.verified-cache.json", "k", "ed25519",
         {"mtime_ns": 1, "size": 1}, set(), dirty=True)
@@ -454,3 +514,130 @@ def test_save_failure_does_not_raise(sign_lib, tmp_path, capsys, monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(TypeError("boom")))
     cache.save()  # must not raise
     assert "could not save verification cache" in capsys.readouterr().err
+
+
+def test_save_failure_warns_only_once(tmp_path, capsys, monkeypatch):
+    """Issue #50: an unwritable sidecar must not print on every save()."""
+    vc = _load_verify_cache()
+    monkeypatch.setattr(vc.json, "dump",
+                        lambda *a, **k: (_ for _ in ()).throw(TypeError("boom")))
+    for _ in range(2):
+        cache = vc.VerifiedSignatureCache(
+            tmp_path / "facts.json.verified-cache.json", "k", "ed25519",
+            {"mtime_ns": 1, "size": 1}, set(), dirty=True)
+        cache.add("digest")
+        cache.save()
+    err = capsys.readouterr().err
+    assert err.count("could not save verification cache") == 1
+
+
+# --- concurrent save: stale writer must not clobber a newer sidecar (#49) -----
+def test_stale_v1_save_does_not_clobber_v2_sidecar(tmp_path):
+    """Issue #49: recall A starts against store v1; a consolidation rewrites
+    the store to v2; recall B verifies v2 and saves; A's later save must not
+    write {v1-stat, v1-live} over B. Without a re-stat-before-replace, B's
+    digests vanish and the next recall pays a cold verification.
+
+    Digests here are opaque strings: VALID and status-bound PARENT_SUSPECT/
+    TAMPERED share one set (#48). Both of B's entries must survive."""
+    vc = _load_verify_cache()
+    store = tmp_path / "facts.json"
+    sidecar = vc.cache_path_for(store)
+
+    store.write_text("v1", encoding="utf-8")
+    st1 = store.stat()
+    sig_v1 = {"mtime_ns": st1.st_mtime_ns, "size": st1.st_size}
+
+    cache_a = vc.VerifiedSignatureCache(
+        sidecar, "k", "ed25519", sig_v1, set(), dirty=True, store_path=store)
+    cache_a.add("digest-a-v1")
+
+    # Store rewrite: different size so the stamp cannot collide.
+    store.write_text("v2-rewritten-by-consolidation", encoding="utf-8")
+    st2 = store.stat()
+    sig_v2 = {"mtime_ns": st2.st_mtime_ns, "size": st2.st_size}
+    assert sig_v2 != sig_v1
+
+    cache_b = vc.VerifiedSignatureCache(
+        sidecar, "k", "ed25519", sig_v2, set(), dirty=True, store_path=store)
+    cache_b.add("digest-b-valid")
+    cache_b.add("digest-b-parent-suspect")  # status-bound non-VALID, same set
+    cache_b.save()
+
+    saved = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert set(saved["digests"]) == {"digest-b-valid", "digest-b-parent-suspect"}
+    assert saved["store"] == sig_v2
+
+    cache_a.save()  # the stale v1 write — must skip, not clobber
+
+    saved = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert set(saved["digests"]) == {"digest-b-valid", "digest-b-parent-suspect"}
+    assert saved["store"] == sig_v2
+    assert "digest-a-v1" not in saved["digests"]
+
+
+def test_same_stamp_save_unions_peer_digests(tmp_path):
+    """Within one store stat, digests are append-only. Two concurrent writers
+    each prune to their own live set; save() re-reads the sidecar and unions
+    so neither drops the other's adds. VALID and status-bound non-VALID
+    entries share the set: union is a set of opaque HMACs and cannot upgrade
+    a failure to VALID (#48)."""
+    vc = _load_verify_cache()
+    store = tmp_path / "facts.json"
+    sidecar = vc.cache_path_for(store)
+    store.write_text("stable", encoding="utf-8")
+    st = store.stat()
+    sig = {"mtime_ns": st.st_mtime_ns, "size": st.st_size}
+
+    cache_b = vc.VerifiedSignatureCache(
+        sidecar, "k", "ed25519", sig, set(), dirty=True, store_path=store)
+    cache_b.add("digest-b-valid")
+    cache_b.add("digest-b-parent-suspect")
+    cache_b.save()
+
+    cache_a = vc.VerifiedSignatureCache(
+        sidecar, "k", "ed25519", sig, set(), dirty=True, store_path=store)
+    cache_a.add("digest-a-valid")
+    cache_a.add("digest-a-tampered")
+    cache_a.save()
+
+    saved = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert set(saved["digests"]) == {
+        "digest-a-valid", "digest-a-tampered",
+        "digest-b-valid", "digest-b-parent-suspect",
+    }
+    assert saved["store"] == sig
+
+
+# --- unwritable sidecar: in-memory only, one diagnostic per process (#50) -----
+def test_unwritable_sidecar_warns_once_and_caches_in_memory(
+        budget_recall, sign_lib, signing_key, tmp_path, verify_calls, capsys,
+        monkeypatch):
+    """Issue #50: a read-only or full store directory must not print
+    `could not save verification cache` on every recall, and the process
+    must still warm in memory so the second recall skips signature ops."""
+    vc = importlib.import_module("_verify_cache")
+    monkeypatch.setattr(vc, "_save_warned", False)
+    monkeypatch.setattr(vc, "_memory", {})
+    monkeypatch.setattr(vc, "_probe_writable", lambda directory: False)
+
+    facts = [signable_fact(f"f-{i}", f"ed25519 rollout note {i} approved")
+             for i in range(3)]
+    sign_lib.sign_facts(facts, signing_key)
+    facts_file = write_facts(tmp_path, facts)
+
+    first = budget_recall.budget_recall("ed25519 rollout approved", facts_file)
+    err1 = capsys.readouterr().err
+    assert "approved" in first
+    assert verify_calls["n"] == 3  # cold
+    assert "verification cache is unwritable" in err1
+    assert err1.count("verification cache is unwritable") == 1
+    assert not sidecar_for(facts_file).exists()  # never persisted
+
+    verify_calls["n"] = 0
+    second = budget_recall.budget_recall("ed25519 rollout approved", facts_file)
+    err2 = capsys.readouterr().err
+    assert second == first
+    assert verify_calls["n"] == 0  # in-memory warm
+    assert "unwritable" not in err2
+    assert "could not save" not in err2

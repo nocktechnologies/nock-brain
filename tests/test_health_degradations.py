@@ -148,6 +148,98 @@ def test_non_dict_queue_doc_does_not_crash(nockbrain_health, tmp_path):
         assert q["stale"] is True, payload
 
 
+# ── verification-cache sidecar (present / fresh / writable) ──────────────────
+def test_health_reports_missing_verification_cache(nockbrain_health, tmp_path):
+    (tmp_path / "facts.json").write_text("[]")
+    report = nockbrain_health.build_report(facts_path=tmp_path / "facts.json")
+    cache = report["verification_cache"]
+    assert cache["present"] is False
+    assert cache["fresh"] is False
+    assert cache["writable"] is True
+    assert cache["flagged"] is False
+    text = nockbrain_health.render_text(report)
+    assert "missing (cold start)" in text
+    assert "UNWRITABLE" not in text
+
+
+def test_health_reports_fresh_verification_cache(nockbrain_health, tmp_path):
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]")
+    st = facts.stat()
+    sidecar = facts.with_name(facts.name + ".verified-cache.json")
+    sidecar.write_text(json.dumps({
+        "version": 2, "alg": "ed25519", "key_id": "k",
+        "store": {"mtime_ns": st.st_mtime_ns, "size": st.st_size},
+        "digests": [],
+    }))
+    report = nockbrain_health.build_report(facts_path=facts)
+    cache = report["verification_cache"]
+    assert cache["present"] is True
+    assert cache["fresh"] is True
+    assert cache["writable"] is True
+    assert cache["flagged"] is False
+    assert "present, fresh, writable" in nockbrain_health.render_text(report)
+
+
+def test_health_reports_stale_verification_cache_stamp(nockbrain_health, tmp_path):
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]")
+    sidecar = facts.with_name(facts.name + ".verified-cache.json")
+    sidecar.write_text(json.dumps({
+        "version": 2, "alg": "ed25519", "key_id": "k",
+        "store": {"mtime_ns": 1, "size": 1},
+        "digests": ["ab"],
+    }))
+    report = nockbrain_health.build_report(facts_path=facts)
+    cache = report["verification_cache"]
+    assert cache["present"] is True
+    assert cache["fresh"] is False
+    assert cache["writable"] is True
+    assert cache["flagged"] is False  # stale is informational, not an outage
+    assert "stale stamp" in nockbrain_health.render_text(report)
+
+
+def test_health_flags_unwritable_verification_cache(nockbrain_health, tmp_path):
+    import os
+    import pytest
+    facts = tmp_path / "facts.json"
+    facts.write_text(json.dumps([{
+        "id": "f-1", "kind": "decision", "status": "current",
+        "confidence": 0.9, "content": "x", "source_date": "2026-07-01",
+        "evidence": [],
+    }]))
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root bypasses directory mode")
+    os.chmod(tmp_path, 0o555)
+    try:
+        report = nockbrain_health.build_report(facts_path=facts)
+    finally:
+        os.chmod(tmp_path, 0o755)
+    cache = report["verification_cache"]
+    assert cache["writable"] is False
+    assert cache["flagged"] is True
+    assert report["recall_ready"] is True  # cache flag does not trip the gate
+    assert "UNWRITABLE" in nockbrain_health.render_text(report)
+
+
+def test_health_reports_uncreated_parent_as_cold_start(nockbrain_health, tmp_path):
+    """A store path whose parent directory has not been created is a cold
+    start, not an outage: writable is False (nowhere to persist) but
+    flagged is False, so health prints 'missing (cold start)' and not
+    UNWRITABLE."""
+    facts = tmp_path / "never-created" / "facts.json"
+    assert not facts.parent.exists()
+    report = nockbrain_health.build_report(facts_path=facts)
+    cache = report["verification_cache"]
+    assert cache["present"] is False
+    assert cache["fresh"] is False
+    assert cache["writable"] is False
+    assert cache["flagged"] is False
+    text = nockbrain_health.render_text(report)
+    assert "missing (cold start)" in text
+    assert "UNWRITABLE" not in text
+
+
 def test_max_age_validation_rejects_nonfinite(nockbrain_health, tmp_path, capsys):
     import pytest
     (tmp_path / "facts.json").write_text("[]")

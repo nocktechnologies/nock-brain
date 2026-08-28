@@ -50,6 +50,25 @@ Growth bound: a dirty save persists only digests that were hit() or add()ed
 during THIS run. Purged or pre-edit digests are not live this run, so they
 drop instead of accumulating forever across store rewrites.
 
+Concurrent saves: save() is load-modify-replace with no lock. Two recalls
+racing a store rewrite (hook + budget-recall, or two Claude sessions) used
+to last-writer-wins: a stale v1 handle would os.replace over a v2 sidecar
+and the next recall would pay a cold verification. save() now re-stats the
+store immediately before os.replace and skips when the stamp no longer
+matches self.store_sig — the stale writer keeps its in-memory set but does
+not clobber the newer sidecar. When the stamp still matches, save() re-reads
+the sidecar and unions digests: within one store stat the set is append-only
+(VALID and status-bound non-VALID share it; union cannot upgrade a failure
+because non-VALID HMACs bind the status). Across stamps, skip-not-union
+preserves the prune bound.
+
+Unwritable store: load_for_store probes the sidecar directory once per
+handle. If the directory is read-only or full, the handle stays usable
+in memory (hit/add still skip redundant pubkey ops for the rest of this
+recall and later recalls in the same process) but save() does not touch
+disk. At most one diagnostic is printed per process — never one line per
+recall — so a stuck store cannot fill hook-errors.log.
+
 Threat model: the sidecar lives next to facts.json and is attacker-writable,
 so a forged entry must never be able to mint a VALID result. It cannot: the
 digest is an HMAC keyed under _sign.SigningKey.cache_key_material() (the raw
@@ -87,6 +106,15 @@ FILE_MODE = 0o600
 # permanently blowing the recall budget (and against MemoryError on read).
 MAX_SIDECAR_BYTES = 64 * 1024 * 1024
 
+# Process-level degradation for an unwritable sidecar. A read-only or full
+# store directory would otherwise print `could not save verification cache`
+# on every recall (and append that line to hook-errors.log forever). After
+# the first diagnostic, further save failures this process are silent; the
+# digest set is kept in _memory so a later load_for_store in this process
+# still hits.
+_save_warned = False
+_memory: dict[tuple, set[str]] = {}
+
 
 def cache_path_for(store_path: Path) -> Path:
     return store_path.with_name(store_path.name + ".verified-cache.json")
@@ -100,10 +128,13 @@ class VerifiedSignatureCache:
     (a new signature determination recorded, an untrustworthy sidecar being
     replaced, or the store stamp moving — informational, but we persist the
     new stamp and prune to this run's live set). Digests are opaque: VALID
-    proofs and status-bound non-VALID proofs share the same set."""
+    proofs and status-bound non-VALID proofs share the same set. A save
+    whose store stamp has moved is skipped so a stale writer cannot clobber
+    a newer sidecar; a same-stamp save unions on-disk digests."""
 
     def __init__(self, path: Path, key_id: str, alg: str,
-                 store_sig: dict, digests: "set[str]", dirty: bool = False):
+                 store_sig: dict, digests: "set[str]", dirty: bool = False,
+                 store_path: "Path | None" = None):
         self.path = Path(path)
         self.key_id = key_id
         self.alg = alg
@@ -111,6 +142,8 @@ class VerifiedSignatureCache:
         self.digests = set(digests)
         self._dirty = dirty
         self._live: "set[str]" = set()  # hit or added this run; prune target
+        self.store_path = Path(store_path) if store_path is not None else None
+        self._writable = True  # load_for_store clears this after a failed probe
 
     def hit(self, digest: str) -> bool:
         if digest in self.digests:
@@ -133,10 +166,25 @@ class VerifiedSignatureCache:
         cannot escape; KeyboardInterrupt/SystemExit still propagate.
 
         A dirty save keeps only digests hit() or add()ed this run, so a store
-        rewrite cannot accumulate stale entries for facts that are gone."""
+        rewrite cannot accumulate stale entries for facts that are gone.
+
+        Last-writer-wins is not safe across a store rewrite: a handle that
+        loaded v1 would otherwise os.replace {v1-stat, v1-live} over a v2
+        sidecar. Re-stat the store immediately before replace and skip when
+        it no longer matches self.store_sig. When it still matches, re-read
+        the sidecar and union — append-only within one stat, and sound with
+        status-bound non-VALID digests in the same set because they are
+        opaque HMACs that cannot hit as VALID."""
         if not self._dirty:
             return
+        if self.store_path is not None and _store_sig(self.store_path) != self.store_sig:
+            return
         self.digests = set(self._live)
+        self.digests |= _peer_digests(self.path, self.key_id, self.alg,
+                                      self.store_sig)
+        if not self._writable:
+            _stash_memory(self)
+            return
         doc = {
             "version": CACHE_VERSION,
             "alg": self.alg,
@@ -154,11 +202,18 @@ class VerifiedSignatureCache:
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(doc, fh, separators=(",", ":"))
             os.chmod(tmp, FILE_MODE)
+            # Re-stat immediately before replace: the store can still move
+            # between the earlier check and here (the window the race lives in).
+            if (self.store_path is not None
+                    and _store_sig(self.store_path) != self.store_sig):
+                return
             os.replace(tmp, self.path)
             tmp = None  # replaced; nothing to clean up
+            _drop_memory(self)
         except Exception as exc:  # noqa: BLE001 - never crash recall on cache save
-            print(f"{self.path}: could not save verification cache ({exc})",
-                  file=sys.stderr)
+            self._writable = False
+            _stash_memory(self)
+            _warn_save(self.path, exc)
         finally:
             if tmp is not None:
                 try:
@@ -175,7 +230,12 @@ def load_for_store(store_path: Path, verify_key) -> "VerifiedSignatureCache | No
     between this stat and the read records a stale stamp; the next recall
     notices the mismatch, rewrites the metadata, and prunes — still the safe
     direction. Returns None (caching off) when verification is off or the
-    store is not statable."""
+    store is not statable.
+
+    Probes sidecar-directory writability once here so save() does not pay a
+    failed mkstemp on every recall. Unwritable: one diagnostic, in-memory
+    caching for the rest of this process (union any previously stashed
+    digests), no crash."""
     if verify_key is None:
         return None
     store_path = Path(store_path)
@@ -185,9 +245,18 @@ def load_for_store(store_path: Path, verify_key) -> "VerifiedSignatureCache | No
         return None
     store_sig = {"mtime_ns": st.st_mtime_ns, "size": st.st_size}
     path = cache_path_for(store_path)
+    writable = _probe_writable(path.parent)
+    if not writable:
+        _warn_unwritable(path)
     digests, dirty = _load_digests(path, verify_key, store_sig)
-    return VerifiedSignatureCache(path, verify_key.key_id, verify_key.alg,
-                                  store_sig, digests, dirty)
+    mem = _memory.get(_memory_key(store_path, verify_key.key_id, verify_key.alg))
+    if mem:
+        digests = set(digests) | mem
+    cache = VerifiedSignatureCache(path, verify_key.key_id, verify_key.alg,
+                                   store_sig, digests, dirty,
+                                   store_path=store_path)
+    cache._writable = writable
+    return cache
 
 
 def _load_digests(path: Path, verify_key, store_sig: dict) -> "tuple[set[str], bool]":
@@ -236,3 +305,160 @@ def _load_digests(path: Path, verify_key, store_sig: dict) -> "tuple[set[str], b
         return set(), True
     except Exception:  # noqa: BLE001 - fail closed to full verification, never crash
         return set(), True
+
+
+def _store_sig(store_path: Path) -> "dict | None":
+    """Current (mtime_ns, size) of the store, or None if it is not statable."""
+    try:
+        st = Path(store_path).stat()
+    except OSError:
+        return None
+    return {"mtime_ns": st.st_mtime_ns, "size": st.st_size}
+
+
+def _peer_digests(path: Path, key_id: str, alg: str, store_sig: dict) -> "set[str]":
+    """On-disk digests from a same-stamp sidecar, else empty.
+
+    Concurrent same-stat writers each prune to their own live set; unioning
+    the already-persisted sidecar keeps the other writer's append-only adds.
+    A different store stamp, a foreign key/alg/version, or any read/parse
+    failure returns empty so we persist our own live set and do not
+    re-accumulate another generation's pruned entries (#47). VALID and
+    status-bound non-VALID digests share the set (#48); union is still a
+    set of opaque HMACs — a PARENT_SUSPECT digest cannot hit as VALID."""
+    try:
+        path = Path(path)
+        try:
+            size = path.stat().st_size
+        except FileNotFoundError:
+            return set()
+        if size > MAX_SIDECAR_BYTES:
+            return set()  # implausibly large: distrust, don't read it in
+        # Sidecar can vanish between stat and read (concurrent recall/cleanup).
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return set()
+        doc = json.loads(raw)
+    except Exception:  # noqa: BLE001 - merge is best-effort; write our live set
+        return set()
+    if not (
+        isinstance(doc, dict)
+        and doc.get("version") == CACHE_VERSION
+        and doc.get("key_id") == key_id
+        and doc.get("alg") == alg
+        and doc.get("store") == store_sig
+        and isinstance(doc.get("digests"), list)
+        and all(isinstance(d, str) for d in doc["digests"])
+    ):
+        return set()
+    return set(doc["digests"])
+
+
+def _probe_writable(directory: Path) -> bool:
+    """True iff we can create (and remove) a temp file in `directory`.
+
+    os.access is not enough: a full disk, a 0555 directory, and a quota
+    miss all look the same here — we cannot persist the sidecar."""
+    try:
+        fd, tmp = tempfile.mkstemp(dir=str(directory),
+                                   prefix=".nb-vc-probe.", suffix=".tmp")
+        os.close(fd)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return True
+    except OSError:
+        return False
+
+
+def _memory_key(store_path: Path, key_id: str, alg: str) -> tuple:
+    try:
+        ident = str(Path(store_path).resolve())
+    except OSError:
+        ident = str(store_path)
+    return (ident, key_id, alg)
+
+
+def _stash_memory(cache: VerifiedSignatureCache) -> None:
+    if cache.store_path is None:
+        return
+    key = _memory_key(cache.store_path, cache.key_id, cache.alg)
+    _memory.setdefault(key, set()).update(cache.digests)
+
+
+def _drop_memory(cache: VerifiedSignatureCache) -> None:
+    if cache.store_path is None:
+        return
+    _memory.pop(_memory_key(cache.store_path, cache.key_id, cache.alg), None)
+
+
+def _warn_once(message: str) -> None:
+    global _save_warned
+    if _save_warned:
+        return
+    _save_warned = True
+    print(message, file=sys.stderr)
+
+
+def _warn_unwritable(path: Path) -> None:
+    _warn_once(
+        f"{path}: verification cache is unwritable; "
+        "caching in-memory only this process",
+    )
+
+
+def _warn_save(path: Path, exc: BaseException) -> None:
+    _warn_once(
+        f"{path}: could not save verification cache ({exc}); "
+        "further save failures this process will be silent",
+    )
+
+
+def sidecar_status(store_path: Path) -> dict:
+    """present / fresh / writable for nockbrain-health.
+
+    A missing sidecar is a cold start, not an outage. An uncreated
+    parent directory is the same case: writable is False (nowhere to
+    persist) but flagged is False (not an outage). An unwritable
+    existing parent is the silent degradation this surfaces: every new
+    process re-verifies. Fresh means the sidecar's recorded store stamp
+    matches the current store (mtime_ns, size) — informational after
+    per-entry retention. Does not affect recall_ready."""
+    store_path = Path(store_path)
+    path = cache_path_for(store_path)
+    present = path.is_file()
+    parent = path.parent
+    parent_exists = parent.is_dir()
+    writable = parent_exists and _probe_writable(parent)
+    fresh = False
+    if present:
+        current = _store_sig(store_path)
+        try:
+            try:
+                size = path.stat().st_size
+            except FileNotFoundError:
+                size = None
+            if size is not None and size <= MAX_SIDECAR_BYTES:
+                try:
+                    raw = path.read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    raw = None
+                if raw is not None:
+                    doc = json.loads(raw)
+                    fresh = (
+                        isinstance(doc, dict)
+                        and doc.get("version") == CACHE_VERSION
+                        and current is not None
+                        and doc.get("store") == current
+                    )
+        except Exception:  # noqa: BLE001 - unreadable sidecar is not fresh
+            fresh = False
+    return {
+        "path": str(path),
+        "present": present,
+        "fresh": fresh,
+        "writable": writable,
+        "flagged": parent_exists and not writable,
+    }
