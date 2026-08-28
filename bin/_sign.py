@@ -585,6 +585,27 @@ def _parent_hashes(parent_ids: list[str], facts_by_id: dict[str, dict[str, Any]]
     return hashes
 
 
+def _parent_set_moved(
+    parent_ids: list[str], facts_by_id: dict[str, dict[str, Any]]
+) -> bool:
+    """True iff a listed parent is absent, or a present parent's current core
+    no longer matches its own committed hash.
+
+    Independent of the child's signature: ``att["signature"]`` is
+    attacker-mutable, so a failed verify cannot by itself prove ancestry
+    moved. PARENT_SUSPECT is only claimed when this evidence exists."""
+    for pid in parent_ids:
+        parent = facts_by_id.get(pid)
+        if parent is None:
+            return True
+        att = parent.get("attestation") if isinstance(parent, dict) else None
+        committed = att.get("canonical_fact_hash") if isinstance(att, dict) else None
+        if isinstance(committed, str) and committed:
+            if canonical_fact_hash(parent) != committed:
+                return True
+    return False
+
+
 def attest_fact(
     fact: dict[str, Any],
     key: SigningKey,
@@ -847,10 +868,11 @@ def _cached_signature_status(
     """Run (or reuse) the public-key operation for ``payload``.
 
     Returns VALID if the signature verifies, otherwise ``fail_status``
-    (PARENT_SUSPECT when ancestry is the only remaining variable, TAMPERED
-    otherwise). ``verified_cache`` skips a previously recorded determination
-    for this (key, signature, payload) tuple; committed-hash / freshness
-    checks are the caller's job and must already have run.
+    (caller-chosen: PARENT_SUSPECT only when ancestry is independently
+    shown to have moved, else TAMPERED). ``verified_cache`` skips a
+    previously recorded determination for this (key, signature, payload)
+    tuple; committed-hash / freshness checks are the caller's job and
+    must already have run.
     """
     digest_valid = None
     digest_fail = None
@@ -965,17 +987,20 @@ def verify_fact(
     if key.alg != att.get("alg"):
         # Algorithm mismatch between key and attestation -> cannot have produced it.
         return TAMPERED
-    # 3. Signature failed even though the fact's OWN committed hashes still match
-    #    its current content (checked in step 1). The signed payload is
-    #    fact_hash + source_hash (both taken from the committed attestation) +
-    #    parent_hashes. Since the first two are the committed values, the only
-    #    remaining variable that could have changed is the parent set -> the
-    #    break is in ancestry. With parents that is PARENT_SUSPECT (a parent was
-    #    edited/revoked); with no parents the signature itself is bad -> TAMPERED.
-    #    The cache records that determination (status-bound digest) so a stable
-    #    Merkle-broken child does not re-run Ed25519 on every recall; a repaired
-    #    parent changes payload_now -> miss -> re-verify.
-    fail_status = PARENT_SUSPECT if parent_ids else TAMPERED
+    # 3. Signature over payload_now. A failure is not automatically an
+    #    ancestry break: att["signature"] is attacker-mutable and lives in
+    #    the same store, so parent_ids being non-empty cannot distinguish
+    #    "a parent was edited/revoked" from "the signature was flipped".
+    #    PARENT_SUSPECT only when we independently observe a parent gone or
+    #    a parent's core drifted from its own committed hash; otherwise
+    #    TAMPERED. The cache records that determination (status-bound
+    #    digest) so a stable Merkle-broken child does not re-run Ed25519 on
+    #    every recall; a repaired parent changes payload_now -> miss ->
+    #    re-verify.
+    if parent_ids and _parent_set_moved(parent_ids, facts_by_id):
+        fail_status = PARENT_SUSPECT
+    else:
+        fail_status = TAMPERED
     return _cached_signature_status(
         key, att["signature"], payload_now, verified_cache, fail_status
     )

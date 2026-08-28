@@ -233,6 +233,34 @@ def test_merkle_parent_revoked_makes_child_parent_suspect(sign, tmp_path):
     assert statuses["child-1"] == sign.PARENT_SUSPECT
 
 
+def test_flipped_child_signature_is_tampered_not_parent_suspect(sign, tmp_path):
+    """A mutated child signature with intact content and parents is TAMPERED.
+
+    parent_ids being non-empty is not evidence that ancestry moved:
+    att["signature"] is attacker-mutable in the same store. Caching a
+    mislabeled PARENT_SUSPECT would persist a forgery as a benign
+    ancestry-repair case."""
+    key = sign.load_or_create_key(tmp_path / "k", tmp_path / "k.pub")
+    pub = sign.load_public_key(tmp_path / "k.pub")
+
+    parent = make_fact("parent-1", content="Original pricing: $29/mo")
+    child = make_fact("child-1", content="Derived: terminal tier is $29/mo")
+    child["parent_fact_ids"] = ["parent-1"]
+    facts = [parent, child]
+    sign.sign_facts(facts, key)
+
+    sig = child["attestation"]["signature"]
+    child["attestation"]["signature"] = sig[:-1] + ("0" if sig[-1] != "0" else "1")
+
+    report = sign.verify_facts(facts, pub)
+    statuses = {s["id"]: s["status"] for s in report["statuses"]}
+    assert statuses["parent-1"] == sign.VALID
+    assert statuses["child-1"] == sign.TAMPERED
+    assert statuses["child-1"] != sign.PARENT_SUSPECT
+    assert report["tampered"] == 1
+    assert report["parent_suspect"] == 0
+
+
 def test_parent_suspect_is_cached_and_repair_forces_reverify(sign, tmp_path):
     """Issue #48: a stable PARENT_SUSPECT determination must be cached (the
     redundant Ed25519 op skipped on a warm hit), and a later repair of the

@@ -289,8 +289,10 @@ sorted parent core-hashes, domain `nockbrain-fact-v1`. Does NOT sign status /
 confidence / dates — lifecycle marks stay cheap. That gap is closed by
 **signed revocations** (`_revoke.py`): every supersession appends a signed
 event; a current fact that a valid event says is dead = **resurrected** =
-hard verify failure. Merkle ancestry gives `PARENT_SUSPECT` when a parent was
-edited/revoked.
+hard verify failure. Merkle ancestry gives `PARENT_SUSPECT` when a parent is
+independently observed gone or drifted from its own committed hash; a
+signature failure with intact parents is `TAMPERED` (`att["signature"]` is
+attacker-mutable, so non-empty `parent_ids` is not ancestry evidence).
 
 **Claim-authority v2** (`sign_claim_fact_v2`, schema
 `nock-claim-attestation/v2`): signs the entire authority payload inline —
