@@ -59,7 +59,19 @@ fi
 
 # Recall failures must never break the hook (always exit 0), but they must
 # not be invisible either — keep classifier/recall stderr in a private log.
+# Size-cap: an unwritable store used to append one line per prompt forever.
+# Rotate to hook-errors.log.1 (one generation) at 1 MiB so the file cannot
+# grow without bound; the new log is recreated 0600 below.
 ERROR_LOG="${HOME}/.nock-brain/hook-errors.log"
+HOOK_LOG_MAX_BYTES=1048576
+if [[ -f "$ERROR_LOG" ]]; then
+    log_size=$(wc -c < "$ERROR_LOG" 2>/dev/null) || log_size=0
+    log_size=${log_size//[$' \t\n']/}
+    if [[ "$log_size" =~ ^[0-9]+$ ]] && [[ "$log_size" -gt "$HOOK_LOG_MAX_BYTES" ]]; then
+        mv -f "$ERROR_LOG" "${ERROR_LOG}.1" 2>/dev/null || true
+        chmod 600 "${ERROR_LOG}.1" 2>/dev/null || true
+    fi
+fi
 ( umask 077; touch "$ERROR_LOG" ) 2>/dev/null
 chmod 600 "$ERROR_LOG" 2>/dev/null
 

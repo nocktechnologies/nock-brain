@@ -63,7 +63,7 @@ else is derived or append-only sidecar.
 | `venv/` | Semantic-tier virtualenv (numpy + tokenizers + cryptography); system Python never touched |
 | `semantic-on` | Zero-byte opt-in marker for the semantic tier; `rm` to disable |
 | `applied-batches.json` | Idempotency state for `apply-promotion-batch.py` |
-| `hook-errors.log` | The hook's only failure visibility (hook itself always exits 0) |
+| `hook-errors.log` | The hook's only failure visibility (hook itself always exits 0). Rotated to `hook-errors.log.1` at 1 MiB |
 | `brain.db`, `store-v2` | E2 SQLite store + deliberate cutover marker — **not used unless explicitly selected** (§5 migrate) |
 | `*.bak-<UTC>` | Timestamped pre-swap backups written by `rebuild-store.py` |
 
@@ -128,7 +128,7 @@ shrink guard — the only intentional way to shrink the store.
 | `_sign.py` (977 L) | Both attestation contracts, keys, canonicalization, the verification state machine | `sign_facts` (per-fact routing), `sign_fact`, `sign_claim_fact_v2`, `is_v2_claim_fact`, `verify_fact` → `VALID/TAMPERED/UNSIGNED/PARENT_SUSPECT`, `load_or_create_key`, verifier receipts |
 | `_revoke.py` | Attested supersession (S1): signed append-only revocation events; resurrection detection | `sign_revocation`, `record_supersessions`, `audit`, `blocking_findings` (single source of truth for exit status), `resolve_signing_key` |
 | `_storeback.py` | Store-backend contract: `JsonStore` (default) / `SqliteStore` (`brain.db`, WAL); degradation logging | `resolve_store` (env `NOCKBRAIN_STORE`; `json` = kill switch; sqlite only if marker **and** db exist), `load_facts`, `replace_all`, `snapshot`, `export_facts_json` |
-| `_verify_cache.py` | Cache of proven signatures for the recall hot path (~0.4–0.8 s saved per recall) | `load_for_store` (stat **before** read, informational), `VerifiedSignatureCache` — per-entry HMAC digests survive store rewrites; dirty save prunes to this-run live set; forgery needs key-file read access |
+| `_verify_cache.py` | Cache of proven signatures for the recall hot path (~0.4–0.8 s saved per recall) | `load_for_store` (stat **before** read, informational; probes sidecar-dir writability), `VerifiedSignatureCache` — per-entry HMAC digests survive store rewrites; dirty save prunes to this-run live set; save re-stats the store immediately before `os.replace` and **skips** when the stamp moved; same-stamp save unions on-disk digests; unwritable dir → in-memory only, **one** diagnostic per process; `sidecar_status` (present/fresh/writable; `flagged` only when the parent dir exists and is unwritable — a missing parent is a cold start) for health; `_load_digests` / `_peer_digests` / `sidecar_status` refuse sidecars larger than `MAX_SIDECAR_BYTES` unread; forgery needs key-file read access |
 | `_embed.py` | Semantic-tier encoding + `embeddings.npz` sidecar | `get_encoder`, `sync_sidecar`, `load_sidecar` (returns `None` on ANY problem incl. model mismatch), `EmbedUnavailable`, `NOCKBRAIN_EMBED_STUB=1` for CI |
 | `_dense_recall.py` | RRF fusion of BM25 seeds with dense cosine + reserved slots | `fuse(...)` → `(fused, reserved_ids)`; RRF k=60, dense top 40, 3 reserved slots (empirically pinned) |
 | `_graph_recall.py` | Graph-neighbor expansion over the export-graph structure | `expand(...)`; neighbors always strictly below the weakest seed |
@@ -158,8 +158,14 @@ Per-module invariants worth memorizing:
   public-key op — the content-hash comparison (the actual anti-poisoning
   check) runs on every recall, warm or cold. Store (mtime_ns, size) is
   metadata, not a wipe key: unchanged facts stay hits across rewrites; a
-  dirty save prunes to digests hit-or-added this run. UNSIGNED and
-  committed-hash TAMPERED are not cached.
+  dirty save prunes to digests hit-or-added this run. A save whose store
+  stamp no longer matches is skipped so a concurrent stale writer cannot
+  clobber a newer sidecar; a same-stamp save unions on-disk digests
+  (append-only within one stat — union of opaque HMACs cannot upgrade a
+  cached failure to VALID). An unwritable sidecar directory degrades to
+  in-memory caching for the process with at most one stderr diagnostic
+  (never one per recall). UNSIGNED and committed-hash TAMPERED are not
+  cached.
 - `_dense_recall`: recency must NEVER multiply cosine (it buried perfect
   paraphrase matches). All dense gates are filter-only.
 - `_graph_recall`: `min_shared_terms >= 2` is a vacuous setting that silently
@@ -216,7 +222,7 @@ registry, not NLP), `export-graph.py` (Graphify JSON). Both receipt-ledgered.
 **Health / eval**
 | Script | Notes |
 |---|---|
-| `nockbrain-health.py` | Counts, malformed, privacy redactions, live-secret scan vs `.env` files, degradations, contradiction-queue staleness, `recall_ready`. **The hard-gate input for rebuild-store** |
+| `nockbrain-health.py` | Counts, malformed, privacy redactions, live-secret scan vs `.env` files, degradations, contradiction-queue staleness, verification-cache sidecar (present / fresh / writable; `VERIFICATION CACHE UNWRITABLE` only when `flagged`, not merely `not writable`), `recall_ready`. **The hard-gate input for rebuild-store** |
 | `recall-eval.py` | The CI gate: n=36 gold vs committed signed fixture, hermetic (pinned `EVAL_NOW`, semantic inert). Floors: recall 0.90 (measured 0.972), companionship 0.05 (~0.14). Also fails on any fixture attestation failure or an inverted cap-lever self-test |
 | `eval-graph-recall.py` | Live-store flat-vs-hybrid benchmark (exploratory, not CI) |
 | `eval-store-parity.py` | E2 cutover bar: JSON↔SQLite identical on counts, values, hashes, verification, and ranked recall for every suite+fuzz query |
@@ -427,7 +433,10 @@ Found in the 2026-08-23 full sweep; triaged with the operator (bus msgs
 6. **Silent-degradation paths to watch**: degraded SQLite read → empty
    recall (visible only via health); dense/graph unavailability → flat BM25
    (stderr only, discarded by hook); corrupt store → `[]`; ambiguous
-   projection receipts (health check default-off).
+   projection receipts (health check default-off); unwritable verify-cache
+   sidecar (parent dir exists) → in-memory only (one stderr line per
+   process; health flags `VERIFICATION CACHE UNWRITABLE`); a missing parent
+   is a cold start, not that flag; hook-errors.log rotates at 1 MiB.
 7. **The two 2026-08-22 recall-pilot reports are external** — internal
    working documents kept outside this repo (refs reworded in PR #86);
    `docs/tracking/nockcc-nocks.md` is historical through 2026-06-12 by
