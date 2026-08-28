@@ -166,15 +166,24 @@ def run(argv: list[str] | None = None) -> int:
 
     cache_path = cache_path_for(args.facts)
     cache_note = ""
-    if removed_facts and cache_path.exists():
-        if args.apply:
+    if args.apply:
+        # Rewrite the store first so a concurrent recall that loaded the old
+        # facts.json cannot save() the sidecar back: save() re-stats and skips
+        # when the stamp moved. Then drop the sidecar (opaque digests; next
+        # recall cold-starts). Dry-run never reaches here.
+        secure_write_json(args.facts, kept_facts, indent=2, default=str)
+        if removed_facts and cache_path.exists():
             unlinked = unlink_for_store(args.facts)
             cache_note = (
                 f"deleted verification cache {cache_path}" if unlinked
                 else f"could not delete verification cache {cache_path}"
             )
-        else:
-            cache_note = f"would delete verification cache {cache_path}"
+        if args.events.exists():
+            secure_write_text(args.events, kept_events, encoding="utf-8")
+        for path, text in {**note_rewrites, **vault_rewrites}.items():
+            secure_write_text(path, text, encoding="utf-8")
+    elif removed_facts and cache_path.exists():
+        cache_note = f"would delete verification cache {cache_path}"
 
     print(
         f"{'would remove' if not args.apply else 'removed'} "
@@ -186,15 +195,6 @@ def run(argv: list[str] | None = None) -> int:
         print(sidecar_note, file=sys.stderr)
     if cache_note:
         print(cache_note, file=sys.stderr)
-
-    if not args.apply:
-        return 0
-
-    secure_write_json(args.facts, kept_facts, indent=2, default=str)
-    if args.events.exists():
-        secure_write_text(args.events, kept_events, encoding="utf-8")
-    for path, text in {**note_rewrites, **vault_rewrites}.items():
-        secure_write_text(path, text, encoding="utf-8")
     return 0
 
 

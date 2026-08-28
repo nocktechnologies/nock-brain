@@ -138,6 +138,35 @@ def test_corrupt_sidecar_loads_as_none(embed_mod, tmp_path):
     assert embed_mod.load_sidecar(sidecar) is None
 
 
+def test_save_sidecar_resolves_store_under_direct_module_load(
+        tmp_path, monkeypatch):
+    """save_sidecar does `from _store import secure_replace_bytes` at call
+    time. This file loads _embed via spec_from_file_location without putting
+    bin/ on sys.path; that must still resolve the sibling."""
+    import sys
+    bin_resolved = BIN.resolve()
+    monkeypatch.setattr(
+        sys, "path",
+        [p for p in sys.path if Path(p).resolve() != bin_resolved],
+    )
+    stored = sys.modules.pop("_store", None)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_embed_direct_load", BIN / "_embed.py")
+        embed = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(embed)
+        sidecar = tmp_path / "embeddings.npz"
+        mat = numpy.zeros((1, 8), dtype=numpy.float32)
+        embed.save_sidecar(sidecar, ["a"], ["deadbeef"], "stub-hash-32", mat)
+        assert sidecar.exists()
+        loaded = embed.load_sidecar(sidecar)
+        assert loaded is not None
+        assert loaded["ids"] == ["a"]
+    finally:
+        if stored is not None:
+            sys.modules["_store"] = stored
+
+
 def test_save_sidecar_uses_store_atomic_write(embed_mod, tmp_path, monkeypatch):
     """Issue #54: embeddings.npz must write through _store.secure_replace_bytes."""
     import sys

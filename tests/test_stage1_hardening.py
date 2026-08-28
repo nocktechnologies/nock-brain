@@ -151,6 +151,29 @@ def test_secure_replace_text_before_replace_skip_leaves_target(tmp_path):
     assert list(tmp_path.glob("artifact.json.*.tmp")) == []
 
 
+def test_secure_replace_bytes_does_not_follow_tmp_symlink(tmp_path):
+    spec = importlib.util.spec_from_file_location("store", REPO / "bin" / "_store.py")
+    store = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(store)
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"original-victim-bytes")
+    target = tmp_path / "artifact.bin"
+    real_mkstemp = store.tempfile.mkstemp
+
+    def racing_mkstemp(*args, **kwargs):
+        fd, tmp = real_mkstemp(*args, **kwargs)
+        os.unlink(tmp)
+        os.symlink(os.fspath(victim), tmp)
+        return fd, tmp
+
+    store.tempfile.mkstemp = racing_mkstemp
+    try:
+        store.secure_replace_bytes(target, b"payload")
+    finally:
+        store.tempfile.mkstemp = real_mkstemp
+    assert victim.read_bytes() == b"original-victim-bytes"
+
+
 def test_secure_write_does_not_chmod_unrelated_existing_parent(tmp_path):
     spec = importlib.util.spec_from_file_location("store", REPO / "bin" / "_store.py")
     store = importlib.util.module_from_spec(spec)

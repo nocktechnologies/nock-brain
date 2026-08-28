@@ -52,14 +52,12 @@ def secure_replace_bytes(
     fd, tmp = tempfile.mkstemp(
         dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
     try:
-        # Close the fd immediately and write by path so a failure in
-        # open()/write can never leak the fd (same discipline as the
-        # previous per-module copies of this pattern).
-        os.close(fd)
-        fd = -1
-        with open(tmp, "wb") as handle:
+        # Write through the descriptor so the tmp pathname cannot be
+        # swapped between create and write.
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
             handle.write(data)
-        os.chmod(tmp, FILE_MODE)
+            os.fchmod(handle.fileno(), FILE_MODE)
         if before_replace is not None and not before_replace():
             return False
         os.replace(tmp, path)

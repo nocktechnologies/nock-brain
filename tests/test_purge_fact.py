@@ -1,4 +1,5 @@
 """Tests for hard-deleting sensitive fact material across local stores."""
+import importlib.util
 import json
 import os
 import subprocess
@@ -7,6 +8,15 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parent.parent
+BIN = REPO / "bin"
+
+
+def _load(name: str):
+    spec = importlib.util.spec_from_file_location(
+        name.replace("-", "_"), BIN / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def test_purge_fact_apply_removes_pattern_from_facts_events_notes_and_vault(tmp_path):
@@ -173,3 +183,89 @@ def test_purge_without_matches_leaves_verified_cache(tmp_path):
         check=True,
     )
     assert cache.exists(), "a no-op purge must not drop the verification cache"
+
+
+def test_stale_cache_save_during_purge_cannot_revive_purged_digest(
+        tmp_path, monkeypatch):
+    """A concurrent recall that loaded the OLD store can save() after the
+    sidecar is unlinked but before facts.json is rewritten. Its stamp still
+    matches, so save() would recreate a digest for the fact being purged.
+    Rewrite the store first so the stamp has moved before that save can land.
+    """
+    purge_fact = _load("purge-fact")
+    vc = sys.modules["_verify_cache"]
+
+    facts = tmp_path / "facts.json"
+    events = tmp_path / "events.jsonl"
+    notes = tmp_path / "sessions"
+    vault = tmp_path / "vault"
+    notes.mkdir()
+    vault.mkdir()
+    facts.write_text(json.dumps([
+        {
+            "id": "leaky",
+            "kind": "decision",
+            "status": "current",
+            "confidence": 0.9,
+            "content": "Kevin removed leaked-secret-value from memory",
+            "source_date": "2026-06-12",
+            "evidence": [],
+        },
+        {
+            "id": "keep",
+            "kind": "decision",
+            "status": "current",
+            "confidence": 0.9,
+            "content": "Kevin kept safe memory",
+            "source_date": "2026-06-12",
+            "evidence": [],
+        },
+    ]))
+    events.write_text("")
+
+    class _DummyKey:
+        key_id = "k"
+        alg = "ed25519"
+
+    cache = vc.cache_path_for(facts)
+    purged_digest = "digest-of-purged-leaky-fact"
+    cache.write_text(json.dumps({
+        "version": vc.CACHE_VERSION,
+        "alg": "ed25519",
+        "key_id": "k",
+        "store": vc._store_sig(facts),
+        "digests": [purged_digest],
+    }), encoding="utf-8")
+    cache.chmod(0o600)
+
+    stale = vc.load_for_store(facts, _DummyKey())
+    assert stale is not None
+    assert stale.hit(purged_digest)
+    # A concurrent recall that proved any signature this run is dirty;
+    # without that, save() is a no-op and cannot recreate the sidecar.
+    stale.add("digest-verified-this-recall")
+
+    real_unlink = purge_fact.unlink_for_store
+
+    def unlink_then_concurrent_save(store_path):
+        result = real_unlink(store_path)
+        stale.save()
+        return result
+
+    monkeypatch.setattr(purge_fact, "unlink_for_store", unlink_then_concurrent_save)
+
+    assert purge_fact.run([
+        "leaky",
+        "--facts", str(facts),
+        "--events", str(events),
+        "--notes-dir", str(notes),
+        "--vault", str(vault),
+        "--sidecar", str(tmp_path / "embeddings.npz"),
+        "--apply",
+    ]) == 0
+    stale.save()
+
+    assert [fact["id"] for fact in json.loads(facts.read_text())] == ["keep"]
+    assert not cache.exists(), (
+        "a stale cache save must not recreate the sidecar with a purged digest"
+    )
