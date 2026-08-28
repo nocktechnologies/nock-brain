@@ -483,6 +483,7 @@ def test_sidecar_status_oversized_is_not_fresh(tmp_path, monkeypatch):
     status = vc.sidecar_status(facts)
     assert status["present"] is True
     assert status["fresh"] is False
+    assert status["reason"] == "oversized"
 
 
 def test_non_hex_signature_is_tampered_not_a_crash(
@@ -841,3 +842,4 @@ def test_sidecar_status_float_store_stamp_is_not_fresh(tmp_path, monkeypatch):
     status = vc.sidecar_status(facts)
     assert status["present"] is True
     assert status["fresh"] is False
+    assert status["reason"] == "unreadable"
