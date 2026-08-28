@@ -327,7 +327,18 @@ def _peer_digests(path: Path, key_id: str, alg: str, store_sig: dict) -> "set[st
     status-bound non-VALID digests share the set (#48); union is still a
     set of opaque HMACs — a PARENT_SUSPECT digest cannot hit as VALID."""
     try:
-        raw = Path(path).read_text(encoding="utf-8")
+        path = Path(path)
+        try:
+            size = path.stat().st_size
+        except FileNotFoundError:
+            return set()
+        if size > MAX_SIDECAR_BYTES:
+            return set()  # implausibly large: distrust, don't read it in
+        # Sidecar can vanish between stat and read (concurrent recall/cleanup).
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return set()
         doc = json.loads(raw)
     except Exception:  # noqa: BLE001 - merge is best-effort; write our live set
         return set()
@@ -408,27 +419,40 @@ def _warn_save(path: Path, exc: BaseException) -> None:
 def sidecar_status(store_path: Path) -> dict:
     """present / fresh / writable for nockbrain-health.
 
-    A missing sidecar is a cold start, not an outage. An unwritable
-    sidecar is the silent degradation this surfaces: every new process
-    re-verifies. Fresh means the sidecar's recorded store stamp matches
-    the current store (mtime_ns, size) — informational after per-entry
-    retention. Does not affect recall_ready."""
+    A missing sidecar is a cold start, not an outage. An uncreated
+    parent directory is the same case: writable is False (nowhere to
+    persist) but flagged is False (not an outage). An unwritable
+    existing parent is the silent degradation this surfaces: every new
+    process re-verifies. Fresh means the sidecar's recorded store stamp
+    matches the current store (mtime_ns, size) — informational after
+    per-entry retention. Does not affect recall_ready."""
     store_path = Path(store_path)
     path = cache_path_for(store_path)
     present = path.is_file()
     parent = path.parent
-    writable = parent.is_dir() and _probe_writable(parent)
+    parent_exists = parent.is_dir()
+    writable = parent_exists and _probe_writable(parent)
     fresh = False
     if present:
         current = _store_sig(store_path)
         try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
-            fresh = (
-                isinstance(doc, dict)
-                and doc.get("version") == CACHE_VERSION
-                and current is not None
-                and doc.get("store") == current
-            )
+            try:
+                size = path.stat().st_size
+            except FileNotFoundError:
+                size = None
+            if size is not None and size <= MAX_SIDECAR_BYTES:
+                try:
+                    raw = path.read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    raw = None
+                if raw is not None:
+                    doc = json.loads(raw)
+                    fresh = (
+                        isinstance(doc, dict)
+                        and doc.get("version") == CACHE_VERSION
+                        and current is not None
+                        and doc.get("store") == current
+                    )
         except Exception:  # noqa: BLE001 - unreadable sidecar is not fresh
             fresh = False
     return {
@@ -436,5 +460,5 @@ def sidecar_status(store_path: Path) -> dict:
         "present": present,
         "fresh": fresh,
         "writable": writable,
-        "flagged": not writable,
+        "flagged": parent_exists and not writable,
     }

@@ -351,7 +351,7 @@ def render_text(report: dict[str, Any]) -> str:
             )
     cache = report.get("verification_cache")
     if cache is not None:
-        if not cache.get("writable"):
+        if cache.get("flagged"):
             lines.append(
                 "- VERIFICATION CACHE UNWRITABLE: sidecar cannot be persisted; "
                 "every recall re-verifies"

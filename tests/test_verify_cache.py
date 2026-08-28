@@ -446,6 +446,43 @@ def test_oversized_sidecar_is_refused(
     assert "approved" in out  # oversized sidecar ignored, recall works
 
 
+def test_peer_digests_refuses_oversized_sidecar(tmp_path, monkeypatch):
+    """_peer_digests must not read a sidecar larger than MAX_SIDECAR_BYTES.
+    A well-formed oversized file would otherwise union its digests (and
+    can MemoryError on the save path)."""
+    vc = _load_verify_cache()
+    monkeypatch.setattr(vc, "MAX_SIDECAR_BYTES", 64)
+    sidecar = tmp_path / "facts.json.verified-cache.json"
+    store_sig = {"mtime_ns": 1, "size": 1}
+    sidecar.write_text(json.dumps({
+        "version": vc.CACHE_VERSION, "alg": "ed25519", "key_id": "k",
+        "store": store_sig,
+        "digests": ["deadbeef"],
+    }), encoding="utf-8")
+    assert sidecar.stat().st_size > 64
+    assert vc._peer_digests(sidecar, "k", "ed25519", store_sig) == set()
+
+
+def test_sidecar_status_oversized_is_not_fresh(tmp_path, monkeypatch):
+    """sidecar_status must not read a sidecar larger than MAX_SIDECAR_BYTES.
+    A well-formed oversized file would otherwise look fresh."""
+    vc = _load_verify_cache()
+    monkeypatch.setattr(vc, "MAX_SIDECAR_BYTES", 64)
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]", encoding="utf-8")
+    st = facts.stat()
+    sidecar = vc.cache_path_for(facts)
+    sidecar.write_text(json.dumps({
+        "version": vc.CACHE_VERSION, "alg": "ed25519", "key_id": "k",
+        "store": {"mtime_ns": st.st_mtime_ns, "size": st.st_size},
+        "digests": ["deadbeef"],
+    }), encoding="utf-8")
+    assert sidecar.stat().st_size > 64
+    status = vc.sidecar_status(facts)
+    assert status["present"] is True
+    assert status["fresh"] is False
+
+
 def test_non_hex_signature_is_tampered_not_a_crash(
         budget_recall, sign_lib, signing_key, tmp_path, capsys):
     """A fact whose attestation signature is a non-hex string (here a lone

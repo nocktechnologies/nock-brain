@@ -222,6 +222,24 @@ def test_health_flags_unwritable_verification_cache(nockbrain_health, tmp_path):
     assert "UNWRITABLE" in nockbrain_health.render_text(report)
 
 
+def test_health_reports_uncreated_parent_as_cold_start(nockbrain_health, tmp_path):
+    """A store path whose parent directory has not been created is a cold
+    start, not an outage: writable is False (nowhere to persist) but
+    flagged is False, so health prints 'missing (cold start)' and not
+    UNWRITABLE."""
+    facts = tmp_path / "never-created" / "facts.json"
+    assert not facts.parent.exists()
+    report = nockbrain_health.build_report(facts_path=facts)
+    cache = report["verification_cache"]
+    assert cache["present"] is False
+    assert cache["fresh"] is False
+    assert cache["writable"] is False
+    assert cache["flagged"] is False
+    text = nockbrain_health.render_text(report)
+    assert "missing (cold start)" in text
+    assert "UNWRITABLE" not in text
+
+
 def test_max_age_validation_rejects_nonfinite(nockbrain_health, tmp_path, capsys):
     import pytest
     (tmp_path / "facts.json").write_text("[]")
