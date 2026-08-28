@@ -35,7 +35,9 @@ tests pin its contract:
 import importlib
 import importlib.util
 import json
+import os
 import stat
+import time
 from pathlib import Path
 
 import pytest
@@ -641,3 +643,201 @@ def test_unwritable_sidecar_warns_once_and_caches_in_memory(
     assert verify_calls["n"] == 0  # in-memory warm
     assert "unwritable" not in err2
     assert "could not save" not in err2
+
+
+# --- for_store owns the cache lifecycle (#53) ---------------------------------
+class _DummyKey:
+    key_id = "k"
+    alg = "ed25519"
+
+
+def test_for_store_stats_before_calling_loader(tmp_path, monkeypatch):
+    """The stamp-then-read order is in for_store, not a call-site docstring.
+    load_fn runs only after load_for_store has captured the store stamp."""
+    vc = _load_verify_cache()
+    store = tmp_path / "facts.json"
+    store.write_text("[]", encoding="utf-8")
+    order = []
+
+    real = vc.load_for_store
+
+    def wrapped(path, key):
+        order.append("cache")
+        return real(path, key)
+
+    monkeypatch.setattr(vc, "load_for_store", wrapped)
+
+    def loader():
+        order.append("store")
+        return json.loads(store.read_text(encoding="utf-8"))
+
+    with vc.for_store(store, _DummyKey(), loader) as (cache, facts):
+        order.append("body")
+        assert facts == []
+        assert cache is not None
+
+    assert order[:2] == ["cache", "store"], (
+        "for_store must capture the store stamp before invoking load_fn"
+    )
+    assert order[2] == "body"
+
+
+def test_for_store_saves_on_exit_even_when_body_raises(tmp_path, monkeypatch):
+    """for_store.__exit__ owns save(); a raising body must still persist."""
+    vc = _load_verify_cache()
+    store = tmp_path / "facts.json"
+    store.write_text("[]", encoding="utf-8")
+    saved = {"n": 0}
+    real_save = vc.VerifiedSignatureCache.save
+
+    def counting_save(self):
+        saved["n"] += 1
+        return real_save(self)
+
+    monkeypatch.setattr(vc.VerifiedSignatureCache, "save", counting_save)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with vc.for_store(store, _DummyKey(), lambda: []) as (cache, facts):
+            assert cache is not None
+            raise RuntimeError("boom")
+
+    assert saved["n"] == 1
+
+
+def test_budget_recall_does_not_own_cache_lifecycle():
+    """Recall must not re-choreograph load_for_store / save; for_store owns it."""
+    src = (_BIN / "budget-recall.py").read_text(encoding="utf-8")
+    assert "for_store(" in src
+    assert "cache.save(" not in src
+    assert "load_for_store(" not in src
+
+
+# --- sidecar file lifecycle (#52) --------------------------------------------
+def test_save_sweeps_stale_tmp_but_keeps_young_concurrent_writer(tmp_path):
+    """SIGKILL of the hook leaves `{sidecar}.XXXXXX.tmp` behind. save() must
+    sweep those, but must not delete a .tmp young enough to belong to a
+    concurrent writer (#90)."""
+    vc = _load_verify_cache()
+    store = tmp_path / "facts.json"
+    store.write_text("[]", encoding="utf-8")
+    sidecar = vc.cache_path_for(store)
+    stale = tmp_path / (sidecar.name + ".stale.tmp")
+    young = tmp_path / (sidecar.name + ".live.tmp")
+    probe = tmp_path / ".nb-vc-probe.not-ours.tmp"
+    stale.write_text("leftover", encoding="utf-8")
+    young.write_text("in-flight", encoding="utf-8")
+    probe.write_text("probe", encoding="utf-8")
+    old = time.time() - (vc.STALE_TMP_AGE_SEC + 30)
+    os.utime(stale, (old, old))
+
+    cache = vc.VerifiedSignatureCache(
+        sidecar, "k", "ed25519",
+        {"mtime_ns": 1, "size": 1}, set(), dirty=False, store_path=store)
+    cache.save()  # not dirty: sweep still runs, no new sidecar is written
+
+    assert not stale.exists(), "stale leftover tmp must be swept"
+    assert young.exists(), "a young tmp may belong to a concurrent writer"
+    assert probe.exists(), "probe tmps use a different prefix and must stay"
+
+
+def test_unlink_for_store_removes_sidecar(tmp_path):
+    vc = _load_verify_cache()
+    store = tmp_path / "facts.json"
+    store.write_text("[]", encoding="utf-8")
+    sidecar = vc.cache_path_for(store)
+    sidecar.write_text("{}", encoding="utf-8")
+    assert vc.unlink_for_store(store) is True
+    assert not sidecar.exists()
+    assert vc.unlink_for_store(store) is False  # already gone, never raises
+
+
+# --- atomic write + schema type guards (#54) ---------------------------------
+def test_cache_save_uses_store_atomic_write(tmp_path, monkeypatch):
+    """save() must go through _store.secure_write_json_atomic, not a private
+    mkstemp copy. A future fsync-before-replace fix lands in one place."""
+    vc = _load_verify_cache()
+    called = []
+
+    def fake(path, value, **kwargs):
+        called.append(path)
+        return True
+
+    monkeypatch.setattr(vc, "secure_write_json_atomic", fake)
+    store = tmp_path / "facts.json"
+    store.write_text("[]", encoding="utf-8")
+    sidecar = vc.cache_path_for(store)
+    cache = vc.VerifiedSignatureCache(
+        sidecar, "k", "ed25519",
+        vc._store_sig(store), set(), dirty=True, store_path=store)
+    cache.add("digest")
+    cache.save()
+    assert called == [sidecar]
+
+
+def test_verify_cache_does_not_redeclare_file_mode():
+    src = (_BIN / "_verify_cache.py").read_text(encoding="utf-8")
+    assert "from _store import FILE_MODE" in src
+    assert "FILE_MODE = 0o600" not in src
+
+
+def test_load_digests_rejects_boolean_version(tmp_path, monkeypatch):
+    """JSON true == 1 in Python. A boolean version must not satisfy an
+    integer CACHE_VERSION (the trap is latent at version 2; pin it at 1)."""
+    vc = _load_verify_cache()
+    monkeypatch.setattr(vc, "CACHE_VERSION", 1)
+    sidecar = tmp_path / "facts.json.verified-cache.json"
+    store_sig = {"mtime_ns": 1, "size": 1}
+    sidecar.write_text(json.dumps({
+        "version": True,
+        "alg": "ed25519", "key_id": "k",
+        "store": store_sig,
+        "digests": ["deadbeef"],
+    }), encoding="utf-8")
+    digests, dirty = vc._load_digests(sidecar, _DummyKey(), store_sig)
+    assert digests == set()
+    assert dirty is True
+
+
+def test_load_digests_float_store_stamp_is_not_fresh(tmp_path):
+    """JSON 1.0 == 1 in Python. A float mtime_ns/size must not match an int stamp.
+    Digests stay (stamp is informational); dirty is set so save rewrites."""
+    vc = _load_verify_cache()
+    sidecar = tmp_path / "facts.json.verified-cache.json"
+    store_sig = {"mtime_ns": 1, "size": 1}
+    sidecar.write_text(json.dumps({
+        "version": vc.CACHE_VERSION, "alg": "ed25519", "key_id": "k",
+        "store": {"mtime_ns": 1.0, "size": 1.0},
+        "digests": ["deadbeef"],
+    }), encoding="utf-8")
+    digests, dirty = vc._load_digests(sidecar, _DummyKey(), store_sig)
+    assert digests == {"deadbeef"}
+    assert dirty is True
+
+
+def test_peer_digests_rejects_float_store_stamp(tmp_path):
+    vc = _load_verify_cache()
+    sidecar = tmp_path / "facts.json.verified-cache.json"
+    store_sig = {"mtime_ns": 1, "size": 1}
+    sidecar.write_text(json.dumps({
+        "version": vc.CACHE_VERSION, "alg": "ed25519", "key_id": "k",
+        "store": {"mtime_ns": 1.0, "size": 1.0},
+        "digests": ["deadbeef"],
+    }), encoding="utf-8")
+    assert vc._peer_digests(sidecar, "k", "ed25519", store_sig) == set()
+
+
+def test_sidecar_status_float_store_stamp_is_not_fresh(tmp_path, monkeypatch):
+    """Use a small int stamp so 1.0 == 1 is the trap, not float64 precision."""
+    vc = _load_verify_cache()
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(vc, "_store_sig", lambda path: {"mtime_ns": 1, "size": 1})
+    sidecar = vc.cache_path_for(facts)
+    sidecar.write_text(json.dumps({
+        "version": vc.CACHE_VERSION, "alg": "ed25519", "key_id": "k",
+        "store": {"mtime_ns": 1.0, "size": 1.0},
+        "digests": ["deadbeef"],
+    }), encoding="utf-8")
+    status = vc.sidecar_status(facts)
+    assert status["present"] is True
+    assert status["fresh"] is False

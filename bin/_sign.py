@@ -1009,8 +1009,16 @@ def verify_fact(
 def verify_facts(
     facts: list[dict[str, Any]],
     key: SigningKey | None,
+    *,
+    verified_cache=None,
 ) -> dict[str, Any]:
     """Verify a whole store. Returns counts + per-fact statuses.
+
+    ``verified_cache`` (a _verify_cache.VerifiedSignatureCache, or anything
+    with hit/add) is threaded into each ``verify_fact`` so caching is a
+    property of verification, not of one caller. The offline auditor
+    (verify-facts.py) passes None — an audit always does the full
+    cryptographic pass.
 
     Result shape::
         {"valid": int, "tampered": int, "unsigned": int, "parent_suspect": int,
@@ -1023,7 +1031,8 @@ def verify_facts(
             counts[TAMPERED] += 1
             statuses.append({"id": None, "status": TAMPERED})
             continue
-        status = verify_fact(fact, key, facts_by_id=facts_by_id)
+        status = verify_fact(fact, key, facts_by_id=facts_by_id,
+                             verified_cache=verified_cache)
         counts[status] += 1
         statuses.append({"id": fact.get("id", ""), "status": status})
     return {

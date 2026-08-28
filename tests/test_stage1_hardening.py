@@ -127,6 +127,30 @@ def test_installer_hardens_existing_store_tree():
     assert 'chmod -R go-rwx "$FACTS_DIR"' in installer
 
 
+def test_secure_write_json_atomic_is_0600_and_cleans_tmp(tmp_path):
+    spec = importlib.util.spec_from_file_location("store", REPO / "bin" / "_store.py")
+    store = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(store)
+    path = tmp_path / "artifact.json"
+    path.write_text("old", encoding="utf-8")
+    assert store.secure_write_json_atomic(
+        path, {"ok": True}, separators=(",", ":")) is True
+    assert mode(path) == 0o600
+    assert json.loads(path.read_text(encoding="utf-8")) == {"ok": True}
+    assert list(tmp_path.glob("artifact.json.*.tmp")) == []
+
+
+def test_secure_replace_text_before_replace_skip_leaves_target(tmp_path):
+    spec = importlib.util.spec_from_file_location("store", REPO / "bin" / "_store.py")
+    store = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(store)
+    path = tmp_path / "artifact.json"
+    path.write_text("old", encoding="utf-8")
+    assert store.secure_replace_text(path, "new", before_replace=lambda: False) is False
+    assert path.read_text(encoding="utf-8") == "old"
+    assert list(tmp_path.glob("artifact.json.*.tmp")) == []
+
+
 def test_secure_write_does_not_chmod_unrelated_existing_parent(tmp_path):
     spec = importlib.util.spec_from_file_location("store", REPO / "bin" / "_store.py")
     store = importlib.util.module_from_spec(spec)

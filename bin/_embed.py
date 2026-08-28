@@ -185,23 +185,22 @@ def load_sidecar(path: Path, expect_model: "str | None" = None):
 
 def save_sidecar(path: Path, ids: "list[str]", hashes: "list[str]",
                  model: str, mat) -> None:
-    """Atomic, owner-only write (mirrors _store.secure_write_* for binary)."""
+    """Atomic, owner-only write via _store.secure_replace_bytes."""
+    import io
+
     import numpy as np
 
-    from _store import secure_mkdir
+    from _store import secure_replace_bytes
 
-    secure_mkdir(path.parent)
-    tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("wb") as handle:
-        np.savez(
-            handle,
-            ids=np.array(ids),
-            hashes=np.array(hashes),
-            model=np.array([model]),
-            mat=np.asarray(mat, dtype=np.float32),
-        )
-    tmp.chmod(0o600)
-    os.replace(tmp, path)
+    buf = io.BytesIO()
+    np.savez(
+        buf,
+        ids=np.array(ids),
+        hashes=np.array(hashes),
+        model=np.array([model]),
+        mat=np.asarray(mat, dtype=np.float32),
+    )
+    secure_replace_bytes(path, buf.getvalue())
 
 
 def sync_sidecar(facts: "list[dict]", encoder, sidecar_path: Path,

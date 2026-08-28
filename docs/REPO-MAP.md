@@ -122,13 +122,13 @@ shrink guard — the only intentional way to shrink the store.
 
 | Module | Owns | Key API |
 |---|---|---|
-| `_store.py` | Filesystem permission discipline (0700/0600) | `secure_mkdir/write_text/write_json/copyfile` |
+| `_store.py` | Filesystem permission discipline (0700/0600) | `secure_mkdir/write_text/write_json/copyfile`; atomic `secure_write_json_atomic` / `secure_replace_text` / `secure_replace_bytes` (mkstemp + chmod 0600 + os.replace; optional `before_replace` skip) |
 | `_facts.py` | The v1 fact-record contract, defensive loading, bi-temporal validity, agent ownership | `REQUIRED_FACT_FIELDS`, `RECALL_ITEM_FIELDS`, `load_facts`, `fact_currently_valid`, `fact_source` (default `"mira"`), `content_tokens`, `jaccard`, `malformed_fact_reason` |
 | `_scrub.py` | Secret redaction + structural-noise discrimination, shared by EVERY extraction path | `scrub_secrets`, `is_structural_noise`, `SECRET_PATTERNS` |
-| `_sign.py` (977 L) | Both attestation contracts, keys, canonicalization, the verification state machine | `sign_facts` (per-fact routing), `sign_fact`, `sign_claim_fact_v2`, `is_v2_claim_fact`, `verify_fact` → `VALID/TAMPERED/UNSIGNED/PARENT_SUSPECT`, `load_or_create_key`, verifier receipts |
+| `_sign.py` (977 L) | Both attestation contracts, keys, canonicalization, the verification state machine | `sign_facts` (per-fact routing), `sign_fact`, `sign_claim_fact_v2`, `is_v2_claim_fact`, `verify_fact` → `VALID/TAMPERED/UNSIGNED/PARENT_SUSPECT`, `verify_facts(..., verified_cache=None)` (caching is a property of verification; the offline auditor passes None), `load_or_create_key`, verifier receipts |
 | `_revoke.py` | Attested supersession (S1): signed append-only revocation events; resurrection detection | `sign_revocation`, `record_supersessions`, `audit`, `blocking_findings` (single source of truth for exit status), `resolve_signing_key` |
 | `_storeback.py` | Store-backend contract: `JsonStore` (default) / `SqliteStore` (`brain.db`, WAL); degradation logging | `resolve_store` (env `NOCKBRAIN_STORE`; `json` = kill switch; sqlite only if marker **and** db exist), `load_facts`, `replace_all`, `snapshot`, `export_facts_json` |
-| `_verify_cache.py` | Cache of proven signatures for the recall hot path (~0.4–0.8 s saved per recall) | `load_for_store` (stat **before** read, informational; probes sidecar-dir writability), `VerifiedSignatureCache` — per-entry HMAC digests survive store rewrites; dirty save prunes to this-run live set; save re-stats the store immediately before `os.replace` and **skips** when the stamp moved; same-stamp save unions on-disk digests; unwritable dir → in-memory only, **one** diagnostic per process; `sidecar_status` (present/fresh/writable; `flagged` only when the parent dir exists and is unwritable — a missing parent is a cold start) for health; `_load_digests` / `_peer_digests` / `sidecar_status` refuse sidecars larger than `MAX_SIDECAR_BYTES` unread; forgery needs key-file read access |
+| `_verify_cache.py` | Cache of proven signatures for the recall hot path (~0.4–0.8 s saved per recall) | `for_store(path, key, load_fn)` owns the lifecycle (stamp **then** load_fn, save on exit — the ordering is in the helper, not a call-site docstring); `load_for_store` (the stamp primitive; probes sidecar-dir writability); `unlink_for_store` (purge/uninstall: drop the sidecar + age-sweep leftover `.tmp`s); `VerifiedSignatureCache` — per-entry HMAC digests survive store rewrites; dirty save prunes to this-run live set; save re-stats the store immediately before replace and **skips** when the stamp moved; same-stamp save unions on-disk digests; save age-sweeps `{sidecar}.*.tmp` older than 60s (SIGKILL leftovers) and leaves younger files (concurrent writer, #90); save writes via `_store.secure_write_json_atomic` and imports `FILE_MODE` from `_store`; unwritable dir → in-memory only, **one** diagnostic per process; `sidecar_status` (present/fresh/writable; `flagged` only when the parent dir exists and is unwritable — a missing parent is a cold start) for health; `_load_digests` / `_peer_digests` / `sidecar_status` refuse sidecars larger than `MAX_SIDECAR_BYTES` unread, and type-guard `version` (int, not bool) and store `mtime_ns`/`size` (int, not float) before comparing; forgery needs key-file read access |
 | `_embed.py` | Semantic-tier encoding + `embeddings.npz` sidecar | `get_encoder`, `sync_sidecar`, `load_sidecar` (returns `None` on ANY problem incl. model mismatch), `EmbedUnavailable`, `NOCKBRAIN_EMBED_STUB=1` for CI |
 | `_dense_recall.py` | RRF fusion of BM25 seeds with dense cosine + reserved slots | `fuse(...)` → `(fused, reserved_ids)`; RRF k=60, dense top 40, 3 reserved slots (empirically pinned) |
 | `_graph_recall.py` | Graph-neighbor expansion over the export-graph structure | `expand(...)`; neighbors always strictly below the weakest seed |
@@ -137,8 +137,9 @@ shrink guard — the only intentional way to shrink the store.
 
 Per-module invariants worth memorizing:
 
-- `_store.secure_write_text` is **not atomic** (write then chmod). The atomic
-  writers (`_embed.save_sidecar`, `_verify_cache.save`) deliberately bypass it.
+- `_store.secure_write_text` is **not atomic** (write then chmod). Atomic
+  writers go through `secure_write_json_atomic` / `secure_replace_text` /
+  `secure_replace_bytes` (`_verify_cache.save`, `_embed.save_sidecar`).
 - `_facts`: `source` is deliberately not required (would invalidate pre-scoping
   facts). Bi-temporal bounds default open — a malformed bound never breaks
   recall. `load_facts` never raises; corrupt store → `[]` + stderr line.
@@ -202,7 +203,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 | `consolidate-facts.py` | Cross-date near-dupes of durable kinds. Double-gated: `--execute --i-have-reviewed-the-manifest`, refuses on manifest drift. `correction` kind never touched. OPS RULE: re-run `sign-facts.py` after any execute |
 | `detect-contradictions.py` | Nightly stale-fact pass, propose-ONLY, never writes the store. Output actions are literal `supersede-fact.py` commands. `--llm` judge sees scrubbed content; failures degrade to borderline |
 | `supersede-fact.py` | The manual apply-target; mints a signed revocation event via `_revoke` |
-| `purge-fact.py` | HARD delete across facts/events/notes/vault/sidecar (GDPR-style). Dry-run default |
+| `purge-fact.py` | HARD delete across facts/events/notes/vault/embedding-sidecar/verified-cache sidecar (GDPR-style). Dry-run default. The verified-cache sidecar is unlinked whole (digests are opaque; next recall cold-starts) |
 
 **Recall** (see §6 for exact ranking order)
 | Script | Notes |
@@ -257,11 +258,12 @@ budget is design intent enforced only by downstream cost control.
 
 Inside `budget-recall.select_recall()`:
 
-0. **Load + verify.** `resolve_store` → verify-cache stat (before read) →
-   `load_facts` → verify filter: TAMPERED always excluded; UNSIGNED and
-   PARENT_SUSPECT kept by default (counted on stderr); `--strict-verify` keeps
-   only VALID. Missing key ⇒ verification skipped entirely (fail open).
-   Then agent scoping (`--agent-scope`: keep `source ∈ {scope, "shared"}`).
+0. **Load + verify.** `resolve_store` → `_verify_cache.for_store` (stamp
+   **before** the store is read, save on exit) → `verify_facts(..., verified_cache=)`
+   filter: TAMPERED always excluded; UNSIGNED and PARENT_SUSPECT kept by
+   default (counted on stderr); `--strict-verify` keeps only VALID. Missing
+   key ⇒ verification skipped entirely (fail open). Then agent scoping
+   (`--agent-scope`: keep `source ∈ {scope, "shared"}`).
 1. **BM25 tier** (`search()`): hard filters (not superseded, currently valid,
    confidence ≥ 0.7), Okapi BM25 (k1=1.5, b=0.75, query-local corpus stats),
    then score = bm25 × confidence × recency (per-kind half-life: status 14d …

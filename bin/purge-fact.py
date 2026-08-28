@@ -21,6 +21,7 @@ if str(BIN_DIR) not in sys.path:
 from _embed import DEFAULT_SIDECAR, EmbedUnavailable, load_sidecar, save_sidecar
 from _facts import load_facts
 from _store import secure_write_json, secure_write_text
+from _verify_cache import cache_path_for, unlink_for_store
 
 DEFAULT_ROOT = Path.home() / ".nock-brain"
 
@@ -163,6 +164,18 @@ def run(argv: list[str] | None = None) -> int:
     sidecar_note, removed_vectors = purge_sidecar(
         args.sidecar, removed_ids, args.apply)
 
+    cache_path = cache_path_for(args.facts)
+    cache_note = ""
+    if removed_facts and cache_path.exists():
+        if args.apply:
+            unlinked = unlink_for_store(args.facts)
+            cache_note = (
+                f"deleted verification cache {cache_path}" if unlinked
+                else f"could not delete verification cache {cache_path}"
+            )
+        else:
+            cache_note = f"would delete verification cache {cache_path}"
+
     print(
         f"{'would remove' if not args.apply else 'removed'} "
         f"{removed_facts} fact(s), {removed_events} event(s), "
@@ -171,6 +184,8 @@ def run(argv: list[str] | None = None) -> int:
     )
     if sidecar_note:
         print(sidecar_note, file=sys.stderr)
+    if cache_note:
+        print(cache_note, file=sys.stderr)
 
     if not args.apply:
         return 0
