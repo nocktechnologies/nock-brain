@@ -240,6 +240,53 @@ def test_health_reports_uncreated_parent_as_cold_start(nockbrain_health, tmp_pat
     assert "UNWRITABLE" not in text
 
 
+def test_health_reports_oversized_verification_cache(
+        nockbrain_health, tmp_path, monkeypatch):
+    """A sidecar larger than MAX_SIDECAR_BYTES is refused unread: present
+    but not fresh because it is oversized, not because the stamp moved."""
+    import _verify_cache as vc
+    monkeypatch.setattr(vc, "MAX_SIDECAR_BYTES", 64)
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]")
+    st = facts.stat()
+    sidecar = facts.with_name(facts.name + ".verified-cache.json")
+    sidecar.write_text(json.dumps({
+        "version": 2, "alg": "ed25519", "key_id": "k",
+        "store": {"mtime_ns": st.st_mtime_ns, "size": st.st_size},
+        "digests": ["deadbeef"],
+    }))
+    assert sidecar.stat().st_size > 64
+    report = nockbrain_health.build_report(facts_path=facts)
+    cache = report["verification_cache"]
+    assert cache["present"] is True
+    assert cache["fresh"] is False
+    assert cache["flagged"] is False
+    text = nockbrain_health.render_text(report)
+    assert "oversized" in text
+    assert "stale stamp" not in text
+    assert "missing (cold start)" not in text
+    assert cache["reason"] == "oversized"
+
+
+def test_health_reports_unreadable_verification_cache(nockbrain_health, tmp_path):
+    """A corrupt sidecar is present but not fresh because it fails to parse,
+    not because the stamp moved. Must not collapse into a cold start."""
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]")
+    sidecar = facts.with_name(facts.name + ".verified-cache.json")
+    sidecar.write_text("{not-json")
+    report = nockbrain_health.build_report(facts_path=facts)
+    cache = report["verification_cache"]
+    assert cache["present"] is True
+    assert cache["fresh"] is False
+    assert cache["flagged"] is False
+    text = nockbrain_health.render_text(report)
+    assert "unreadable" in text
+    assert "stale stamp" not in text
+    assert "missing (cold start)" not in text
+    assert cache["reason"] == "unreadable"
+
+
 def test_max_age_validation_rejects_nonfinite(nockbrain_health, tmp_path, capsys):
     import pytest
     (tmp_path / "facts.json").write_text("[]")

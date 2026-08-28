@@ -514,7 +514,7 @@ def _warn_save(path: Path, exc: BaseException) -> None:
 
 
 def sidecar_status(store_path: Path) -> dict:
-    """present / fresh / writable for nockbrain-health.
+    """present / fresh / writable / reason for nockbrain-health.
 
     A missing sidecar is a cold start, not an outage. An uncreated
     parent directory is the same case: writable is False (nowhere to
@@ -522,7 +522,13 @@ def sidecar_status(store_path: Path) -> dict:
     existing parent is the silent degradation this surfaces: every new
     process re-verifies. Fresh means the sidecar's recorded store stamp
     matches the current store (mtime_ns, size) — informational after
-    per-entry retention. Does not affect recall_ready."""
+    per-entry retention.
+
+    When present but not fresh, reason names why: "stale_stamp" (the
+    recorded stamp moved), "oversized" (refused unread), or
+    "unreadable" (read or parse failure). reason is None when the
+    sidecar is fresh or absent — absence is not a not-fresh reason.
+    Does not affect recall_ready."""
     store_path = Path(store_path)
     path = cache_path_for(store_path)
     present = path.is_file()
@@ -530,32 +536,48 @@ def sidecar_status(store_path: Path) -> dict:
     parent_exists = parent.is_dir()
     writable = parent_exists and _probe_writable(parent)
     fresh = False
+    reason = None
     if present:
+        # Present already flipped True; a vanished-between-stat sidecar
+        # must stay a not-fresh reason, not a cold start.
+        reason = "unreadable"
         current = _store_sig(store_path)
         try:
             try:
                 size = path.stat().st_size
             except FileNotFoundError:
                 size = None
-            if size is not None and size <= MAX_SIDECAR_BYTES:
+            if size is not None and size > MAX_SIDECAR_BYTES:
+                reason = "oversized"
+            elif size is not None:
                 try:
                     raw = path.read_text(encoding="utf-8")
                 except FileNotFoundError:
                     raw = None
                 if raw is not None:
                     doc = json.loads(raw)
-                    fresh = (
+                    recorded = (
+                        _typed_store(doc.get("store"))
+                        if isinstance(doc, dict) else None
+                    )
+                    if (
                         isinstance(doc, dict)
                         and _json_int(doc.get("version")) == CACHE_VERSION
-                        and current is not None
-                        and _typed_store(doc.get("store")) == current
-                    )
+                        and recorded is not None
+                    ):
+                        if current is not None and recorded == current:
+                            fresh = True
+                            reason = None
+                        else:
+                            reason = "stale_stamp"
         except Exception:  # noqa: BLE001 - unreadable sidecar is not fresh
             fresh = False
+            reason = "unreadable"
     return {
         "path": str(path),
         "present": present,
         "fresh": fresh,
         "writable": writable,
         "flagged": parent_exists and not writable,
+        "reason": reason,
     }
