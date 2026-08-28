@@ -128,7 +128,7 @@ shrink guard — the only intentional way to shrink the store.
 | `_sign.py` (977 L) | Both attestation contracts, keys, canonicalization, the verification state machine | `sign_facts` (per-fact routing), `sign_fact`, `sign_claim_fact_v2`, `is_v2_claim_fact`, `verify_fact` → `VALID/TAMPERED/UNSIGNED/PARENT_SUSPECT`, `load_or_create_key`, verifier receipts |
 | `_revoke.py` | Attested supersession (S1): signed append-only revocation events; resurrection detection | `sign_revocation`, `record_supersessions`, `audit`, `blocking_findings` (single source of truth for exit status), `resolve_signing_key` |
 | `_storeback.py` | Store-backend contract: `JsonStore` (default) / `SqliteStore` (`brain.db`, WAL); degradation logging | `resolve_store` (env `NOCKBRAIN_STORE`; `json` = kill switch; sqlite only if marker **and** db exist), `load_facts`, `replace_all`, `snapshot`, `export_facts_json` |
-| `_verify_cache.py` | Cache of proven signatures for the recall hot path (~0.4–0.8 s saved per recall) | `load_for_store` (stat **before** read, informational), `VerifiedSignatureCache` — per-entry HMAC digests survive store rewrites; dirty save prunes to this-run live set; forgery needs key-file read access |
+| `_verify_cache.py` | Cache of proven signatures for the recall hot path (~0.4–0.8 s saved per recall) | `load_for_store` (stat **before** read, informational), `VerifiedSignatureCache` — per-entry HMAC digests survive store rewrites; dirty save prunes to this-run live set; save re-stats the store immediately before `os.replace` and **skips** when the stamp moved (a stale v1 writer cannot clobber a v2 sidecar); same-stamp save unions on-disk digests (append-only within one stat; VALID and status-bound non-VALID share the set); forgery needs key-file read access |
 | `_embed.py` | Semantic-tier encoding + `embeddings.npz` sidecar | `get_encoder`, `sync_sidecar`, `load_sidecar` (returns `None` on ANY problem incl. model mismatch), `EmbedUnavailable`, `NOCKBRAIN_EMBED_STUB=1` for CI |
 | `_dense_recall.py` | RRF fusion of BM25 seeds with dense cosine + reserved slots | `fuse(...)` → `(fused, reserved_ids)`; RRF k=60, dense top 40, 3 reserved slots (empirically pinned) |
 | `_graph_recall.py` | Graph-neighbor expansion over the export-graph structure | `expand(...)`; neighbors always strictly below the weakest seed |
@@ -158,8 +158,12 @@ Per-module invariants worth memorizing:
   public-key op — the content-hash comparison (the actual anti-poisoning
   check) runs on every recall, warm or cold. Store (mtime_ns, size) is
   metadata, not a wipe key: unchanged facts stay hits across rewrites; a
-  dirty save prunes to digests hit-or-added this run. UNSIGNED and
-  committed-hash TAMPERED are not cached.
+  dirty save prunes to digests hit-or-added this run. A save whose store
+  stamp no longer matches is skipped so a concurrent stale writer cannot
+  clobber a newer sidecar; a same-stamp save unions on-disk digests
+  (append-only within one stat — union of opaque HMACs cannot upgrade a
+  cached failure to VALID). UNSIGNED and committed-hash TAMPERED are not
+  cached.
 - `_dense_recall`: recency must NEVER multiply cosine (it buried perfect
   paraphrase matches). All dense gates are filter-only.
 - `_graph_recall`: `min_shared_terms >= 2` is a vacuous setting that silently

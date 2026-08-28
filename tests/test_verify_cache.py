@@ -14,6 +14,11 @@ tests pin its contract:
   the sidecar's store stamp;
 - --strict-verify semantics are unchanged: the cache only accelerates the
   VALID determination, never alters a status;
+- a stale save cannot clobber a newer sidecar: A loaded v1, B saved v2, A's
+  later save skips (re-stat mismatch) so B's digests survive, including
+  status-bound non-VALID entries that share the digest set;
+- same-stamp concurrent saves union on-disk digests (append-only within one
+  store stat) rather than last-writer-wins;
 - a forged sidecar cannot bypass verification: the digest is an HMAC keyed
   under key material an attacker without the key file cannot reproduce, so a
   planted digest never hits (even under --strict-verify);
@@ -25,10 +30,25 @@ tests pin its contract:
   verification pass, never to skipped verification.
 """
 import importlib
+import importlib.util
 import json
 import stat
+from pathlib import Path
 
 import pytest
+
+_BIN = Path(__file__).resolve().parent.parent / "bin"
+
+
+def _load_verify_cache():
+    """Load bin/_verify_cache.py without depending on another test having
+    put bin/ on sys.path, and without replacing sys.modules['_verify_cache']
+    that budget-recall already imported."""
+    spec = importlib.util.spec_from_file_location(
+        "_verify_cache_direct", _BIN / "_verify_cache.py")
+    vc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vc)
+    return vc
 
 
 def signable_fact(fid, content, kind="decision", source_date="2026-07-01"):
@@ -454,3 +474,81 @@ def test_save_failure_does_not_raise(sign_lib, tmp_path, capsys, monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(TypeError("boom")))
     cache.save()  # must not raise
     assert "could not save verification cache" in capsys.readouterr().err
+
+
+# --- concurrent save: stale writer must not clobber a newer sidecar (#49) -----
+def test_stale_v1_save_does_not_clobber_v2_sidecar(tmp_path):
+    """Issue #49: recall A starts against store v1; a consolidation rewrites
+    the store to v2; recall B verifies v2 and saves; A's later save must not
+    write {v1-stat, v1-live} over B. Without a re-stat-before-replace, B's
+    digests vanish and the next recall pays a cold verification.
+
+    Digests here are opaque strings: VALID and status-bound PARENT_SUSPECT/
+    TAMPERED share one set (#48). Both of B's entries must survive."""
+    vc = _load_verify_cache()
+    store = tmp_path / "facts.json"
+    sidecar = vc.cache_path_for(store)
+
+    store.write_text("v1", encoding="utf-8")
+    st1 = store.stat()
+    sig_v1 = {"mtime_ns": st1.st_mtime_ns, "size": st1.st_size}
+
+    cache_a = vc.VerifiedSignatureCache(
+        sidecar, "k", "ed25519", sig_v1, set(), dirty=True, store_path=store)
+    cache_a.add("digest-a-v1")
+
+    # Store rewrite: different size so the stamp cannot collide.
+    store.write_text("v2-rewritten-by-consolidation", encoding="utf-8")
+    st2 = store.stat()
+    sig_v2 = {"mtime_ns": st2.st_mtime_ns, "size": st2.st_size}
+    assert sig_v2 != sig_v1
+
+    cache_b = vc.VerifiedSignatureCache(
+        sidecar, "k", "ed25519", sig_v2, set(), dirty=True, store_path=store)
+    cache_b.add("digest-b-valid")
+    cache_b.add("digest-b-parent-suspect")  # status-bound non-VALID, same set
+    cache_b.save()
+
+    saved = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert set(saved["digests"]) == {"digest-b-valid", "digest-b-parent-suspect"}
+    assert saved["store"] == sig_v2
+
+    cache_a.save()  # the stale v1 write — must skip, not clobber
+
+    saved = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert set(saved["digests"]) == {"digest-b-valid", "digest-b-parent-suspect"}
+    assert saved["store"] == sig_v2
+    assert "digest-a-v1" not in saved["digests"]
+
+
+def test_same_stamp_save_unions_peer_digests(tmp_path):
+    """Within one store stat, digests are append-only. Two concurrent writers
+    each prune to their own live set; save() re-reads the sidecar and unions
+    so neither drops the other's adds. VALID and status-bound non-VALID
+    entries share the set: union is a set of opaque HMACs and cannot upgrade
+    a failure to VALID (#48)."""
+    vc = _load_verify_cache()
+    store = tmp_path / "facts.json"
+    sidecar = vc.cache_path_for(store)
+    store.write_text("stable", encoding="utf-8")
+    st = store.stat()
+    sig = {"mtime_ns": st.st_mtime_ns, "size": st.st_size}
+
+    cache_b = vc.VerifiedSignatureCache(
+        sidecar, "k", "ed25519", sig, set(), dirty=True, store_path=store)
+    cache_b.add("digest-b-valid")
+    cache_b.add("digest-b-parent-suspect")
+    cache_b.save()
+
+    cache_a = vc.VerifiedSignatureCache(
+        sidecar, "k", "ed25519", sig, set(), dirty=True, store_path=store)
+    cache_a.add("digest-a-valid")
+    cache_a.add("digest-a-tampered")
+    cache_a.save()
+
+    saved = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert set(saved["digests"]) == {
+        "digest-a-valid", "digest-a-tampered",
+        "digest-b-valid", "digest-b-parent-suspect",
+    }
+    assert saved["store"] == sig

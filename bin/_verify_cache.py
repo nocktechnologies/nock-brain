@@ -50,6 +50,18 @@ Growth bound: a dirty save persists only digests that were hit() or add()ed
 during THIS run. Purged or pre-edit digests are not live this run, so they
 drop instead of accumulating forever across store rewrites.
 
+Concurrent saves: save() is load-modify-replace with no lock. Two recalls
+racing a store rewrite (hook + budget-recall, or two Claude sessions) used
+to last-writer-wins: a stale v1 handle would os.replace over a v2 sidecar
+and the next recall would pay a cold verification. save() now re-stats the
+store immediately before os.replace and skips when the stamp no longer
+matches self.store_sig — the stale writer keeps its in-memory set but does
+not clobber the newer sidecar. When the stamp still matches, save() re-reads
+the sidecar and unions digests: within one store stat the set is append-only
+(VALID and status-bound non-VALID share it; union cannot upgrade a failure
+because non-VALID HMACs bind the status). Across stamps, skip-not-union
+preserves the prune bound.
+
 Threat model: the sidecar lives next to facts.json and is attacker-writable,
 so a forged entry must never be able to mint a VALID result. It cannot: the
 digest is an HMAC keyed under _sign.SigningKey.cache_key_material() (the raw
@@ -100,10 +112,13 @@ class VerifiedSignatureCache:
     (a new signature determination recorded, an untrustworthy sidecar being
     replaced, or the store stamp moving — informational, but we persist the
     new stamp and prune to this run's live set). Digests are opaque: VALID
-    proofs and status-bound non-VALID proofs share the same set."""
+    proofs and status-bound non-VALID proofs share the same set. A save
+    whose store stamp has moved is skipped so a stale writer cannot clobber
+    a newer sidecar; a same-stamp save unions on-disk digests."""
 
     def __init__(self, path: Path, key_id: str, alg: str,
-                 store_sig: dict, digests: "set[str]", dirty: bool = False):
+                 store_sig: dict, digests: "set[str]", dirty: bool = False,
+                 store_path: "Path | None" = None):
         self.path = Path(path)
         self.key_id = key_id
         self.alg = alg
@@ -111,6 +126,7 @@ class VerifiedSignatureCache:
         self.digests = set(digests)
         self._dirty = dirty
         self._live: "set[str]" = set()  # hit or added this run; prune target
+        self.store_path = Path(store_path) if store_path is not None else None
 
     def hit(self, digest: str) -> bool:
         if digest in self.digests:
@@ -133,10 +149,22 @@ class VerifiedSignatureCache:
         cannot escape; KeyboardInterrupt/SystemExit still propagate.
 
         A dirty save keeps only digests hit() or add()ed this run, so a store
-        rewrite cannot accumulate stale entries for facts that are gone."""
+        rewrite cannot accumulate stale entries for facts that are gone.
+
+        Last-writer-wins is not safe across a store rewrite: a handle that
+        loaded v1 would otherwise os.replace {v1-stat, v1-live} over a v2
+        sidecar. Re-stat the store immediately before replace and skip when
+        it no longer matches self.store_sig. When it still matches, re-read
+        the sidecar and union — append-only within one stat, and sound with
+        status-bound non-VALID digests in the same set because they are
+        opaque HMACs that cannot hit as VALID."""
         if not self._dirty:
             return
+        if self.store_path is not None and _store_sig(self.store_path) != self.store_sig:
+            return
         self.digests = set(self._live)
+        self.digests |= _peer_digests(self.path, self.key_id, self.alg,
+                                      self.store_sig)
         doc = {
             "version": CACHE_VERSION,
             "alg": self.alg,
@@ -154,6 +182,11 @@ class VerifiedSignatureCache:
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(doc, fh, separators=(",", ":"))
             os.chmod(tmp, FILE_MODE)
+            # Re-stat immediately before replace: the store can still move
+            # between the earlier check and here (the window the race lives in).
+            if (self.store_path is not None
+                    and _store_sig(self.store_path) != self.store_sig):
+                return
             os.replace(tmp, self.path)
             tmp = None  # replaced; nothing to clean up
         except Exception as exc:  # noqa: BLE001 - never crash recall on cache save
@@ -187,7 +220,8 @@ def load_for_store(store_path: Path, verify_key) -> "VerifiedSignatureCache | No
     path = cache_path_for(store_path)
     digests, dirty = _load_digests(path, verify_key, store_sig)
     return VerifiedSignatureCache(path, verify_key.key_id, verify_key.alg,
-                                  store_sig, digests, dirty)
+                                  store_sig, digests, dirty,
+                                  store_path=store_path)
 
 
 def _load_digests(path: Path, verify_key, store_sig: dict) -> "tuple[set[str], bool]":
@@ -236,3 +270,40 @@ def _load_digests(path: Path, verify_key, store_sig: dict) -> "tuple[set[str], b
         return set(), True
     except Exception:  # noqa: BLE001 - fail closed to full verification, never crash
         return set(), True
+
+
+def _store_sig(store_path: Path) -> "dict | None":
+    """Current (mtime_ns, size) of the store, or None if it is not statable."""
+    try:
+        st = Path(store_path).stat()
+    except OSError:
+        return None
+    return {"mtime_ns": st.st_mtime_ns, "size": st.st_size}
+
+
+def _peer_digests(path: Path, key_id: str, alg: str, store_sig: dict) -> "set[str]":
+    """On-disk digests from a same-stamp sidecar, else empty.
+
+    Concurrent same-stat writers each prune to their own live set; unioning
+    the already-persisted sidecar keeps the other writer's append-only adds.
+    A different store stamp, a foreign key/alg/version, or any read/parse
+    failure returns empty so we persist our own live set and do not
+    re-accumulate another generation's pruned entries (#47). VALID and
+    status-bound non-VALID digests share the set (#48); union is still a
+    set of opaque HMACs — a PARENT_SUSPECT digest cannot hit as VALID."""
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+        doc = json.loads(raw)
+    except Exception:  # noqa: BLE001 - merge is best-effort; write our live set
+        return set()
+    if not (
+        isinstance(doc, dict)
+        and doc.get("version") == CACHE_VERSION
+        and doc.get("key_id") == key_id
+        and doc.get("alg") == alg
+        and doc.get("store") == store_sig
+        and isinstance(doc.get("digests"), list)
+        and all(isinstance(d, str) for d in doc["digests"])
+    ):
+        return set()
+    return set(doc["digests"])
