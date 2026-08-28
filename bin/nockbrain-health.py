@@ -354,7 +354,7 @@ def render_text(report: dict[str, Any]) -> str:
         if cache.get("flagged"):
             lines.append(
                 "- VERIFICATION CACHE UNWRITABLE: sidecar cannot be persisted; "
-                "every recall re-verifies"
+                "new processes re-verify"
             )
         elif not cache.get("present"):
             lines.append("- Verification cache: missing (cold start)")
