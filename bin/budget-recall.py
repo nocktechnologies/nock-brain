@@ -625,28 +625,26 @@ def _verify_filter(facts: list[dict], verify_key, *, label: str,
     or intact respectively, not known-poisoned) and counts them in the stderr
     warning; strict mode keeps only VALID. No key -> facts pass unchanged.
 
-    `cache` (a _verify_cache handle) lets verify_fact skip the signature
-    operation for already-proven facts; every status is computed identically
-    with or without it, so strict-mode semantics are unaffected."""
+    `cache` (a _verify_cache handle) is passed to verify_facts so the
+    signature operation for already-proven facts is skipped; every status
+    is computed identically with or without it, so strict-mode semantics
+    are unaffected."""
     if verify_key is None or not facts:
         return facts
     import _sign
-    facts_by_id = {f.get("id", ""): f for f in facts}
-    counts: Counter = Counter()
+    report = _sign.verify_facts(facts, verify_key, verified_cache=cache)
     kept: list[dict] = []
-    for f in facts:
-        status = _sign.verify_fact(f, verify_key, facts_by_id=facts_by_id,
-                                   verified_cache=cache)
-        counts[status] += 1
+    for fact, item in zip(facts, report["statuses"]):
+        status = item["status"]
         if status == _sign.TAMPERED:
             continue
         if strict and status != _sign.VALID:
             continue
-        kept.append(f)
+        kept.append(fact)
     flagged = [
-        (counts[_sign.TAMPERED], "tampered", True),
-        (counts[_sign.UNSIGNED], "unsigned", strict),
-        (counts[_sign.PARENT_SUSPECT], "parent-suspect", strict),
+        (report["tampered"], "tampered", True),
+        (report["unsigned"], "unsigned", strict),
+        (report["parent_suspect"], "parent-suspect", strict),
     ]
     if any(count for count, _, _ in flagged):
         parts = [
@@ -674,20 +672,24 @@ def _load(path: Path, *, verify_key=None, strict_verify: bool = False) -> list[d
     # when explicitly selected (NOCKBRAIN_STORE=sqlite or the store-v2 marker).
     from _storeback import resolve_store
     store = resolve_store(path)
-    cache = None
-    if verify_key is not None:
-        # Local import keeps the no-key hot path free of any cache cost. The
-        # cache handle captures the store's freshness stat BEFORE the store is
-        # read (see _verify_cache.load_for_store) — for SQLite that stat is
-        # brain.db's, not facts.json's.
-        import _verify_cache
-        cache = _verify_cache.load_for_store(store.freshness_path, verify_key)
-    facts = store.load_facts(required_fields=RECALL_ITEM_FIELDS)
-    kept = _verify_filter(facts, verify_key, label=str(path),
-                          strict=strict_verify, cache=cache)
-    if cache is not None:
-        cache.save()
-    return kept
+
+    def _read():
+        return store.load_facts(required_fields=RECALL_ITEM_FIELDS)
+
+    if verify_key is None:
+        # Local import of _verify_cache stays off the no-key hot path.
+        return _verify_filter(_read(), None, label=str(path),
+                              strict=strict_verify, cache=None)
+
+    # for_store owns the cache lifecycle: stamp (before the store is read —
+    # for SQLite that stat is brain.db's, not facts.json's), then load,
+    # then save on exit. Callers cannot invert the stat-before-read order
+    # through this helper.
+    import _verify_cache
+    with _verify_cache.for_store(store.freshness_path, verify_key, _read) as (
+            cache, facts):
+        return _verify_filter(facts, verify_key, label=str(path),
+                              strict=strict_verify, cache=cache)
 
 
 _TRUTHY = {"1", "true", "yes", "on"}

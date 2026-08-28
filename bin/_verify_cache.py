@@ -7,7 +7,9 @@ memory-inject hook's <2s budget. This cache remembers which signature
 determinations have already been made, so each one is verified once per
 content change instead of once per recall. (The offline auditor,
 verify-facts.py, deliberately never uses it: an audit always does the full
-cryptographic pass.)
+cryptographic pass. Callers that do use it go through for_store() so the
+stat-before-read-then-save sequence is owned here, not choreographed at
+each call site.)
 
 What a cache entry means — and what stays uncached:
 
@@ -82,9 +84,9 @@ NOCKBRAIN_SIGNING_PUB/KEY — cannot forge a bypass. (An earlier design keyed th
 digest on public inputs only and WAS forgeable in that split-key posture, even
 under --strict-verify; the HMAC keying closes it, and CACHE_VERSION was bumped
 so pre-fix sidecars are rejected.) The sidecar holds only opaque digests, no
-fact content, so scrub/purge parity is unaffected: purging rewrites facts.json
-(the store stamp changes, which is informational). The purged fact is not
-hit-or-added this run, so its digest is pruned on the dirty save.
+fact content. purge-fact unlinks the sidecar wholesale (no fact-id mapping
+to drop rows) and the next recall cold-starts; a dirty save still prunes
+to this-run live set if the sidecar is left in place.
 """
 # Deferred annotations keep this module importable on Python 3.9 (stock macOS
 # /usr/bin/python3): it is reachable from the memory-inject hook's hot path.
@@ -94,10 +96,23 @@ import json
 import os
 import sys
 import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
+# bin/ has no package structure; import sibling helpers by adding bin/ to path.
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _store import FILE_MODE, secure_write_json_atomic  # noqa: E402,F401
+
 CACHE_VERSION = 2
-FILE_MODE = 0o600
+
+# Leftover mkstemp files from a SIGKILL'd save() (the memory-inject hook's
+# caller does not run Python finally/except). Sweep anything matching this
+# sidecar's prefix that is older than STALE_TMP_AGE_SEC. Younger files may
+# belong to a concurrent writer (#90); leave them alone.
+STALE_TMP_AGE_SEC = 60
 
 # A legitimate sidecar is bounded by the store size (one ~64-hex digest per
 # signed fact); even a 100k-fact store is a few MB. Anything larger is either
@@ -118,6 +133,79 @@ _memory: dict[tuple, set[str]] = {}
 
 def cache_path_for(store_path: Path) -> Path:
     return store_path.with_name(store_path.name + ".verified-cache.json")
+
+
+@contextmanager
+def for_store(store_path: Path, verify_key, load_fn):
+    """Own one cache lifecycle: stamp the store, load it, save on the way out.
+
+    Captures the store stamp via ``load_for_store`` and *then* calls
+    ``load_fn`` to read the store. Yields ``(cache, facts)``. ``cache`` is
+    None when verification is off. ``cache.save()`` runs on exit, including
+    when the body raises — forgetting to save is no longer a caller chore.
+
+    ``load_fn`` is invoked after the stamp is captured; there is no public
+    way to invert that order through this helper. Callers that load the
+    store themselves and pass a no-op ``load_fn`` are going around it.
+    """
+    cache = load_for_store(store_path, verify_key)
+    facts = load_fn()
+    try:
+        yield cache, facts
+    finally:
+        if cache is not None:
+            cache.save()
+
+
+def unlink_for_store(store_path: Path) -> bool:
+    """Remove the verified-cache sidecar next to ``store_path``.
+
+    Digests are opaque (no fact-id mapping), so a content purge cannot
+    surgically drop rows — the whole sidecar goes, and the next recall
+    cold-starts. Also age-sweeps leftover ``.tmp`` files for this sidecar.
+    Returns True if the sidecar file was removed. Never raises.
+    """
+    path = cache_path_for(Path(store_path))
+    _sweep_stale_tmps(path)
+    try:
+        path.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+
+
+def _sweep_stale_tmps(sidecar_path: Path, *, now: "float | None" = None) -> None:
+    """Unlink leftover mkstemp files next to the sidecar.
+
+    ``save()`` writes ``{sidecar.name}.{random}.tmp``. The hook SIGKILLs the
+    process at its timeout, so those files outlive any ``finally``. A
+    concurrent writer's live tmp is seconds old (#90); only files older
+    than ``STALE_TMP_AGE_SEC`` are removed. Probe tmps (``.nb-vc-probe.``)
+    use a different prefix and are not selected.
+    """
+    sidecar_path = Path(sidecar_path)
+    parent = sidecar_path.parent
+    prefix = sidecar_path.name + "."
+    cutoff = (time.time() if now is None else now) - STALE_TMP_AGE_SEC
+    try:
+        names = os.listdir(parent)
+    except OSError:
+        return
+    for name in names:
+        if not (name.startswith(prefix) and name.endswith(".tmp")):
+            continue
+        candidate = parent / name
+        try:
+            mtime = candidate.stat().st_mtime
+        except OSError:
+            continue
+        if mtime < cutoff:
+            try:
+                os.unlink(candidate)
+            except OSError:
+                pass
 
 
 class VerifiedSignatureCache:
@@ -175,6 +263,7 @@ class VerifiedSignatureCache:
         the sidecar and union — append-only within one stat, and sound with
         status-bound non-VALID digests in the same set because they are
         opaque HMACs that cannot hit as VALID."""
+        _sweep_stale_tmps(self.path)
         if not self._dirty:
             return
         if self.store_path is not None and _store_sig(self.store_path) != self.store_sig:
@@ -192,45 +281,34 @@ class VerifiedSignatureCache:
             "store": self.store_sig,
             "digests": sorted(self.digests),
         }
-        tmp = None
         try:
-            # mkstemp creates the file 0600; close the fd immediately and write
-            # by path so a failure in open()/json.dump can never leak the fd.
-            fd, tmp = tempfile.mkstemp(dir=str(self.path.parent),
-                                       prefix=self.path.name + ".", suffix=".tmp")
-            os.close(fd)
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(doc, fh, separators=(",", ":"))
-            os.chmod(tmp, FILE_MODE)
-            # Re-stat immediately before replace: the store can still move
-            # between the earlier check and here (the window the race lives in).
-            if (self.store_path is not None
-                    and _store_sig(self.store_path) != self.store_sig):
-                return
-            os.replace(tmp, self.path)
-            tmp = None  # replaced; nothing to clean up
-            _drop_memory(self)
+            # Re-stat immediately before replace lives in before_replace:
+            # the store can still move between the earlier check and here
+            # (the window the race lives in).
+            replaced = secure_write_json_atomic(
+                self.path, doc, separators=(",", ":"),
+                before_replace=(
+                    (lambda: _store_sig(self.store_path) == self.store_sig)
+                    if self.store_path is not None else None
+                ),
+            )
+            if replaced:
+                _drop_memory(self)
         except Exception as exc:  # noqa: BLE001 - never crash recall on cache save
             self._writable = False
             _stash_memory(self)
             _warn_save(self.path, exc)
-        finally:
-            if tmp is not None:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
 
 
 def load_for_store(store_path: Path, verify_key) -> "VerifiedSignatureCache | None":
     """Cache handle for `store_path` verified under `verify_key`.
 
-    MUST be called before the store file is read: the store stamp is captured
-    here as sidecar metadata (not an invalidation key). A store rewritten
-    between this stat and the read records a stale stamp; the next recall
-    notices the mismatch, rewrites the metadata, and prunes — still the safe
-    direction. Returns None (caching off) when verification is off or the
-    store is not statable.
+    The public owner of the load/save sequence is ``for_store``, which
+    calls this *before* the caller-supplied store loader so the stamp is
+    captured first. A store rewritten between this stat and the read
+    records a stale stamp; the next recall notices the mismatch, rewrites
+    the metadata, and prunes — still the safe direction. Returns None
+    (caching off) when verification is off or the store is not statable.
 
     Probes sidecar-directory writability once here so save() does not pay a
     failed mkstemp on every recall. Unwritable: one diagnostic, in-memory
@@ -291,20 +369,44 @@ def _load_digests(path: Path, verify_key, store_sig: dict) -> "tuple[set[str], b
         except FileNotFoundError:
             return set(), False
         doc = json.loads(raw)
-        if (
-            isinstance(doc, dict)
-            and doc.get("version") == CACHE_VERSION
-            and doc.get("key_id") == verify_key.key_id
-            and doc.get("alg") == verify_key.alg
-            and isinstance(doc.get("digests"), list)
-            and all(isinstance(d, str) for d in doc["digests"])
-        ):
+        if _sidecar_header_ok(doc, verify_key.key_id, verify_key.alg):
             # Store stamp is informational: retain the set even when it moved.
-            dirty = doc.get("store") != store_sig
+            # Type-strict: JSON true (True == 1) and float mtime (1.0 == 1)
+            # must not compare equal to an int stamp.
+            dirty = _typed_store(doc.get("store")) != store_sig
             return set(doc["digests"]), dirty
         return set(), True
     except Exception:  # noqa: BLE001 - fail closed to full verification, never crash
         return set(), True
+
+
+def _json_int(value):
+    """JSON integer, rejecting bool (True == 1) and float (1.0 == 1)."""
+    if type(value) is int:
+        return value
+    return None
+
+
+def _typed_store(value):
+    """Return {mtime_ns, size} only when both fields are JSON integers."""
+    if not isinstance(value, dict):
+        return None
+    mtime_ns = _json_int(value.get("mtime_ns"))
+    size = _json_int(value.get("size"))
+    if mtime_ns is None or size is None:
+        return None
+    return {"mtime_ns": mtime_ns, "size": size}
+
+
+def _sidecar_header_ok(doc, key_id, alg) -> bool:
+    return (
+        isinstance(doc, dict)
+        and _json_int(doc.get("version")) == CACHE_VERSION
+        and doc.get("key_id") == key_id
+        and doc.get("alg") == alg
+        and isinstance(doc.get("digests"), list)
+        and all(isinstance(d, str) for d in doc["digests"])
+    )
 
 
 def _store_sig(store_path: Path) -> "dict | None":
@@ -343,13 +445,8 @@ def _peer_digests(path: Path, key_id: str, alg: str, store_sig: dict) -> "set[st
     except Exception:  # noqa: BLE001 - merge is best-effort; write our live set
         return set()
     if not (
-        isinstance(doc, dict)
-        and doc.get("version") == CACHE_VERSION
-        and doc.get("key_id") == key_id
-        and doc.get("alg") == alg
-        and doc.get("store") == store_sig
-        and isinstance(doc.get("digests"), list)
-        and all(isinstance(d, str) for d in doc["digests"])
+        _sidecar_header_ok(doc, key_id, alg)
+        and _typed_store(doc.get("store")) == store_sig
     ):
         return set()
     return set(doc["digests"])
@@ -449,9 +546,9 @@ def sidecar_status(store_path: Path) -> dict:
                     doc = json.loads(raw)
                     fresh = (
                         isinstance(doc, dict)
-                        and doc.get("version") == CACHE_VERSION
+                        and _json_int(doc.get("version")) == CACHE_VERSION
                         and current is not None
-                        and doc.get("store") == current
+                        and _typed_store(doc.get("store")) == current
                     )
         except Exception:  # noqa: BLE001 - unreadable sidecar is not fresh
             fresh = False
