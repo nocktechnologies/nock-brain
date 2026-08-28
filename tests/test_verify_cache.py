@@ -26,6 +26,9 @@ tests pin its contract:
   NEVER crash recall — a pathologically nested sidecar (RecursionError), an
   oversized one, a non-hex signature (surrogate), or a save error all degrade
   gracefully;
+- an unwritable sidecar directory degrades to in-memory caching: one
+  diagnostic per process, a second recall in the same process still hits,
+  and the process does not crash;
 - any cache doubt (corrupt sidecar, missing key) fails closed to a full
   verification pass, never to skipped verification.
 """
@@ -45,7 +48,7 @@ def _load_verify_cache():
     put bin/ on sys.path, and without replacing sys.modules['_verify_cache']
     that budget-recall already imported."""
     spec = importlib.util.spec_from_file_location(
-        "_verify_cache_direct", _BIN / "_verify_cache.py")
+        f"_verify_cache_direct_{id(object())}", _BIN / "_verify_cache.py")
     vc = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(vc)
     return vc
@@ -466,7 +469,7 @@ def test_non_hex_signature_is_tampered_not_a_crash(
 def test_save_failure_does_not_raise(sign_lib, tmp_path, capsys, monkeypatch):
     """save() must degrade to a stderr note, never raise — budget-recall calls
     it unguarded on the hot path. Force a non-OSError from json.dump."""
-    vc = importlib.import_module("_verify_cache")
+    vc = _load_verify_cache()
     cache = vc.VerifiedSignatureCache(
         tmp_path / "facts.json.verified-cache.json", "k", "ed25519",
         {"mtime_ns": 1, "size": 1}, set(), dirty=True)
@@ -474,6 +477,21 @@ def test_save_failure_does_not_raise(sign_lib, tmp_path, capsys, monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(TypeError("boom")))
     cache.save()  # must not raise
     assert "could not save verification cache" in capsys.readouterr().err
+
+
+def test_save_failure_warns_only_once(tmp_path, capsys, monkeypatch):
+    """Issue #50: an unwritable sidecar must not print on every save()."""
+    vc = _load_verify_cache()
+    monkeypatch.setattr(vc.json, "dump",
+                        lambda *a, **k: (_ for _ in ()).throw(TypeError("boom")))
+    for _ in range(2):
+        cache = vc.VerifiedSignatureCache(
+            tmp_path / "facts.json.verified-cache.json", "k", "ed25519",
+            {"mtime_ns": 1, "size": 1}, set(), dirty=True)
+        cache.add("digest")
+        cache.save()
+    err = capsys.readouterr().err
+    assert err.count("could not save verification cache") == 1
 
 
 # --- concurrent save: stale writer must not clobber a newer sidecar (#49) -----
@@ -552,3 +570,37 @@ def test_same_stamp_save_unions_peer_digests(tmp_path):
         "digest-b-valid", "digest-b-parent-suspect",
     }
     assert saved["store"] == sig
+
+
+# --- unwritable sidecar: in-memory only, one diagnostic per process (#50) -----
+def test_unwritable_sidecar_warns_once_and_caches_in_memory(
+        budget_recall, sign_lib, signing_key, tmp_path, verify_calls, capsys,
+        monkeypatch):
+    """Issue #50: a read-only or full store directory must not print
+    `could not save verification cache` on every recall, and the process
+    must still warm in memory so the second recall skips signature ops."""
+    vc = importlib.import_module("_verify_cache")
+    monkeypatch.setattr(vc, "_save_warned", False)
+    monkeypatch.setattr(vc, "_memory", {})
+    monkeypatch.setattr(vc, "_probe_writable", lambda directory: False)
+
+    facts = [signable_fact(f"f-{i}", f"ed25519 rollout note {i} approved")
+             for i in range(3)]
+    sign_lib.sign_facts(facts, signing_key)
+    facts_file = write_facts(tmp_path, facts)
+
+    first = budget_recall.budget_recall("ed25519 rollout approved", facts_file)
+    err1 = capsys.readouterr().err
+    assert "approved" in first
+    assert verify_calls["n"] == 3  # cold
+    assert "verification cache is unwritable" in err1
+    assert err1.count("verification cache is unwritable") == 1
+    assert not sidecar_for(facts_file).exists()  # never persisted
+
+    verify_calls["n"] = 0
+    second = budget_recall.budget_recall("ed25519 rollout approved", facts_file)
+    err2 = capsys.readouterr().err
+    assert second == first
+    assert verify_calls["n"] == 0  # in-memory warm
+    assert "unwritable" not in err2
+    assert "could not save" not in err2

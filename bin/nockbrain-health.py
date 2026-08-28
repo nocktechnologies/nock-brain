@@ -17,6 +17,7 @@ if str(BIN_DIR) not in sys.path:
 
 from _facts import REQUIRED_FACT_FIELDS
 from _projection import load_receipts, last_status
+from _verify_cache import sidecar_status
 
 SENSITIVE_ENV_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
 SENSITIVE_ENV_NAMES = {"API_KEY", "TOKEN", "SECRET", "PASSWORD"}
@@ -281,6 +282,11 @@ def build_report(
         # A stale/failed projection is a silent outage until someone reads it.
         projection["flagged"] = bool(projection["ambiguous"])
         report["projection_receipts"] = projection
+    # Sidecar next to facts.json: missing is a cold start, unwritable is the
+    # silent-degradation this surfaces. Never flips recall_ready — rebuild's
+    # hard gate stays facts+secrets.
+    if facts_path is not None:
+        report["verification_cache"] = sidecar_status(facts_path)
     return report
 
 
@@ -343,6 +349,19 @@ def render_text(report: dict[str, Any]) -> str:
                 f"- Projection receipts: {projection['total']} row(s), "
                 f"{projection['artifacts']} artifact(s) applied"
             )
+    cache = report.get("verification_cache")
+    if cache is not None:
+        if not cache.get("writable"):
+            lines.append(
+                "- VERIFICATION CACHE UNWRITABLE: sidecar cannot be persisted; "
+                "every recall re-verifies"
+            )
+        elif not cache.get("present"):
+            lines.append("- Verification cache: missing (cold start)")
+        elif cache.get("fresh"):
+            lines.append("- Verification cache: present, fresh, writable")
+        else:
+            lines.append("- Verification cache: present, stale stamp, writable")
     return "\n".join(lines) + "\n"
 
 

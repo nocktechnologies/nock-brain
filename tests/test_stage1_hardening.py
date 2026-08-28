@@ -204,6 +204,49 @@ def test_memory_hook_logs_recall_errors_to_private_file(tmp_path):
     assert mode(err_log) == 0o600
 
 
+def test_memory_hook_rotates_oversized_error_log(tmp_path):
+    """Issue #50: hook-errors.log must not grow without bound. An oversized
+    log is rotated to hook-errors.log.1 before the next append."""
+    facts_dir = tmp_path / ".nock-brain"
+    facts_dir.mkdir()
+    (facts_dir / "facts.json").write_text("[]", encoding="utf-8")
+    err_log = facts_dir / "hook-errors.log"
+    err_log.write_bytes(b"old-error-line\n" + b"x" * (1024 * 1024))
+
+    hook_dir = tmp_path / "hooks"
+    bin_dir = tmp_path / "bin"
+    hook_dir.mkdir()
+    bin_dir.mkdir()
+    hook = hook_dir / "memory-inject.sh"
+    hook.write_text(
+        (REPO / "hooks" / "memory-inject.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (bin_dir / "recall-classifier.py").write_text(
+        "import sys\nsys.stderr.write('classifier exploded\\n')\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "budget-recall.py").write_text("", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(hook)],
+        input=json.dumps({"prompt": "what did we decide about stage one memory recall"}),
+        text=True,
+        capture_output=True,
+        env={**os.environ, "HOME": str(tmp_path), "PYTHONDONTWRITEBYTECODE": "1"},
+        check=True,
+    )
+
+    assert json.loads(result.stdout) == {}
+    rotated = facts_dir / "hook-errors.log.1"
+    assert rotated.exists()
+    assert "old-error-line" in rotated.read_text(encoding="utf-8", errors="replace")
+    new_log = err_log.read_text(encoding="utf-8")
+    assert "classifier exploded" in new_log
+    assert "old-error-line" not in new_log
+    assert mode(err_log) == 0o600
+
+
 def test_memory_hook_prefers_installer_venv_python(tmp_path):
     # The semantic tier's numpy + tokenizers live in ~/.nock-brain/venv; bare
     # `python3` is PATH/alias-dependent (Homebrew builds ship without
