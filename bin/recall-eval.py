@@ -183,7 +183,7 @@ def self_test(br, store: Path, queries: dict, *, now=EVAL_NOW) -> dict:
 def _verify_all(br, store: Path) -> tuple[int, int]:
     """(valid, total) under the fixture key. Exercises the real verify path."""
     import _sign
-    vkey = br._resolve_verify_key()
+    vkey, _err = br._resolve_verify_key()
     facts = json.loads(store.read_text())
     by_id = {f["id"]: f for f in facts}
     valid = sum(1 for f in facts

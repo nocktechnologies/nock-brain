@@ -577,3 +577,22 @@ def test_promotion_restores_full_weight(budget_recall):
     # promoted external == plain trusted; neither is discounted
     assert budget_recall.trust_factor(facts[0]) == 1.0
     assert budget_recall.trust_factor(facts[1]) == 1.0
+
+
+def test_v2_fact_without_source_date_still_recalls(budget_recall, tmp_path):
+    """N10020: a v2-shaped fact that only has source_time must rank."""
+    facts_file = tmp_path / "facts.json"
+    facts_file.write_text(json.dumps([{
+        "id": "v2-1",
+        "kind": "decision",
+        "status": "current",
+        "confidence": 0.9,
+        "content": "Kevin approved the bounded memory build",
+        "source_time": "2026-08-04T15:00:00.000000Z",
+        "evidence": [],
+        "valid_from": "2026-08-04T15:00:00.000000Z",
+        "valid_to": None,
+    }]))
+    out = budget_recall.budget_recall("bounded memory build", facts_file)
+    assert "bounded memory" in out
+    assert "2026-08-04" in out

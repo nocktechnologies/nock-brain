@@ -24,7 +24,6 @@ never be confused with a fact signature.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,10 +34,8 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from _sign import (  # noqa: E402
-    DEFAULT_KEY_PATH,
-    DEFAULT_PUB_PATH,
     SigningKey,
-    load_or_create_key,
+    resolve_signing_key,
 )
 from _store import FILE_MODE  # noqa: E402
 
@@ -209,17 +206,24 @@ def blocking_findings(report: "dict[str, Any]", *,
     return findings
 
 
-def resolve_signing_key() -> "SigningKey | None":
-    """The store's signing key, or None when unavailable (mark-only mode).
+def resurrected_ids(
+    facts: "list[dict[str, Any]]",
+    events: "list[dict[str, Any]]",
+    key: "SigningKey | None",
+    *,
+    retired_keys: "tuple[SigningKey, ...]" = (),
+) -> "set[str]":
+    """Fact ids a trusted revocation says are dead but status is not superseded.
 
-    Env overrides mirror the recall path: NOCKBRAIN_SIGNING_KEY /
-    NOCKBRAIN_SIGNING_PUB."""
-    key_path = Path(os.environ.get("NOCKBRAIN_SIGNING_KEY", DEFAULT_KEY_PATH))
-    pub_path = Path(os.environ.get("NOCKBRAIN_SIGNING_PUB", DEFAULT_PUB_PATH))
-    try:
-        return load_or_create_key(key_path, pub_path, create=False)
-    except (FileNotFoundError, RuntimeError, ValueError, KeyError, OSError):
-        return None
+    Missing key or empty sidecar → empty set (fail open, same as unsigned
+    verification). Recall uses this so a status flip-back cannot re-inject
+    revoked content that still verifies VALID (N10016).
+    """
+    if key is None or not events:
+        return set()
+    return set(
+        audit(facts, events, key, retired_keys=retired_keys).get("resurrected") or []
+    )
 
 
 def record_supersessions(

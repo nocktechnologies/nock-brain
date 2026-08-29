@@ -9,6 +9,9 @@ update the relevant section here in the same PR. Function names are used
 instead of line numbers on purpose — names rot slower.
 
 Last full regeneration: 2026-08-23 (post-#83, commit `10a85ec`).
+Contract updates 2026-08-28: shared key resolver, recall revocation audit,
+v2 `source_date`/`valid_from`/`valid_to`, purge tombstones, `resolve_store`
+basename, `--strict-verify` fail-closed.
 
 ---
 
@@ -54,6 +57,7 @@ else is derived or append-only sidecar.
 | `vault/`, `graph.json` | Derived Obsidian vault and Graphify graph — receipt-ledgered projections |
 | `signing-key`, `signing-key.pub` | Ed25519 keypair (HMAC-SHA256 fallback when `cryptography` is absent), auto-created |
 | `revocations.jsonl` | Signed append-only supersession events (`nockbrain-revocation/v1`) |
+| `purged-ids.jsonl` | Tombstones for hard-deleted fact ids; rebuild merge will not re-extract them |
 | `fact-edits.jsonl`, `.edit-fact.lock` | Actor-tracked edit history + writer lock for `edit-fact.py` |
 | `projection-receipts.jsonl` | applied/ambiguous ledger for every derived-artifact write (`_projection.py`) |
 | `recall-degradations.jsonl` | Append-only log of degraded (empty) store reads; surfaced only by health |
@@ -114,7 +118,10 @@ signs, exports, then backup-and-swaps into live, then regenerates
 `insights.json` (`synthesize --sign`) and the semantic sidecar
 (`embed-facts`, 1800s timeout, never gates). `--dry-run` can never alter
 live. `--replace` skips both the live-store merge and the anti-amnesia
-shrink guard — the only intentional way to shrink the store.
+shrink guard — the only intentional way to shrink the store. Windowed merge
+is **not** naive recent-wins: tombstones (`purged-ids.jsonl`), fact-edits,
+and revocations protect those ids, and a live `status=superseded` fact is
+never overwritten by a re-extracted `current` copy.
 
 ---
 
@@ -123,12 +130,12 @@ shrink guard — the only intentional way to shrink the store.
 | Module | Owns | Key API |
 |---|---|---|
 | `_store.py` | Filesystem permission discipline (0700/0600) | `secure_mkdir/write_text/write_json/copyfile`; atomic `secure_write_json_atomic` / `secure_replace_text` / `secure_replace_bytes` (mkstemp + chmod 0600 + os.replace; optional `before_replace` skip) |
-| `_facts.py` | The v1 fact-record contract, defensive loading, bi-temporal validity, agent ownership | `REQUIRED_FACT_FIELDS`, `RECALL_ITEM_FIELDS`, `load_facts`, `fact_currently_valid`, `fact_source` (default `"mira"`), `content_tokens`, `jaccard`, `malformed_fact_reason` |
+| `_facts.py` | The v1 fact-record contract, defensive loading, bi-temporal validity, agent ownership | `REQUIRED_FACT_FIELDS`, `RECALL_ITEM_FIELDS`, `load_facts`, `fill_source_date` (v2 `source_time` → operational `source_date`), `fact_currently_valid` (v1 `valid_at`/`invalid_at` **and** v2 `valid_from`/`valid_to`), `fact_source` (default `"mira"`), `content_tokens`, `jaccard`, `malformed_fact_reason`, `load_jsonl_ids` / `TOMBSTONES_FILENAME` |
 | `_scrub.py` | Secret redaction + structural-noise discrimination, shared by EVERY extraction path | `scrub_secrets`, `is_structural_noise`, `SECRET_PATTERNS` |
-| `_sign.py` (977 L) | Both attestation contracts, keys, canonicalization, the verification state machine | `sign_facts` (per-fact routing), `sign_fact`, `sign_claim_fact_v2`, `is_v2_claim_fact`, `verify_fact` → `VALID/TAMPERED/UNSIGNED/PARENT_SUSPECT`, `verify_facts(..., verified_cache=None)` (caching is a property of verification; the offline auditor passes None), `load_or_create_key`, verifier receipts |
-| `_revoke.py` | Attested supersession (S1): signed append-only revocation events; resurrection detection | `sign_revocation`, `record_supersessions`, `audit`, `blocking_findings` (single source of truth for exit status), `resolve_signing_key` |
-| `_storeback.py` | Store-backend contract: `JsonStore` (default) / `SqliteStore` (`brain.db`, WAL); degradation logging | `resolve_store` (env `NOCKBRAIN_STORE`; `json` = kill switch; sqlite only if marker **and** db exist), `load_facts`, `replace_all`, `snapshot`, `export_facts_json` |
-| `_verify_cache.py` | Cache of proven signatures for the recall hot path (~0.4–0.8 s saved per recall) | `for_store(path, key, load_fn)` owns the lifecycle (stamp **then** load_fn, save on exit — the ordering is in the helper, not a call-site docstring); `load_for_store` (the stamp primitive; probes sidecar-dir writability); `unlink_for_store` (purge/uninstall: drop the sidecar + age-sweep leftover `.tmp`s); `VerifiedSignatureCache` — per-entry HMAC digests survive store rewrites; dirty save prunes to this-run live set; save re-stats the store immediately before replace and **skips** when the stamp moved; same-stamp save unions on-disk digests; save age-sweeps `{sidecar}.*.tmp` older than 60s (SIGKILL leftovers) and leaves younger files (concurrent writer, #90); save writes via `_store.secure_write_json_atomic` and imports `FILE_MODE` from `_store`; unwritable dir → in-memory only, **one** diagnostic per process; `sidecar_status` (present/fresh/writable/`reason`; `reason` is `stale_stamp` / `oversized` / `unreadable` when present but not fresh, else None — a missing sidecar or missing parent is a cold start, not a not-fresh reason; `flagged` only when the parent dir exists and is unwritable) for health; `_load_digests` / `_peer_digests` / `sidecar_status` refuse sidecars larger than `MAX_SIDECAR_BYTES` unread, and type-guard `version` (int, not bool) and store `mtime_ns`/`size` (int, not float) before comparing; forgery needs key-file read access |
+| `_sign.py` (977 L) | Both attestation contracts, keys, canonicalization, the verification state machine | `sign_facts` (per-fact routing), `sign_fact`, `sign_claim_fact_v2` (also fills `source_date` from `source_time`), `is_v2_claim_fact`, `verify_fact` → `VALID/TAMPERED/UNSIGNED/PARENT_SUSPECT`, `verify_facts(..., verified_cache=None)` (caching is a property of verification; the offline auditor passes None), `load_or_create_key`, `resolve_key_paths` / `resolve_signing_key` / `resolve_verify_key` (shared env-aware resolver: CLI > `NOCKBRAIN_SIGNING_KEY`/`_PUB` > store_dir/`~/.nock-brain`), `SigningKey.cache_key_material()` (Ed25519 private bytes or `None` if pub-only), verifier receipts |
+| `_revoke.py` | Attested supersession (S1): signed append-only revocation events; resurrection detection | `sign_revocation`, `record_supersessions`, `audit`, `resurrected_ids` (recall's fail-open wrapper), `blocking_findings` (single source of truth for exit status), `resolve_signing_key` (re-export of `_sign.resolve_signing_key`) |
+| `_storeback.py` | Store-backend contract: `JsonStore` (default) / `SqliteStore` (`brain.db`, WAL); degradation logging | `resolve_store` (env `NOCKBRAIN_STORE`; `json` = kill switch; sqlite only if marker **and** db exist; **honors basename** — non-`facts.json`/`brain.db` paths stay `JsonStore` so insights/graph never key onto `brain.db`), `load_facts`, `replace_all`, `snapshot`, `export_facts_json` |
+| `_verify_cache.py` | Cache of proven signatures for the recall hot path (~0.4–0.8 s saved per recall) | `CACHE_VERSION = 3`; HMAC keyed on `SigningKey.cache_key_material()` (Ed25519 **private** bytes — pub-only keys skip the cache); `for_store(path, key, load_fn)` owns the lifecycle (stamp **then** load_fn, save on exit); `load_for_store`; `unlink_for_store`; `VerifiedSignatureCache`; `sidecar_status` (`reason` is `stale_stamp` / `oversized` / `unreadable` / `rejected` when present but not fresh — freshness means loadable, sharing the loader predicate); forgery needs private-key material |
 | `_embed.py` | Semantic-tier encoding + `embeddings.npz` sidecar | `get_encoder`, `sync_sidecar`, `load_sidecar` (returns `None` on ANY problem incl. model mismatch), `save_sidecar` (via `_store.secure_replace_bytes`; bin/ path bootstrap like `_verify_cache` so a file-spec load resolves the sibling), `EmbedUnavailable`, `NOCKBRAIN_EMBED_STUB=1` for CI |
 | `_dense_recall.py` | RRF fusion of BM25 seeds with dense cosine + reserved slots | `fuse(...)` → `(fused, reserved_ids)`; RRF k=60, dense top 40, 3 reserved slots (empirically pinned) |
 | `_graph_recall.py` | Graph-neighbor expansion over the export-graph structure | `expand(...)`; neighbors always strictly below the weakest seed |
@@ -142,7 +149,10 @@ Per-module invariants worth memorizing:
   `secure_replace_bytes` (`_verify_cache.save`, `_embed.save_sidecar`).
 - `_facts`: `source` is deliberately not required (would invalidate pre-scoping
   facts). Bi-temporal bounds default open — a malformed bound never breaks
-  recall. `load_facts` never raises; corrupt store → `[]` + stderr line.
+  recall. `fact_currently_valid` honors v1 `valid_at`/`invalid_at` and v2
+  `valid_from`/`valid_to`. `load_facts` never raises; corrupt store → `[]` +
+  stderr line. v2 facts missing `source_date` get it filled from `source_time`
+  so they pass `RECALL_ITEM_FIELDS`.
 - `_scrub`: matching is prefix/pattern only, never substring. A leading
   `[UPPER TAG]` is an escape hatch checked first, so genuine tagged facts
   survive every noise rule. Bare-32-hex pattern is aggressive — it redacts git
@@ -200,10 +210,10 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 |---|---|
 | `synthesize.py` | Clusters recurring facts → `insights.json`. `--llm` = Haiku via local `claude -p` (subscription, not metered API); shape-gate rejects chat-shaped output; `--sign` degrades to unsigned+warn without a key |
 | `dedup-facts.py` | Near-identical extractions of one event → one canonical. Propose default; `--apply` marks losers superseded, signatures survive |
-| `consolidate-facts.py` | Cross-date near-dupes of durable kinds. Double-gated: `--execute --i-have-reviewed-the-manifest`, refuses on manifest drift. `correction` kind never touched. OPS RULE: re-run `sign-facts.py` after any execute |
+| `consolidate-facts.py` | Cross-date near-dupes of durable kinds. Double-gated: `--execute --i-have-reviewed-the-manifest`, refuses on manifest drift. `correction` kind never touched. `--execute` sets `invalid_at` and mints signed revocation events (`record_supersessions`) — same contract as `dedup-facts` / `supersede-fact`. OPS RULE: re-run `sign-facts.py` after any execute |
 | `detect-contradictions.py` | Nightly stale-fact pass, propose-ONLY, never writes the store. Output actions are literal `supersede-fact.py` commands. `--llm` judge sees scrubbed content; failures degrade to borderline |
 | `supersede-fact.py` | The manual apply-target; mints a signed revocation event via `_revoke` |
-| `purge-fact.py` | HARD delete across facts/events/notes/vault/embedding-sidecar/verified-cache sidecar (GDPR-style). Dry-run default. On `--apply` the fact store is rewritten **first**, then the verified-cache sidecar is unlinked whole (digests are opaque; next recall cold-starts) — a concurrent stale `save()` whose stamp still matches the old store cannot recreate a digest for a purged fact |
+| `purge-fact.py` | HARD delete across facts/events/notes/vault/insights/graph/embedding-sidecar/verified-cache sidecar (GDPR-style). Dry-run default. `--apply` with **zero matches does not rewrite** the store (would drop loader-skipped malformed records). Pattern match is id+content only (not signature hex). Matching apply rewrites the fact store **first**, appends `purged-ids.jsonl` tombstones, scrubs `insights.json`/`graph.json`, then unlinks the verified-cache sidecar |
 
 **Recall** (see §6 for exact ranking order)
 | Script | Notes |
@@ -223,7 +233,7 @@ registry, not NLP), `export-graph.py` (Graphify JSON). Both receipt-ledgered.
 **Health / eval**
 | Script | Notes |
 |---|---|
-| `nockbrain-health.py` | Counts, malformed, privacy redactions, live-secret scan vs `.env` files, degradations, contradiction-queue staleness, verification-cache sidecar (present / fresh / writable / reason; text says `stale stamp` only for `reason=stale_stamp`, and distinct `oversized` / `unreadable` lines otherwise; `VERIFICATION CACHE UNWRITABLE` only when `flagged`, not merely `not writable`; a missing sidecar or missing parent is `missing (cold start)`), `recall_ready`. **The hard-gate input for rebuild-store** |
+| `nockbrain-health.py` | Counts, malformed, privacy redactions, live-secret scan vs `.env` files, degradations, contradiction-queue staleness, verification-cache sidecar (present / fresh / writable / reason; text says `stale stamp` only for `reason=stale_stamp`, and distinct `oversized` / `unreadable` / `rejected` lines otherwise; `VERIFICATION CACHE UNWRITABLE` only when `flagged`, not merely `not writable`; a missing sidecar or missing parent is `missing (cold start)`), signing-key identity vs store attestations (`SIGNING KEY MISMATCH` warns, does not flip `recall_ready`), `recall_ready`. **The hard-gate input for rebuild-store** |
 | `recall-eval.py` | The CI gate: n=36 gold vs committed signed fixture, hermetic (pinned `EVAL_NOW`, semantic inert). Floors: recall 0.90 (measured 0.972), companionship 0.05 (~0.14). Also fails on any fixture attestation failure or an inverted cap-lever self-test |
 | `eval-graph-recall.py` | Live-store flat-vs-hybrid benchmark (exploratory, not CI) |
 | `eval-store-parity.py` | E2 cutover bar: JSON↔SQLite identical on counts, values, hashes, verification, and ranked recall for every suite+fuzz query |
@@ -258,18 +268,24 @@ budget is design intent enforced only by downstream cost control.
 
 Inside `budget-recall.select_recall()`:
 
-0. **Load + verify.** `resolve_store` → `_verify_cache.for_store` (stamp
+0. **Load + verify.** `resolve_store` (basename-honoring: `insights.json` stays
+   JSON even if `brain.db` is selected) → `_verify_cache.for_store` (stamp
    **before** the store is read, save on exit) → `verify_facts(..., verified_cache=)`
    filter: TAMPERED always excluded; UNSIGNED and PARENT_SUSPECT kept by
    default (counted on stderr); `--strict-verify` keeps only VALID. Missing
-   key ⇒ verification skipped entirely (fail open). Then agent scoping
-   (`--agent-scope`: keep `source ∈ {scope, "shared"}`).
-1. **BM25 tier** (`search()`): hard filters (not superseded, currently valid,
-   confidence ≥ 0.7), Okapi BM25 (k1=1.5, b=0.75, query-local corpus stats),
+   key ⇒ verification skipped entirely (fail open) **except** `--strict-verify`,
+   which fails closed (empty recall + loud stderr). Then agent scoping
+   (`--agent-scope`: keep `source ∈ {scope, "shared"}`). Then **revocation
+   audit**: facts a trusted `revocations.jsonl` event says are dead are
+   excluded even if `status=current` (the unsigned flip-back).
+1. **BM25 tier** (`search()`): hard filters (not superseded, currently valid
+   including v2 `valid_from`/`valid_to`, `revokes_revision_ids` hides revoked
+   revisions, confidence ≥ 0.7), Okapi BM25 (k1=1.5, b=0.75, query-local corpus stats),
    then score = bm25 × confidence × recency (per-kind half-life: status 14d …
    decision/directive/correction/architecture 180d, identity ~forever,
    insight 45d) × supersession factor × trust factor × coverage boost ×
-   phrase-proximity boost × bulk-date penalty.
+   phrase-proximity boost × bulk-date penalty. v2 facts missing `source_date`
+   get it filled from `source_time` at load.
 2. **Dense fusion** (`--semantic`): RRF-fuse BM25 list with cosine candidates
    from the sidecar; stale/orphan/non-finite vectors skipped; query text is
    stripped of intent scaffolding ("what did we decide about…"). Returns
@@ -330,21 +346,23 @@ evidence anchor, for the Claim Guard consumer. The signing key must live
 outside the model seat.
 
 **Fail-open vs fail-closed doctrine** (memorize this split):
-- Fail **open** (recall keeps working): missing signing key, corrupt store,
-  missing/stale sidecars, degraded SQLite reads, job windows, every optional
-  recall tier.
+- Fail **open** (recall keeps working): missing signing key (default mode),
+  corrupt store, missing/stale sidecars, degraded SQLite reads, job windows,
+  every optional recall tier. Unsigned revocations are not trusted, so a
+  flip-back of an unattested supersession still depends on `status==superseded`.
 - Fail **closed**: v2 claim signing/verification, revocation audits
-  (`blocking_findings`), the migrator, promotion-batch chain validation, the
-  rebuild health gate, verify-cache trust decisions.
+  (`blocking_findings`), `--strict-verify` with no/unloadable key (empty
+  recall), the migrator, promotion-batch chain validation, the rebuild health
+  gate, verify-cache trust decisions.
 
 ---
 
 ## 8. Python floor + environment knobs
 
 CI runs 3.11/3.12, but the hook runs on stock macOS `python3` = **3.9**.
-`tests/test_python_floor.py` hardcodes the exact 12-module hook-reachable
-closure (`_dense_recall, _embed, _facts, _graph_recall, _projection, _sign,
-_store, _storeback, _verify_cache, budget-recall, export-graph,
+`tests/test_python_floor.py` hardcodes the exact 13-module hook-reachable
+closure (`_dense_recall, _embed, _facts, _graph_recall, _projection, _revoke,
+_sign, _store, _storeback, _verify_cache, budget-recall, export-graph,
 recall-classifier`) and requires `from __future__ import annotations`
 everywhere. **Never add an import edge into the hook path without updating
 that list and confirming 3.9 compatibility** — 3.10-only syntax has killed

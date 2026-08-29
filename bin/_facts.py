@@ -47,6 +47,23 @@ def valid_fact(fact: Any, required_fields: set[str] | None = None) -> bool:
     return not malformed_fact_reason(fact, required_fields)
 
 
+def fill_source_date(fact: Any) -> None:
+    """Derive ``source_date`` from ``source_time`` when the v2 payload omitted it.
+
+    Recall ranks and diversity-caps on ``source_date``; claim-authority facts
+    carry signed ``source_time`` instead (N10020). Filling here keeps the
+    signed core untouched — ``source_date`` is not in the v2 payload.
+    """
+    if not isinstance(fact, dict):
+        return
+    existing = fact.get("source_date")
+    if isinstance(existing, str) and existing.strip():
+        return
+    source_time = fact.get("source_time")
+    if isinstance(source_time, str) and len(source_time) >= 10:
+        fact["source_date"] = source_time[:10]
+
+
 def filter_valid_facts(
     facts: Any,
     *,
@@ -60,6 +77,7 @@ def filter_valid_facts(
     valid: list[dict[str, Any]] = []
     skipped = 0
     for fact in facts:
+        fill_source_date(fact)
         if valid_fact(fact, required_fields):
             valid.append(fact)
         else:
@@ -107,12 +125,14 @@ def jaccard(a: Any, b: Any) -> float:
 
 
 # ── Bi-temporal validity (N-borrow-2: supersede-over-delete with a window) ───
-# Facts may carry OPTIONAL `valid_at` / `invalid_at` ISO-8601 bounds. A fact is
-# "currently valid" iff valid_at <= now < invalid_at, treating a MISSING bound as
-# open (-inf / +inf). Both fields absent ⇒ always valid — so every existing fact
-# and every caller is unaffected. This lets recall stop surfacing a fact as
-# *current* once it has been superseded/expired, while the fact stays in the
-# store for historical queries (recoverable via include_superseded).
+# Facts may carry OPTIONAL window bounds. A fact is "currently valid" iff
+# start <= now < end, treating a MISSING bound as open (-inf / +inf).
+# v1 operational fields: `valid_at` / `invalid_at`.
+# v2 claim-authority fields (signed): `valid_from` / `valid_to` (N10022).
+# Either pair can close the window; both absent ⇒ always valid so every
+# existing fact and caller is unaffected. This lets recall stop surfacing a
+# fact as *current* once it has been superseded/expired, while the fact stays
+# in the store for historical queries (recoverable via include_superseded).
 def _parse_ts(value: Any) -> "datetime | None":
     """Parse an ISO-8601 timestamp; return None on anything unparseable
     (lenient by design — a malformed bound must never break recall)."""
@@ -131,18 +151,61 @@ def _parse_ts(value: Any) -> "datetime | None":
 def fact_currently_valid(fact: Any, now: "datetime | None" = None) -> bool:
     """True if `fact`'s bi-temporal validity window contains `now`.
 
-    Missing/blank/unparseable `valid_at` or `invalid_at` are treated as open
-    bounds, so a fact without these fields is always valid (backward compatible).
+    Missing/blank/unparseable bounds are treated as open, so a fact without
+    these fields is always valid (backward compatible). v1 uses
+    ``valid_at``/``invalid_at``; v2 claims use signed ``valid_from``/``valid_to``.
+    Either pair can exclude the fact.
     """
     if not isinstance(fact, dict):
         return True
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    valid_at = _parse_ts(fact.get("valid_at"))
-    invalid_at = _parse_ts(fact.get("invalid_at"))
-    if valid_at is not None and now < valid_at:
-        return False  # not yet in effect
-    if invalid_at is not None and now >= invalid_at:
-        return False  # window has closed (superseded/expired)
+    for start_field in ("valid_at", "valid_from"):
+        start = _parse_ts(fact.get(start_field))
+        if start is not None and now < start:
+            return False  # not yet in effect
+    for end_field in ("invalid_at", "valid_to"):
+        end = _parse_ts(fact.get(end_field))
+        if end is not None and now >= end:
+            return False  # window has closed (superseded/expired)
     return True
+
+
+# Append-only id logs consulted by rebuild merge so a re-extract cannot
+# resurrect a purge, edit, or attested supersession (N10014).
+TOMBSTONES_FILENAME = "purged-ids.jsonl"
+FACT_EDITS_FILENAME = "fact-edits.jsonl"
+
+
+def load_jsonl_ids(path: Path, field: str) -> set[str]:
+    """Collect string ids from a JSONL sidecar.
+
+    Each line is a JSON object (``field`` or ``id``) or a bare id string.
+    Missing files and malformed lines are skipped — a rebuild must not die
+    because a sidecar is absent.
+    """
+    ids: set[str] = set()
+    path = Path(path)
+    if not path.exists():
+        return ids
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ids
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            ids.add(line)
+            continue
+        if isinstance(row, dict):
+            value = row.get(field) or row.get("id")
+            if value:
+                ids.add(str(value))
+        elif isinstance(row, str) and row:
+            ids.add(row)
+    return ids

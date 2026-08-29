@@ -96,6 +96,10 @@ def apply_batch(store: list[dict], batch: dict, machine: str) -> list[dict]:
         fact = dict(fact)
         fact["machine"] = machine
         fact["applied_at"] = applied_at
+        if not fact.get("source_date"):
+            source_time = fact.get("source_time")
+            if isinstance(source_time, str) and len(source_time) >= 10:
+                fact["source_date"] = source_time[:10]
         out.append(fact)
     return out
 

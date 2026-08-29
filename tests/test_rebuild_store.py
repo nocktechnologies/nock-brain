@@ -527,3 +527,69 @@ def test_insights_refresh_regenerates_and_never_blocks(rebuild_store, tmp_path, 
         insights_status="regenerated 114",
     )
     assert "- Insights (derived view): regenerated 114" in summary
+
+
+def test_merge_facts_keeps_superseded_live_over_reextract(rebuild_store):
+    """N10014: re-extraction mints status=current; merge must not un-supersede."""
+    live = [{"id": "X", "status": "superseded", "content": "old claim"}]
+    recent = [{"id": "X", "status": "current", "content": "old claim"}]
+    merged = rebuild_store.merge_facts(live, recent)
+    assert len(merged) == 1
+    assert merged[0]["status"] == "superseded"
+
+
+def test_merge_facts_skips_tombstoned_reextract(rebuild_store):
+    """N10014: a purged id in protected_ids must not re-enter via recent."""
+    live = [{"id": "KEEP", "status": "current", "content": "keep"}]
+    recent = [
+        {"id": "PURGED", "status": "current", "content": "leaked secret"},
+        {"id": "KEEP", "status": "current", "content": "keep updated"},
+    ]
+    merged = rebuild_store.merge_facts(live, recent, protected_ids={"PURGED"})
+    by_id = {f["id"]: f for f in merged}
+    assert "PURGED" not in by_id
+    assert by_id["KEEP"]["content"] == "keep updated"
+
+
+def test_build_staging_honors_tombstones(rebuild_store, tmp_path, monkeypatch):
+    """Windowed rebuild must not resurrect a purged id from re-extraction."""
+    live_facts = tmp_path / "live-facts.json"
+    live_facts.write_text(
+        json.dumps([{"id": "KEEP", "status": "current", "content": "keep"}]),
+        encoding="utf-8",
+    )
+    (tmp_path / "purged-ids.jsonl").write_text(
+        json.dumps({"id": "PURGED", "purged_at": "2026-08-01T00:00:00Z"}) + "\n",
+        encoding="utf-8",
+    )
+    staging = tmp_path / "staging"
+
+    def fake_run_cli(script, args):
+        if script == "ingest-jsonl.py":
+            return _FakeProc('{"stats": {}}')
+        if script == "refine-sessions.py":
+            fp = Path(args[args.index("--facts") + 1])
+            fp.write_text(
+                json.dumps([
+                    {"id": "KEEP", "status": "current", "content": "keep"},
+                    {"id": "PURGED", "status": "current", "content": "secret"},
+                ]),
+                encoding="utf-8",
+            )
+            return _FakeProc("")
+        if script == "review-promotions.py":
+            return _FakeProc("")
+        if script == "nockbrain-health.py":
+            return _FakeProc(json.dumps(_healthy_report()))
+        return _FakeProc("")
+
+    monkeypatch.setattr(rebuild_store, "_run_cli", fake_run_cli)
+    rebuild_store.build_staging(
+        staging, [],
+        key_path=tmp_path / "k", pub_path=tmp_path / "k.pub",
+        merge_from=live_facts,
+    )
+    staged = json.loads((staging / "facts.json").read_text(encoding="utf-8"))
+    ids = {f["id"] for f in staged}
+    assert "KEEP" in ids
+    assert "PURGED" not in ids

@@ -30,6 +30,7 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from _facts import RECALL_ITEM_FIELDS, fact_currently_valid, fact_source
+from _revoke import REVOCATIONS_FILENAME, load_revocations, resurrected_ids
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 DEFAULT_INSIGHTS = Path.home() / ".nock-brain" / "insights.json"
@@ -407,6 +408,54 @@ def supersession_factor(fact: dict) -> float:
     return 1.0
 
 
+def _exclude_revoked_revisions(facts: list[dict]) -> list[dict]:
+    """Drop facts whose ``revision_id`` a current peer lists in
+    ``revokes_revision_ids`` (N10022). Status is unsigned; the v2 DAG is not.
+    Empty/missing revision ids are ignored so v1 facts are unaffected."""
+    revoked: set[str] = set()
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        if fact.get("status", "current") == "superseded":
+            continue
+        ids = fact.get("revokes_revision_ids")
+        if not isinstance(ids, list):
+            continue
+        for revision_id in ids:
+            if revision_id:
+                revoked.add(str(revision_id))
+    if not revoked:
+        return facts
+    return [
+        fact for fact in facts
+        if str(fact.get("revision_id") or "") not in revoked
+    ]
+
+
+def _exclude_resurrected(facts: list[dict], store_path: "Path | None",
+                         key) -> list[dict]:
+    """Hide facts a trusted revocation says are dead, even if status=current.
+
+    Same class as verify-facts' resurrection finding (N10016). Missing key or
+    empty sidecar is a no-op — fail open, matching unsigned verification.
+    """
+    if not facts or key is None or store_path is None:
+        return facts
+    events = load_revocations(Path(store_path).parent / REVOCATIONS_FILENAME)
+    dead = resurrected_ids(facts, events, key)
+    if not dead:
+        return facts
+    kept = [fact for fact in facts if str(fact.get("id", "")) not in dead]
+    dropped = len(facts) - len(kept)
+    if dropped:
+        print(
+            f"recall: excluded {dropped} resurrected fact(s) "
+            f"(revocations.jsonl)",
+            file=sys.stderr,
+        )
+    return kept
+
+
 def search(facts: list[dict], query: str, include_superseded: bool = False,
            now: datetime | None = None,
            sources: "set[str] | list[str] | None" = None,
@@ -424,6 +473,7 @@ def search(facts: list[dict], query: str, include_superseded: bool = False,
     scoping). `None` (the default) means no scoping — exact prior behavior, so
     every existing caller is unaffected. A fact's owner is `fact_source(f)`
     (missing source defaults to DEFAULT_SOURCE)."""
+    facts = _exclude_revoked_revisions(facts)
     if not include_superseded:
         facts = [f for f in facts if f.get("status", "current") != "superseded"]
         # Bi-temporal gate: a fact outside its validity window (invalid_at passed,
@@ -585,35 +635,16 @@ def _apply_date_diversity_cap(results: list[dict], max_per_date: int,
 # unchanged store skips the signature operations but STILL recomputes and
 # compares every fact's committed content hashes — tampering is detected even
 # on a warm cache, and any cache doubt falls back to full verification.
-DEFAULT_SIGNING_KEY = Path.home() / ".nock-brain" / "signing-key"
-DEFAULT_SIGNING_PUB = Path.home() / ".nock-brain" / "signing-key.pub"
 
 
 def _resolve_verify_key():
-    """Load the attestation-verification key, or None when signing was never
-    set up (None disables verification). Paths are overridable via
-    NOCKBRAIN_SIGNING_PUB / NOCKBRAIN_SIGNING_KEY; the public key is preferred,
-    the private key (which can also verify) is the fallback.
+    """Load the attestation-verification key via the shared resolver.
 
-    A key that exists but cannot be loaded fails OPEN with a stderr note:
-    attestations are tamper-*evidence*, not a gate — an attacker who can
-    corrupt the key file could as easily delete it, and recall powers a live
-    injection hook that must keep working."""
-    pub_path = Path(os.environ.get("NOCKBRAIN_SIGNING_PUB", "").strip()
-                    or DEFAULT_SIGNING_PUB)
-    key_path = Path(os.environ.get("NOCKBRAIN_SIGNING_KEY", "").strip()
-                    or DEFAULT_SIGNING_KEY)
-    try:
-        if pub_path.exists():
-            import _sign
-            return _sign.load_public_key(pub_path)
-        if key_path.exists():
-            import _sign
-            return _sign.load_or_create_key(key_path, pub_path, create=False)
-    except Exception as exc:  # noqa: BLE001 - never break live recall on key trouble
-        print(f"budget-recall: cannot load signing key ({exc}); "
-              "attestation verification skipped", file=sys.stderr)
-    return None
+    Returns ``(key, error)``. Missing keys are silent (signing never set up).
+    A key file that exists but cannot be loaded returns an error string.
+    """
+    import _sign
+    return _sign.resolve_verify_key()
 
 
 def _verify_filter(facts: list[dict], verify_key, *, label: str,
@@ -623,7 +654,9 @@ def _verify_filter(facts: list[dict], verify_key, *, label: str,
     TAMPERED facts are always excluded. Default mode keeps UNSIGNED and
     PARENT_SUSPECT facts (backward compatible — their own content is unproven
     or intact respectively, not known-poisoned) and counts them in the stderr
-    warning; strict mode keeps only VALID. No key -> facts pass unchanged.
+    warning; strict mode keeps only VALID. No key -> facts pass unchanged
+    (default fail-open). ``--strict-verify`` with no key is handled by
+    select_recall, which refuses to inject.
 
     `cache` (a _verify_cache handle) is passed to verify_facts so the
     signature operation for already-proven facts is skipped; every status
@@ -833,16 +866,25 @@ def select_recall(query: str, facts_file: "Path | None",
     ref_now = _resolve_now(now)
     query_terms = _query_terms(query)
     min_matches = _default_recall_min_matches(query_terms)
-    verify_key = _resolve_verify_key()
+    verify_key, key_error = _resolve_verify_key()
     if strict_verify and verify_key is None:
-        print("budget-recall: --strict-verify requested but no signing key "
-              "found; attestation verification skipped", file=sys.stderr)
+        reason = key_error or "no signing key found"
+        print(f"budget-recall: --strict-verify fail closed ({reason}); "
+              "refusing to inject unverified facts", file=sys.stderr)
+        return None
+    if key_error:
+        print(f"budget-recall: cannot load signing key ({key_error}); "
+              "attestation verification skipped", file=sys.stderr)
     reserved_ids: frozenset = frozenset()
     if facts_file:
-        all_facts = _scope_facts(
-            _load(facts_file, verify_key=verify_key,
-                  strict_verify=strict_verify),
-            agent_scope,
+        all_facts = _exclude_resurrected(
+            _scope_facts(
+                _load(facts_file, verify_key=verify_key,
+                      strict_verify=strict_verify),
+                agent_scope,
+            ),
+            facts_file,
+            verify_key,
         )
         fact_results = search(
             all_facts, query, include_superseded,
@@ -974,8 +1016,9 @@ def main():
                              "NOCKBRAIN_MAX_PER_DATE)")
     parser.add_argument("--strict-verify", action="store_true",
                         help="Fail closed: recall only facts whose attestation "
-                             "verifies as valid (default also excludes tampered "
-                             "facts but still allows unsigned ones; also via "
+                             "verifies as valid; an unusable key yields empty "
+                             "recall (default also excludes tampered facts but "
+                             "still allows unsigned ones; also via "
                              "NOCKBRAIN_STRICT_VERIFY=1)")
     parser.add_argument("--agent-scope", default=None,
                         help="Recall this agent's private facts plus shared "

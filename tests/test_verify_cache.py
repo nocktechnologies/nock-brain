@@ -32,6 +32,8 @@ tests pin its contract:
 - any cache doubt (corrupt sidecar, missing key) fails closed to a full
   verification pass, never to skipped verification.
 """
+import hashlib
+import hmac
 import importlib
 import importlib.util
 import json
@@ -402,7 +404,8 @@ def test_forged_digest_cannot_bypass_strict_verify(
     # verifier now computes, so any planted digest is dead weight.
     st = facts_file.stat()
     sidecar_for(facts_file).write_text(json.dumps({
-        "version": 2, "alg": alg, "key_id": key_id,
+        "version": importlib.import_module("_verify_cache").CACHE_VERSION,
+        "alg": alg, "key_id": key_id,
         "store": {"mtime_ns": st.st_mtime_ns, "size": st.st_size},
         "digests": ["0" * 64, "f" * 64],  # attacker's best guesses
     }), encoding="utf-8")
@@ -413,6 +416,72 @@ def test_forged_digest_cannot_bypass_strict_verify(
     assert "one million dollars" not in out  # forgery did not bypass
     assert "approved for signing" in out
     assert "excluded 1 tampered" in err
+
+
+def test_pub_keyed_cache_entry_cannot_bypass_ed25519_verify(
+        budget_recall, sign_lib, signing_key, tmp_path, capsys):
+    """N10018: a store-dir writer who can read the public key must not be
+    able to forge a VALID cache hit. Craft a sidecar HMAC keyed on the
+    public bytes (the v2 scheme) and assert recall still excludes the
+    unsigned poison."""
+    if signing_key.alg != sign_lib.ALG_ED25519:
+        pytest.skip("N10018 is the Ed25519 public-bytes MAC case")
+    good = signable_fact("f-good", "ed25519 rollout was approved for signing")
+    sign_lib.sign_fact(good, signing_key)
+
+    poison = signable_fact("f-poison", "ed25519 rollout budget is one million dollars")
+    poison["attestation"] = {
+        "fact_id": "f-poison",
+        "canonical_fact_hash": sign_lib.canonical_fact_hash(poison),
+        "source_hash": sign_lib.source_hash(poison),
+        "alg": signing_key.alg, "key_id": signing_key.key_id,
+        "signature": "deadbeef",
+        "parent_fact_ids": [], "signed_at": "2026-01-01T00:00:00+00:00",
+    }
+    facts_file = write_facts(tmp_path, [good, poison])
+
+    payload = sign_lib._signed_payload(
+        poison["attestation"]["canonical_fact_hash"],
+        poison["attestation"]["source_hash"],
+        [],
+    )
+    fields = [
+        sign_lib._CACHE_DOMAIN,
+        signing_key.alg.encode("utf-8"),
+        signing_key.key_id.encode("utf-8"),
+        b"deadbeef",
+        payload,
+    ]
+    forged = hmac.new(signing_key._pub_bytes, b"\0".join(fields),
+                      hashlib.sha256).hexdigest()
+    st = facts_file.stat()
+    vc = importlib.import_module("_verify_cache")
+    sidecar_for(facts_file).write_text(json.dumps({
+        "version": vc.CACHE_VERSION, "alg": signing_key.alg,
+        "key_id": signing_key.key_id,
+        "store": {"mtime_ns": st.st_mtime_ns, "size": st.st_size},
+        "digests": [forged],
+    }), encoding="utf-8")
+
+    out = budget_recall.budget_recall("ed25519 rollout budget", facts_file,
+                                      strict_verify=True)
+    err = capsys.readouterr().err
+    assert "one million dollars" not in out
+    assert "approved for signing" in out
+    assert "excluded 1 tampered" in err
+    assert signing_key.cache_key_material() != signing_key._pub_bytes
+
+
+def test_ed25519_pub_only_key_has_no_cache_material(sign_lib, tmp_path):
+    key_path = tmp_path / "k"
+    pub_path = tmp_path / "k.pub"
+    key = sign_lib.load_or_create_key(key_path, pub_path)
+    if key.alg != sign_lib.ALG_ED25519:
+        pytest.skip("pub-only cache skip is Ed25519-specific")
+    pub_only = sign_lib.load_public_key(pub_path)
+    assert pub_only.cache_key_material() is None
+    assert key.cache_key_material() is not None
+    assert key.cache_key_material() != key._pub_bytes
 
 
 # --- hostile / non-hex inputs fail closed, never crash recall -----------------
@@ -843,3 +912,57 @@ def test_sidecar_status_float_store_stamp_is_not_fresh(tmp_path, monkeypatch):
     assert status["present"] is True
     assert status["fresh"] is False
     assert status["reason"] == "unreadable"
+
+
+def _matching_sidecar(vc, facts, **overrides):
+    st = facts.stat()
+    doc = {
+        "version": vc.CACHE_VERSION, "alg": "ed25519", "key_id": "k",
+        "store": {"mtime_ns": st.st_mtime_ns, "size": st.st_size},
+        "digests": ["ab"],
+    }
+    doc.update(overrides)
+    vc.cache_path_for(facts).write_text(json.dumps(doc), encoding="utf-8")
+
+
+def test_sidecar_status_foreign_key_id_is_not_fresh(tmp_path, sign_lib):
+    """N10031 / N9981: matching stamp + foreign key_id must not report fresh."""
+    vc = _load_verify_cache()
+    key = sign_lib.load_or_create_key(tmp_path / "k", tmp_path / "k.pub")
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]", encoding="utf-8")
+    _matching_sidecar(vc, facts, key_id="foreign", alg=key.alg)
+    status = vc.sidecar_status(facts, key_id=key.key_id, alg=key.alg)
+    assert status["fresh"] is False
+    assert status["reason"] == "rejected"
+
+
+def test_sidecar_status_mismatched_alg_is_not_fresh(tmp_path, sign_lib):
+    vc = _load_verify_cache()
+    key = sign_lib.load_or_create_key(tmp_path / "k", tmp_path / "k.pub")
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]", encoding="utf-8")
+    _matching_sidecar(vc, facts, key_id=key.key_id, alg="hmac-sha256")
+    status = vc.sidecar_status(facts, key_id=key.key_id, alg=key.alg)
+    assert status["fresh"] is False
+    assert status["reason"] == "rejected"
+
+
+def test_sidecar_status_malformed_digests_is_not_fresh(tmp_path):
+    vc = _load_verify_cache()
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]", encoding="utf-8")
+    _matching_sidecar(vc, facts, digests="not-a-list")
+    status = vc.sidecar_status(facts)
+    assert status["fresh"] is False
+    assert status["reason"] == "rejected"
+
+
+def test_sidecar_status_digest_non_string_is_not_fresh(tmp_path):
+    vc = _load_verify_cache()
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]", encoding="utf-8")
+    _matching_sidecar(vc, facts, digests=["ok", 1])
+    status = vc.sidecar_status(facts)
+    assert status["fresh"] is False
+    assert status["reason"] == "rejected"

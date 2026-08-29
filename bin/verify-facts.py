@@ -32,12 +32,12 @@ from _revoke import (  # noqa: E402
     load_revocations,
 )
 from _sign import (  # noqa: E402
-    DEFAULT_PUB_PATH,
     PARENT_SUSPECT,
     TAMPERED,
     UNSIGNED,
     VALID,
     load_public_key,
+    resolve_verify_key,
     verify_facts,
 )
 
@@ -48,8 +48,12 @@ def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify facts.json attestations")
     parser.add_argument("--facts", type=Path, default=DEFAULT_FACTS,
                         help="facts.json to verify (default ~/.nock-brain/facts.json)")
-    parser.add_argument("--pub", type=Path, default=DEFAULT_PUB_PATH,
-                        help="public (verifying) key path")
+    parser.add_argument("--pub", type=Path, default=None,
+                        help="public (verifying) key (default: NOCKBRAIN_SIGNING_PUB "
+                             "or ~/.nock-brain/signing-key.pub)")
+    parser.add_argument("--key", type=Path, default=None,
+                        help="private key fallback (default: NOCKBRAIN_SIGNING_KEY "
+                             "or ~/.nock-brain/signing-key)")
     parser.add_argument("--json", action="store_true", help="emit JSON report")
     parser.add_argument("--strict", action="store_true",
                         help="also exit non-zero if any fact is unsigned")
@@ -76,16 +80,13 @@ def run(argv: list[str] | None = None) -> int:
         print(f"{args.facts}: expected a JSON list of facts", file=sys.stderr)
         return 1
 
-    key = None
-    if args.pub.exists():
-        try:
-            key = load_public_key(args.pub)
-        except Exception as exc:  # noqa: BLE001 - report, don't crash
-            print(f"could not load public key {args.pub}: {exc}", file=sys.stderr)
-            key = None
-    else:
-        print(f"no public key at {args.pub}; signed facts cannot be verified",
-              file=sys.stderr)
+    key, key_error = resolve_verify_key(key_path=args.key, pub_path=args.pub)
+    if key is None:
+        if key_error:
+            print(f"could not load verifying key: {key_error}", file=sys.stderr)
+        else:
+            print("no verifying key found; signed facts cannot be verified",
+                  file=sys.stderr)
 
     report = verify_facts(data, key)
 

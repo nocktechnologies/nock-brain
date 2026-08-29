@@ -193,3 +193,26 @@ def test_supersede_writes_to_sqlite_when_selected(storeback, tmp_path, monkeypat
     marked = db.load_facts()[0]
     assert marked["status"] == "superseded"
     assert marked["superseded_by"] == "newer"
+
+
+def test_derived_basename_stays_json_when_sqlite_selected(storeback, tmp_path):
+    """N10023: insights.json must not resolve to brain.db via the parent dir."""
+    db = storeback.SqliteStore(tmp_path / "brain.db")
+    db.create()
+    db.replace_all([dict(PLAIN_FACT)])
+    (tmp_path / "store-v2").touch()
+    insight = {
+        "id": "ins-1", "kind": "insight", "status": "current",
+        "confidence": 0.9, "content": "insight only text",
+        "source_date": "2026-08-01",
+    }
+    (tmp_path / "insights.json").write_text(json.dumps([insight]))
+    store = storeback.resolve_store(tmp_path / "insights.json", env={})
+    assert store.kind == "json"
+    loaded = store.load_facts(required_fields={
+        "kind", "status", "confidence", "content", "source_date",
+    })
+    assert loaded[0]["id"] == "ins-1"
+    env_store = storeback.resolve_store(
+        tmp_path / "insights.json", env={"NOCKBRAIN_STORE": "sqlite"})
+    assert env_store.kind == "json"
