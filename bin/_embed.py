@@ -173,15 +173,26 @@ def load_sidecar(path: Path, expect_model: "str | None" = None):
             f"reading {path} needs numpy ({_deps_hint()}): {exc}") from exc
     try:
         with np.load(path, allow_pickle=False) as archive:
+            model_arr = archive["model"]
+            if len(model_arr) < 1:
+                return None
             sidecar = {
                 "ids": [str(i) for i in archive["ids"]],
                 "hashes": [str(h) for h in archive["hashes"]],
-                "model": str(archive["model"][0]),
+                "model": str(model_arr[0]),
                 "mat": archive["mat"].astype(np.float32),
             }
-    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+    except (OSError, KeyError, IndexError, TypeError, ValueError, zipfile.BadZipFile):
         return None
-    if len(sidecar["ids"]) != sidecar["mat"].shape[0]:
+    try:
+        n_ids = len(sidecar["ids"])
+        if sidecar["mat"].shape[0] != n_ids:
+            return None
+        if len(sidecar["hashes"]) != n_ids:
+            return None
+    except (TypeError, AttributeError, IndexError):
+        return None
+    if not sidecar["model"]:
         return None
     if expect_model is not None and sidecar["model"] != expect_model:
         return None

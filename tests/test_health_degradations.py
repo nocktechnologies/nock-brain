@@ -35,6 +35,33 @@ def test_healthy_read_records_nothing(storeback, tmp_path):
     assert not (tmp_path / "recall-degradations.jsonl").exists()
 
 
+def test_json_store_records_degradation_on_non_utf8(storeback, tmp_path):
+    """N10024: JSON-path corrupt reads must land in recall-degradations.jsonl
+    the same way a broken brain.db does — stderr-only is still a silent outage."""
+    facts = tmp_path / "facts.json"
+    facts.write_bytes(b"\xff\xfe not utf-8")
+    assert storeback.JsonStore(facts).load_facts() == []
+    events = [json.loads(l)
+              for l in (tmp_path / "recall-degradations.jsonl").read_text().splitlines()]
+    assert any("json-error" in e["reason"] for e in events)
+
+
+def test_json_store_records_degradation_on_truncated(storeback, tmp_path):
+    facts = tmp_path / "facts.json"
+    facts.write_text("{")
+    storeback.JsonStore(facts).load_facts()
+    events = [json.loads(l)
+              for l in (tmp_path / "recall-degradations.jsonl").read_text().splitlines()]
+    assert any("json-error" in e["reason"] for e in events)
+
+
+def test_json_store_healthy_empty_records_nothing(storeback, tmp_path):
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]")
+    storeback.JsonStore(facts).load_facts()
+    assert not (tmp_path / "recall-degradations.jsonl").exists()
+
+
 # ── health aggregates and flags ──────────────────────────────────────────────
 def test_health_flags_recent_degradations(nockbrain_health, tmp_path):
     now = datetime.now(timezone.utc)
@@ -312,6 +339,39 @@ def test_health_reports_rejected_sidecar_for_foreign_key(
     text = nockbrain_health.render_text(report)
     assert "rejected" in text
     assert "stale stamp" not in text
+
+
+def test_health_reports_truncated_facts_unreadable(nockbrain_health, tmp_path):
+    """N10030: a torn facts.json must be an unhealthy report, not a traceback."""
+    facts = tmp_path / "facts.json"
+    facts.write_text("{")
+    report = nockbrain_health.build_report(facts_path=facts)
+    assert report["recall_ready"] is False
+    assert report["facts"]["unreadable"]
+    assert report["facts"]["count"] == 0
+    text = nockbrain_health.render_text(report)
+    assert "UNREADABLE" in text
+    assert nockbrain_health.run(["--facts", str(facts), "--json"]) == 0
+
+
+def test_health_reports_non_utf8_facts_unreadable(nockbrain_health, tmp_path):
+    facts = tmp_path / "facts.json"
+    facts.write_bytes(b"\xff\xfe not utf-8")
+    report = nockbrain_health.build_report(facts_path=facts)
+    assert report["recall_ready"] is False
+    assert report["facts"]["unreadable"]
+    assert "UNREADABLE" in nockbrain_health.render_text(report)
+    assert nockbrain_health.run(["--facts", str(facts)]) == 0
+
+
+def test_health_malformed_string_record_no_crash(nockbrain_health, tmp_path):
+    """N10030: a stray string in the facts list must not AttributeError on .get."""
+    facts = tmp_path / "facts.json"
+    facts.write_text(json.dumps(["not-a-fact", {"id": "partial"}]))
+    report = nockbrain_health.build_report(facts_path=facts)
+    assert report["recall_ready"] is False
+    assert len(report["facts"]["malformed"]) >= 2
+    assert nockbrain_health.run(["--facts", str(facts)]) == 0
 
 
 def test_max_age_validation_rejects_nonfinite(nockbrain_health, tmp_path, capsys):

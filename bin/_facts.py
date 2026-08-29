@@ -92,14 +92,18 @@ def load_facts(
     *,
     source: str | None = None,
     required_fields: set[str] | None = None,
+    on_unreadable: Any = None,
 ) -> list[dict[str, Any]]:
     if not path or not path.exists():
         return []
     label = source or str(path)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
+        # ValueError covers JSONDecodeError and UnicodeDecodeError (N10024).
         print(f"{label}: skipped malformed fact store ({exc})", file=sys.stderr)
+        if on_unreadable is not None:
+            on_unreadable(str(exc))
         return []
     return filter_valid_facts(data, source=label, required_fields=required_fields)
 

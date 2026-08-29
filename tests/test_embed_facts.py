@@ -138,6 +138,34 @@ def test_corrupt_sidecar_loads_as_none(embed_mod, tmp_path):
     assert embed_mod.load_sidecar(sidecar) is None
 
 
+def test_short_hashes_sidecar_loads_as_none(embed_mod, tmp_path):
+    """N10024: a hashes array shorter than ids used to pass as usable, then
+    IndexError in dense fuse took down the whole recall."""
+    sidecar = tmp_path / "embeddings.npz"
+    numpy.savez(
+        sidecar,
+        ids=numpy.array(["a", "b"]),
+        hashes=numpy.array(["deadbeef"]),
+        model=numpy.array(["stub-hash-32"]),
+        mat=numpy.zeros((2, 8), dtype=numpy.float32),
+    )
+    assert embed_mod.load_sidecar(sidecar) is None
+
+
+def test_empty_model_sidecar_loads_as_none(embed_mod, tmp_path):
+    """N10024: archive['model'][0] on an empty array raises IndexError past
+    load_sidecar's except, crashing semantic recall."""
+    sidecar = tmp_path / "embeddings.npz"
+    numpy.savez(
+        sidecar,
+        ids=numpy.array(["a"]),
+        hashes=numpy.array(["deadbeef"]),
+        model=numpy.array([]),
+        mat=numpy.zeros((1, 8), dtype=numpy.float32),
+    )
+    assert embed_mod.load_sidecar(sidecar) is None
+
+
 def test_save_sidecar_resolves_store_under_direct_module_load(
         tmp_path, monkeypatch):
     """save_sidecar does `from _store import secure_replace_bytes` at call

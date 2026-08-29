@@ -243,6 +243,48 @@ def test_nonfinite_sidecar_rows_never_outrank_real_hits(br, embed_mod,
     assert "skipped 1 non-finite" in capsys.readouterr().err
 
 
+def test_malformed_sidecar_falls_back_to_bm25(br, embed_mod, semantic_env,
+                                              tmp_path, capsys):
+    """N10024: a short-hashes sidecar must not take down BM25. The lexical
+    hit still injects; dense fusion degrades."""
+    _, sidecar = semantic_env
+    facts = [fact("lex", LEX_FACT), fact("tgt", TARGET)]
+    fp = write_facts(tmp_path, facts)
+    numpy.savez(
+        sidecar,
+        ids=numpy.array([f["id"] for f in facts]),
+        hashes=numpy.array(["only-one-hash"]),
+        model=numpy.array([CraftedEncoder.model_id]),
+        mat=numpy.zeros((2, 4), dtype=numpy.float32),
+    )
+    off = br.budget_recall(QUERY, fp, budget=1000, semantic=False)
+    on = br.budget_recall(QUERY, fp, budget=1000, semantic=True)
+    assert "pricing was locked" in on
+    assert on == off
+    assert "flat BM25" in capsys.readouterr().err
+
+
+def test_dense_fuse_crash_keeps_bm25_seeds(br, semantic_env, tmp_path,
+                                           monkeypatch, capsys):
+    """N10024: any exception inside fuse must return the BM25 seed list,
+    not crash select_recall."""
+    build, _ = semantic_env
+    facts = [fact("lex", LEX_FACT), fact("tgt", TARGET)]
+    fp = write_facts(tmp_path, facts)
+    build(facts)
+
+    import _dense_recall
+    monkeypatch.setattr(
+        _dense_recall, "fuse",
+        lambda *a, **k: (_ for _ in ()).throw(IndexError("short hashes")),
+    )
+    off = br.budget_recall(QUERY, fp, budget=1000, semantic=False)
+    on = br.budget_recall(QUERY, fp, budget=1000, semantic=True)
+    assert "pricing was locked" in on
+    assert on == off
+    assert "flat BM25" in capsys.readouterr().err
+
+
 def test_embed_query_text_strips_intent_scaffolding(br):
     f = br._embed_query_text
     assert f("what did we decide about voice transcription mixing up agent names") == \
