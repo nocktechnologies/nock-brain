@@ -55,7 +55,7 @@ from _facts import (  # noqa: E402
 )
 from _revoke import REVOCATIONS_FILENAME  # noqa: E402
 from _sign import resolve_key_paths  # noqa: E402
-from _store import secure_copyfile, secure_mkdir  # noqa: E402
+from _store import secure_copyfile, secure_mkdir, secure_write_json  # noqa: E402
 
 DEFAULT_STORE_DIR = Path.home() / ".nock-brain"
 DEFAULT_SOURCE_ROOTS = [Path.home() / ".claude" / "projects"]
@@ -277,9 +277,7 @@ def build_staging(
             out: Any = staged_raw
         else:
             out = merged_list
-        sp["facts"].write_text(
-            json.dumps(out, ensure_ascii=False), encoding="utf-8"
-        )
+        secure_write_json(sp["facts"], out, ensure_ascii=False)
 
     # 2b. Review promotions -> staging review queue.
     _run_cli(
@@ -389,14 +387,15 @@ def _backup_path(live_path: Path, stamp: str) -> Path:
 
 
 def _move_into_place(staging_src: Path, live_dst: Path) -> None:
-    """Replace live_dst with staging_src (already-backed-up). Handles file or dir."""
-    if live_dst.exists() or live_dst.is_symlink():
-        if live_dst.is_dir() and not live_dst.is_symlink():
-            shutil.rmtree(live_dst)
-        else:
-            live_dst.unlink()
+    """Replace live_dst with staging_src (already-backed-up).
+
+    Files are renamed over the destination (POSIX-atomic). Unlinking the live
+    file first opened a window where facts.json was gone (N10027). Directories
+    still need the dest removed first — rename-over-nonempty-dir is not portable.
+    """
     secure_mkdir(live_dst.parent)
-    # shutil.move handles cross-device; staging may be a tempdir on another fs.
+    if live_dst.exists() and live_dst.is_dir() and not live_dst.is_symlink():
+        shutil.rmtree(live_dst)
     shutil.move(str(staging_src), str(live_dst))
 
 

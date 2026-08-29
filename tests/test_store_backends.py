@@ -103,6 +103,46 @@ def test_store_files_are_private(any_store):
     assert stat.S_IMODE(any_store.freshness_path.stat().st_mode) == 0o600
 
 
+def test_json_replace_all_leaves_old_store_on_write_fault(storeback, tmp_path, monkeypatch):
+    """N10027: a kill mid-write must leave facts.json as the old full document,
+    never a torn tail. JsonStore.replace_all goes through tmp+rename."""
+    import _store as store_mod
+
+    path = tmp_path / "facts.json"
+    store = storeback.JsonStore(path)
+    store.replace_all([dict(PLAIN_FACT)])
+    old = path.read_bytes()
+
+    def boom(src, dst, *a, **k):
+        raise OSError("injected write fault")
+
+    monkeypatch.setattr(store_mod.os, "replace", boom)
+    with pytest.raises(OSError, match="injected write fault"):
+        store.replace_all([dict(RICH_FACT)])
+    assert path.read_bytes() == old
+    assert json.loads(path.read_text(encoding="utf-8"))[0]["id"] == "f-plain"
+
+
+def test_secure_write_json_is_atomic_on_replace_fault(tmp_path, monkeypatch):
+    import importlib.util
+    from pathlib import Path as P
+    spec = importlib.util.spec_from_file_location(
+        "store_atomic", P(__file__).resolve().parent.parent / "bin" / "_store.py")
+    store_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(store_mod)
+    path = tmp_path / "facts.json"
+    store_mod.secure_write_json(path, [{"id": "old"}])
+    old = path.read_bytes()
+
+    def boom(src, dst, *a, **k):
+        raise OSError("injected write fault")
+
+    monkeypatch.setattr(store_mod.os, "replace", boom)
+    with pytest.raises(OSError, match="injected write fault"):
+        store_mod.secure_write_json(path, [{"id": "new"}])
+    assert path.read_bytes() == old
+
+
 def test_integer_values_keep_exact_type(any_store):
     """SQLite affinity coerces ints in REAL/TEXT columns (1 -> 1.0, 7 -> '7').
     Non-conforming types must ride `extra` so the round-trip is type-exact."""

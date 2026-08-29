@@ -29,7 +29,7 @@ from _sign import (  # noqa: E402
     resolve_key_paths,
     sign_facts,
 )
-from _store import secure_write_text  # noqa: E402
+from _store import secure_write_json  # noqa: E402
 from _storeback import resolve_store  # noqa: E402
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
@@ -77,7 +77,7 @@ def run(argv: list[str] | None = None) -> int:
         out_path = args.facts
     else:
         out_path = args.out or args.facts
-        secure_write_text(out_path, json.dumps(signed, indent=2, ensure_ascii=False))
+        secure_write_json(out_path, signed, indent=2, ensure_ascii=False)
 
     print(f"Signed {len(signed)} fact(s) with {key.alg} (key {key.key_id})")
     print(f"Wrote {out_path}")

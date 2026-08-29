@@ -28,7 +28,7 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from _scrub import is_structural_noise
-from _store import secure_mkdir, secure_write_text
+from _store import secure_mkdir, secure_write_json, secure_write_text
 
 MAX_FACT_CONTENT_CHARS = 1500
 TOOL_RESULT_CONFIDENCE_CAP = 0.55
@@ -236,7 +236,7 @@ def run(argv: list[str] | None = None) -> int:
     events = load_events_jsonl(args.events)
     facts = facts_from_events(events)
 
-    secure_write_text(args.facts, json.dumps(facts, indent=2, ensure_ascii=False), encoding="utf-8")
+    secure_write_json(args.facts, facts, indent=2, ensure_ascii=False)
     notes = write_session_notes(events, args.notes_dir)
 
     print(f"Wrote {len(facts)} fact(s) to {args.facts}")

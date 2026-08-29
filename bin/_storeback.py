@@ -2,8 +2,8 @@
 
 One contract, two backends:
 
-- ``JsonStore`` wraps today's ``facts.json`` behavior exactly (load via
-  ``_facts.load_facts``, write via ``_store.secure_write_json``) — the default.
+- ``JsonStore`` wraps today's ``facts.json`` behavior (load via
+  ``_facts.load_facts``, write via atomic ``_store.secure_write_json``) — the default.
 - ``SqliteStore`` holds the same facts in a single WAL-mode SQLite database
   (``brain.db``), value-identically: modeled fields become columns, structured
   fields (``evidence``, ``attestation``) are stored as canonical JSON text, and

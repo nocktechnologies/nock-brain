@@ -50,6 +50,7 @@ from _sign import (  # noqa: E402
     sign_fact,
     verify_fact,
 )
+from _store import secure_write_json  # noqa: E402
 
 def _discover_memory_dir() -> Path | None:
     """Resolve the curated-memory dir without hardcoding any project slug.
@@ -239,10 +240,8 @@ def ingest(
 
     merged = kept + curated
 
-    # Write back with the same pretty-print the store already uses.
-    store_path.write_text(
-        json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    # Write back atomically (N10027); pretty-print matches the rest of the store.
+    secure_write_json(store_path, merged, indent=2, ensure_ascii=False)
 
     # Self-verify the slice we just wrote (proves signatures are valid).
     facts_by_id = {f.get("id"): f for f in merged}
