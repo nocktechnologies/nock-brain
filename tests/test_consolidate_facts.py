@@ -150,6 +150,7 @@ def test_apply_flips_status_only_and_preserves_signed_core(consolidate_facts, si
     assert loser["status"] == "superseded"
     assert loser["superseded_by"] == "b"
     assert loser["superseded_at"] == "2026-07-06T00:00:00+00:00"
+    assert loser["invalid_at"] == "2026-07-06T00:00:00+00:00"
     assert "near-duplicate" in loser["supersession_reason"]
     assert keeper["status"] == "current"
     # The constraint that makes this tool safe post-PR#33: signatures commit to
@@ -294,3 +295,28 @@ def test_cli_help_documents_post_execute_signing_rule():
     assert "sign-facts.py" in proc.stdout
     assert "verify-facts.py" in proc.stdout
     assert "dry-run" in proc.stdout.lower()
+
+
+def test_cli_execute_mints_revocation_events(tmp_path, sign_lib, monkeypatch):
+    """N10025: consolidate --execute must mint signed revocations, not just
+    flip status. Without the sidecar, a later status flip-back would recall
+    as VALID."""
+    key_path = tmp_path / "signing-key"
+    pub_path = tmp_path / "signing-key.pub"
+    sign_lib.load_or_create_key(key_path, pub_path)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(key_path))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(pub_path))
+    facts = store(tmp_path)
+    assert run_cli(["--facts", str(facts)]).returncode == 0
+    proc = run_cli(["--facts", str(facts), "--execute",
+                    "--i-have-reviewed-the-manifest"])
+    assert proc.returncode == 0, proc.stderr
+    sidecar = tmp_path / "revocations.jsonl"
+    assert sidecar.exists()
+    events = [
+        json.loads(line) for line in sidecar.read_text().splitlines() if line.strip()
+    ]
+    assert any(event.get("superseded_id") == "a" for event in events)
+    loser = next(f for f in json.loads(facts.read_text()) if f["id"] == "a")
+    assert loser["status"] == "superseded"
+    assert loser.get("invalid_at")

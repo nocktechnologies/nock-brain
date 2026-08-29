@@ -39,3 +39,22 @@ def test_load_facts_skips_malformed_records_with_stderr_count(tmp_path, capsys):
 
     assert [fact["id"] for fact in facts] == ["fact-1"]
     assert "skipped 2 malformed fact" in capsys.readouterr().err
+
+
+def test_filter_valid_facts_fills_source_date_from_source_time():
+    """N10020: v2 claims omit source_date; recall requires it to rank."""
+    fact_store = load_fact_store()
+    rows = fact_store.filter_valid_facts(
+        [{
+            "id": "v2-1",
+            "kind": "decision",
+            "status": "current",
+            "confidence": 0.9,
+            "content": "Kevin approved the bounded memory build",
+            "source_time": "2026-08-04T15:00:00.000000Z",
+            "evidence": [],
+        }],
+        required_fields=fact_store.RECALL_ITEM_FIELDS,
+    )
+    assert len(rows) == 1
+    assert rows[0]["source_date"] == "2026-08-04"

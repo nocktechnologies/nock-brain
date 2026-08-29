@@ -163,12 +163,13 @@ def test_health_reports_missing_verification_cache(nockbrain_health, tmp_path):
 
 
 def test_health_reports_fresh_verification_cache(nockbrain_health, tmp_path):
+    import _verify_cache as vc
     facts = tmp_path / "facts.json"
     facts.write_text("[]")
     st = facts.stat()
     sidecar = facts.with_name(facts.name + ".verified-cache.json")
     sidecar.write_text(json.dumps({
-        "version": 2, "alg": "ed25519", "key_id": "k",
+        "version": vc.CACHE_VERSION, "alg": "ed25519", "key_id": "k",
         "store": {"mtime_ns": st.st_mtime_ns, "size": st.st_size},
         "digests": [],
     }))
@@ -182,11 +183,12 @@ def test_health_reports_fresh_verification_cache(nockbrain_health, tmp_path):
 
 
 def test_health_reports_stale_verification_cache_stamp(nockbrain_health, tmp_path):
+    import _verify_cache as vc
     facts = tmp_path / "facts.json"
     facts.write_text("[]")
     sidecar = facts.with_name(facts.name + ".verified-cache.json")
     sidecar.write_text(json.dumps({
-        "version": 2, "alg": "ed25519", "key_id": "k",
+        "version": vc.CACHE_VERSION, "alg": "ed25519", "key_id": "k",
         "store": {"mtime_ns": 1, "size": 1},
         "digests": ["ab"],
     }))
@@ -285,6 +287,31 @@ def test_health_reports_unreadable_verification_cache(nockbrain_health, tmp_path
     assert "stale stamp" not in text
     assert "missing (cold start)" not in text
     assert cache["reason"] == "unreadable"
+
+
+def test_health_reports_rejected_sidecar_for_foreign_key(
+        nockbrain_health, sign_lib, tmp_path, monkeypatch):
+    """N10031: health must not call a foreign-key_id sidecar fresh."""
+    import _verify_cache as vc
+    key = sign_lib.load_or_create_key(tmp_path / "k", tmp_path / "k.pub")
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(tmp_path / "k"))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(tmp_path / "k.pub"))
+    facts = tmp_path / "facts.json"
+    facts.write_text("[]")
+    st = facts.stat()
+    sidecar = facts.with_name(facts.name + ".verified-cache.json")
+    sidecar.write_text(json.dumps({
+        "version": vc.CACHE_VERSION, "alg": key.alg, "key_id": "foreign",
+        "store": {"mtime_ns": st.st_mtime_ns, "size": st.st_size},
+        "digests": ["ab"],
+    }))
+    report = nockbrain_health.build_report(facts_path=facts)
+    cache = report["verification_cache"]
+    assert cache["fresh"] is False
+    assert cache["reason"] == "rejected"
+    text = nockbrain_health.render_text(report)
+    assert "rejected" in text
+    assert "stale stamp" not in text
 
 
 def test_max_age_validation_rejects_nonfinite(nockbrain_health, tmp_path, capsys):

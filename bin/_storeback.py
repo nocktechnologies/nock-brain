@@ -310,6 +310,12 @@ def resolve_store(facts_path: Path, env: "os._Environ | dict | None" = None):
     facts_path = Path(facts_path)
     store_dir = facts_path.parent
     db_path = store_dir / DB_FILENAME
+    # Derived artifacts (insights.json, graph.json, …) live next to the
+    # store. Keying off the parent directory would load brain.db and serve
+    # facts as insights (N10023). Only the authoritative facts file (or an
+    # explicit brain.db path) may select SQLite.
+    if facts_path.name not in ("facts.json", DB_FILENAME):
+        return JsonStore(facts_path)
     choice = str(env.get(ENV_VAR, "")).strip().lower()
     if choice == "json":
         return JsonStore(facts_path)

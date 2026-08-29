@@ -48,6 +48,13 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
+from _facts import (  # noqa: E402
+    FACT_EDITS_FILENAME,
+    TOMBSTONES_FILENAME,
+    load_jsonl_ids,
+)
+from _revoke import REVOCATIONS_FILENAME  # noqa: E402
+from _sign import resolve_key_paths  # noqa: E402
 from _store import secure_copyfile, secure_mkdir  # noqa: E402
 
 DEFAULT_STORE_DIR = Path.home() / ".nock-brain"
@@ -153,22 +160,38 @@ def _fact_key(fact: dict) -> tuple[str, str]:
     return ("content", hashlib.sha256(content.encode("utf-8")).hexdigest())
 
 
-def merge_facts(live: list[dict], recent: list[dict]) -> list[dict]:
+def merge_facts(
+    live: list[dict],
+    recent: list[dict],
+    *,
+    protected_ids: "set[str] | None" = None,
+) -> list[dict]:
     """Union ``live`` + ``recent`` facts, deduped by id (fallback: content hash).
 
-    ``recent`` wins on key collision -- a re-extracted fact supersedes its older
-    copy. Every live fact is preserved unless a recent fact with the same key
-    replaces it, so the result is ALWAYS a superset of the live store by key.
-    This is what lets a windowed rebuild ADD recent facts without amnesia-ing the
-    migrated history the window would never re-extract.
+    ``recent`` wins on key collision unless the id is protected (purged,
+    edited, or revoked) or the live copy is already ``status=superseded``.
+    Re-extraction mints ``status=current`` with a deterministic id, so a
+    naive recent-wins merge resurrected operator lifecycle (N10014).
+    Unprotected collisions still take the recent copy so a windowed rebuild
+    can refresh live current facts. Every live key is preserved, so the
+    result is always a superset of the live store by key.
     """
+    protected = protected_ids or set()
     merged: dict[tuple[str, str], dict] = {}
     for fact in live:
         if isinstance(fact, dict):
             merged[_fact_key(fact)] = fact
     for fact in recent:
-        if isinstance(fact, dict):
-            merged[_fact_key(fact)] = fact  # recent wins on collision
+        if not isinstance(fact, dict):
+            continue
+        fact_id = str(fact.get("id") or "")
+        if fact_id and fact_id in protected:
+            continue
+        key = _fact_key(fact)
+        existing = merged.get(key)
+        if existing is not None and existing.get("status") == "superseded":
+            continue
+        merged[key] = fact
     return list(merged.values())
 
 
@@ -238,7 +261,17 @@ def build_staging(
             if sp["facts"].exists()
             else []
         )
-        merged_list = merge_facts(_facts_as_list(live_raw), _facts_as_list(staged_raw))
+        live_dir = Path(merge_from).parent
+        protected_ids = (
+            load_jsonl_ids(live_dir / TOMBSTONES_FILENAME, "id")
+            | load_jsonl_ids(live_dir / FACT_EDITS_FILENAME, "fact_id")
+            | load_jsonl_ids(live_dir / REVOCATIONS_FILENAME, "superseded_id")
+        )
+        merged_list = merge_facts(
+            _facts_as_list(live_raw),
+            _facts_as_list(staged_raw),
+            protected_ids=protected_ids,
+        )
         if isinstance(staged_raw, dict):
             staged_raw["facts"] = merged_list
             out: Any = staged_raw
@@ -546,8 +579,9 @@ def rebuild(
     opts into an intentional from-scratch rebuild and skips both.
     """
     source_roots = source_roots or list(DEFAULT_SOURCE_ROOTS)
-    key_path = key_path or (store_dir / "signing-key")
-    pub_path = pub_path or (store_dir / "signing-key.pub")
+    key_path, pub_path = resolve_key_paths(
+        key_path, pub_path, store_dir=store_dir,
+    )
 
     live_facts = store_dir / "facts.json"
     merge_from = live_facts if (merge and live_facts.exists()) else None
@@ -647,6 +681,16 @@ def run(argv: list[str] | None = None) -> int:
         help="Explicit staging directory (default: a fresh tempdir)",
     )
     parser.add_argument(
+        "--key", type=Path, default=None,
+        help="signing private key (default: NOCKBRAIN_SIGNING_KEY or "
+             "<store-dir>/signing-key)",
+    )
+    parser.add_argument(
+        "--pub", type=Path, default=None,
+        help="signing public key (default: NOCKBRAIN_SIGNING_PUB or "
+             "<store-dir>/signing-key.pub)",
+    )
+    parser.add_argument(
         "--print-schedule", action="store_true",
         help="Print the live nightly cron schedule for this store and exit (installs nothing)",
     )
@@ -664,6 +708,8 @@ def run(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             merge=not args.replace,
             staging_dir=args.staging_dir,
+            key_path=args.key,
+            pub_path=args.pub,
         )
     except RebuildError as exc:
         print(f"ABORTED: {exc}", file=sys.stderr)

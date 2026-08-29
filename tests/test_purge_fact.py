@@ -339,3 +339,167 @@ def test_purge_apply_sweeps_stale_cache_tmp_without_sidecar(tmp_path):
     assert "removed 1 fact" in result.stdout
     assert "verification cache" not in result.stderr
 
+
+def test_purge_apply_scrubs_insights_and_graph(tmp_path):
+    """N10019: derived views must not keep injecting purged content."""
+    facts = tmp_path / "facts.json"
+    events = tmp_path / "events.jsonl"
+    notes = tmp_path / "sessions"
+    vault = tmp_path / "vault"
+    notes.mkdir()
+    vault.mkdir()
+    facts.write_text(json.dumps([
+        {
+            "id": "leaky",
+            "kind": "decision",
+            "status": "current",
+            "confidence": 0.9,
+            "content": "Kevin removed leaked-secret-value from memory",
+            "source_date": "2026-06-12",
+            "evidence": [],
+        },
+        {
+            "id": "keep",
+            "kind": "decision",
+            "status": "current",
+            "confidence": 0.9,
+            "content": "Kevin kept safe memory",
+            "source_date": "2026-06-12",
+            "evidence": [],
+        },
+    ]))
+    events.write_text("")
+    (tmp_path / "insights.json").write_text(json.dumps([
+        {
+            "id": "ins-leaky",
+            "kind": "insight",
+            "status": "current",
+            "confidence": 0.9,
+            "content": "recurring leaked-secret-value",
+            "source_date": "2026-06-12",
+            "source_ids": ["leaky"],
+        },
+        {
+            "id": "ins-keep",
+            "kind": "insight",
+            "status": "current",
+            "confidence": 0.9,
+            "content": "recurring safe memory",
+            "source_date": "2026-06-12",
+            "source_ids": ["keep"],
+        },
+    ]))
+    (tmp_path / "graph.json").write_text(json.dumps({
+        "nodes": [
+            {"id": "fact:leaky", "type": "fact", "label": "leaked-secret-value"},
+            {"id": "fact:keep", "type": "fact", "label": "safe memory"},
+        ],
+        "edges": [
+            {"id": "e1", "source": "fact:leaky", "target": "concept:secret"},
+            {"id": "e2", "source": "fact:keep", "target": "concept:safe"},
+        ],
+    }))
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(REPO / "bin" / "purge-fact.py"),
+            "--pattern", "leaked-secret-value",
+            "--facts", str(facts),
+            "--events", str(events),
+            "--notes-dir", str(notes),
+            "--vault", str(vault),
+            "--sidecar", str(tmp_path / "embeddings.npz"),
+            "--apply",
+        ],
+        cwd=REPO,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    insights = json.loads((tmp_path / "insights.json").read_text())
+    assert [item["id"] for item in insights] == ["ins-keep"]
+    graph = json.loads((tmp_path / "graph.json").read_text())
+    assert [node["id"] for node in graph["nodes"]] == ["fact:keep"]
+    assert [edge["id"] for edge in graph["edges"]] == ["e2"]
+    tombstones = (tmp_path / "purged-ids.jsonl").read_text()
+    assert "leaky" in tombstones
+
+
+def test_purge_zero_match_does_not_rewrite_store(tmp_path):
+    """N10028: a no-op apply must not drop loader-skipped malformed records."""
+    facts = tmp_path / "facts.json"
+    raw = json.dumps([
+        {
+            "id": "keep",
+            "kind": "decision",
+            "status": "current",
+            "confidence": 0.9,
+            "content": "Kevin kept safe memory",
+            "source_date": "2026-06-12",
+            "evidence": [],
+        },
+        "not-an-object",
+    ])
+    facts.write_text(raw)
+    subprocess.run(
+        [
+            sys.executable,
+            str(REPO / "bin" / "purge-fact.py"),
+            "--pattern", "no-such-secret",
+            "--facts", str(facts),
+            "--events", str(tmp_path / "events.jsonl"),
+            "--notes-dir", str(tmp_path / "sessions"),
+            "--vault", str(tmp_path / "vault"),
+            "--sidecar", str(tmp_path / "embeddings.npz"),
+            "--apply",
+        ],
+        cwd=REPO,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert facts.read_text() == raw
+
+
+def test_purge_pattern_does_not_match_signature_hex(tmp_path):
+    """N10028: pattern match must not search attestation signature hex."""
+    unique_sig = "cafebabe" * 8
+    facts = tmp_path / "facts.json"
+    facts.write_text(json.dumps([
+        {
+            "id": "keep",
+            "kind": "decision",
+            "status": "current",
+            "confidence": 0.9,
+            "content": "Kevin kept safe memory",
+            "source_date": "2026-06-12",
+            "evidence": [],
+            "attestation": {"signature": unique_sig},
+        },
+    ]))
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "vault").mkdir()
+    subprocess.run(
+        [
+            sys.executable,
+            str(REPO / "bin" / "purge-fact.py"),
+            "--pattern", unique_sig,
+            "--facts", str(facts),
+            "--events", str(tmp_path / "events.jsonl"),
+            "--notes-dir", str(tmp_path / "sessions"),
+            "--vault", str(tmp_path / "vault"),
+            "--sidecar", str(tmp_path / "embeddings.npz"),
+            "--apply",
+        ],
+        cwd=REPO,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert json.loads(facts.read_text())[0]["id"] == "keep"
+
