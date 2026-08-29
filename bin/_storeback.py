@@ -163,7 +163,14 @@ class JsonStore:
         self.freshness_path = self.facts_path
 
     def load_facts(self, required_fields: "set[str] | None" = None) -> "list[dict]":
-        return _load_facts_json(self.facts_path, required_fields=required_fields)
+        def _on_unreadable(reason: str) -> None:
+            _record_degradation(self.facts_path, f"json-error: {reason}")
+
+        return _load_facts_json(
+            self.facts_path,
+            required_fields=required_fields,
+            on_unreadable=_on_unreadable,
+        )
 
     def replace_all(self, facts: "list[dict]") -> None:
         secure_write_json(self.facts_path, facts, indent=2, default=str)
