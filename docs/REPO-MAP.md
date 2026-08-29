@@ -15,7 +15,8 @@ basename, `--strict-verify` fail-closed.
 Contract updates 2026-08-29: `load_facts` catches `ValueError` (non-UTF-8);
 JSON-path degradations; sidecar shape guards; dense `fuse` crash → BM25;
 health reports unreadable `facts.json` instead of crashing; `secure_write_json`
-is atomic (N10027).
+is atomic (N10027); promotion apply is stage-verify-commit with `--strict`
+and a state-anchored chain (N10026).
 
 ---
 
@@ -209,7 +210,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 | Script | Notes |
 |---|---|
 | `sign-facts.py` | Signs every fact via `_sign.sign_facts` (per-fact v1/v2 routing — §7). No dry-run |
-| `verify-facts.py` | Exit ≠0 if any TAMPERED (2), resurrected/invalid revocation (4), `--strict`+unsigned (3), `--strict-revocations`+unattested (5) |
+| `verify-facts.py` | Exit ≠0 if any TAMPERED (2), resurrected/invalid revocation (4), `--strict`+unsigned or parent-suspect (3), `--strict-revocations`+unattested (5) |
 | `edit-fact.py` | Unique-match content edits, actor-tracked (`fact-edits.jsonl` written before store), re-signs, `--revert`. Refuses on Merkle parents and on v2 claim facts |
 | `resign-v2-authority-facts.py` | One-shot N9851 repair (see §7). Dry-run default; idempotent |
 
@@ -255,9 +256,11 @@ never touches facts.json).
 
 **Fleet**: `apply-promotion-batch.py` — pulls `memory-promotion-batch/v1`
 artifacts from the NockCC API (`NOCKCC_API_KEY`), validates the parent-digest
-hash chain, applies **additive-only** (id collision aborts the batch), stamps
-`machine`, shells `sign-facts` + `verify-facts`, records applied only after
-verification.
+hash chain **anchored to `applied-batches.json`** (null `batch_digest` refused),
+applies **additive-only** (id collision aborts the batch), stamps `machine`,
+writes a candidate, shells `sign-facts` + `verify-facts --strict` (unsigned and
+parent-suspect fail), then atomically swaps the candidate into `facts.json`
+and records applied only after verification.
 
 **Orchestrator**: `rebuild-store.py` — see §3.
 

@@ -2,9 +2,10 @@
 """Verify the tamper-evident attestations on a NockBrain facts.json (N8068).
 
 Reports counts: valid / TAMPERED / unsigned / parent-suspect. Exits non-zero if
-ANY fact is tampered (the security gate). Unsigned facts are reported but do not
-by themselves fail the run (backward-compat with stores not yet signed); pass
-``--strict`` to also fail when any fact is unsigned.
+ANY fact is tampered (the security gate). Unsigned and parent-suspect facts are
+reported but do not by themselves fail the run (backward-compat with stores not
+yet signed / Merkle-repaired); pass ``--strict`` to also fail when any fact is
+unsigned or parent-suspect.
 
 Usage:
     python3 bin/verify-facts.py --facts ~/.nock-brain/facts.json
@@ -56,7 +57,7 @@ def run(argv: list[str] | None = None) -> int:
                              "or ~/.nock-brain/signing-key)")
     parser.add_argument("--json", action="store_true", help="emit JSON report")
     parser.add_argument("--strict", action="store_true",
-                        help="also exit non-zero if any fact is unsigned")
+                        help="also exit non-zero if any fact is unsigned or parent-suspect")
     parser.add_argument("--revocations", type=Path, default=None,
                         help="revocations.jsonl (default: next to --facts)")
     parser.add_argument("--retired-pub", action="append", type=Path, default=[],
@@ -158,13 +159,13 @@ def run(argv: list[str] | None = None) -> int:
     if revocation_report is not None:
         if blocking_findings(revocation_report):  # resurrected or invalid
             return 4
-        if args.strict and report["unsigned"]:
+        if args.strict and (report["unsigned"] or report["parent_suspect"]):
             return 3
         if blocking_findings(revocation_report, strict_unattested=True) \
                 and args.strict_revocations:
             return 5
         return 0
-    if args.strict and report["unsigned"]:
+    if args.strict and (report["unsigned"] or report["parent_suspect"]):
         return 3
     return 0
 

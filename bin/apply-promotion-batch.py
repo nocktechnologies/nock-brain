@@ -64,17 +64,44 @@ def fetch_batches(api_base: str, agent: str, api_key: str) -> list[dict]:
     return sorted(doc["data"]["batches"], key=lambda b: b["batch_seq"])
 
 
-def check_chain(batches: list[dict]) -> None:
-    """Parent-digest chain must be consistent in batch_seq order."""
-    prev_digest = None
+def last_applied_digest(state: dict) -> str | None:
+    """Highest batch_seq already recorded in applied-batches.json, or None."""
+    if not state:
+        return None
+
+    def seq_key(item):
+        seq, _digest = item
+        try:
+            return (0, int(seq))
+        except (TypeError, ValueError):
+            return (1, str(seq))
+
+    _seq, digest = max(state.items(), key=seq_key)
+    return digest or None
+
+
+def check_chain(batches: list[dict], *, anchor_digest: str | None = None) -> None:
+    """Parent-digest chain must be consistent in batch_seq order.
+
+    ``anchor_digest`` is the last applied digest from applied-batches.json so
+    a fetch that omits already-applied batches still has to chain onto live
+    state. A missing ``batch_digest`` is a broken link, not a skip (N10026).
+    """
+    prev_digest = anchor_digest
     for batch in batches:
+        seq = batch.get("batch_seq")
+        digest = batch.get("batch_digest") or None
+        if not digest:
+            raise ApplyError(
+                f"batch {seq} has no batch_digest; refusing to apply"
+            )
         parent = batch.get("parent_batch_digest") or None
         if prev_digest is not None and parent != prev_digest:
             raise ApplyError(
-                f"batch {batch['batch_seq']} parent digest does not chain to "
-                f"batch {batch['batch_seq'] - 1}; refusing to apply"
+                f"batch {seq} parent digest does not chain to "
+                f"the previous digest; refusing to apply"
             )
-        prev_digest = batch.get("batch_digest")
+        prev_digest = digest
 
 
 def apply_batch(store: list[dict], batch: dict, machine: str) -> list[dict]:
@@ -106,6 +133,14 @@ def apply_batch(store: list[dict], batch: dict, machine: str) -> list[dict]:
 
 
 def run(argv: list[str] | None = None) -> int:
+    try:
+        return _run(argv)
+    except ApplyError as exc:
+        print(f"apply-promotion-batch: {exc}", file=sys.stderr)
+        return 1
+
+
+def _run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Apply memory-promotion batches")
     parser.add_argument("--agent", required=True)
     parser.add_argument("--store-dir", type=Path, default=DEFAULT_STORE_DIR)
@@ -128,11 +163,11 @@ def run(argv: list[str] | None = None) -> int:
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
 
     batches = fetch_batches(args.api_base, args.agent, api_key)
-    check_chain(batches)
     pending = [
         b for b in batches
         if b.get("status") == "built" and str(b["batch_seq"]) not in state
     ]
+    check_chain(pending, anchor_digest=last_applied_digest(state))
     skipped_rolled_back = sum(1 for b in batches if b.get("status") == "rolled_back")
     if not pending:
         print(f"nothing to apply ({len(batches)} batch(es), "
@@ -149,24 +184,38 @@ def run(argv: list[str] | None = None) -> int:
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup = facts_path.with_name(f"facts.json.bak-preapply-{stamp}")
-    backup.write_bytes(facts_path.read_bytes())
-    secure_write_json(facts_path, store, ensure_ascii=False)
-
-    # Re-sign and strict-verify with the store's own toolchain; the batch is
-    # recorded applied ONLY after verification passes.
-    for script in ("sign-facts.py", "verify-facts.py"):
-        proc = subprocess.run(  # nosec B603 - fixed sibling scripts
-            [sys.executable, str(BIN_DIR / script), "--facts", str(facts_path)],
-            capture_output=True, text=True, check=False,
-        )
-        if proc.returncode != 0:
-            print(f"{script} FAILED after apply — restore from {backup.name} "
-                  f"and investigate:\n{(proc.stderr or proc.stdout)[-400:]}",
-                  file=sys.stderr)
-            return 1
+    candidate = facts_path.with_name("facts.json.applying")
+    # Stage → sign/verify the candidate → commit. Live facts.json is untouched
+    # until verification passes (N10026).
+    try:
+        secure_write_json(candidate, store, ensure_ascii=False)
+        for script, extra in (
+            ("sign-facts.py", []),
+            ("verify-facts.py", ["--strict"]),
+        ):
+            proc = subprocess.run(  # nosec B603 - fixed sibling scripts
+                [sys.executable, str(BIN_DIR / script),
+                 "--facts", str(candidate), *extra],
+                capture_output=True, text=True, check=False,
+            )
+            if proc.returncode != 0:
+                print(f"{script} FAILED on staged apply — live store untouched:\n"
+                      f"{(proc.stderr or proc.stdout)[-400:]}",
+                      file=sys.stderr)
+                return 1
+        backup.write_bytes(facts_path.read_bytes())
+        os.replace(candidate, facts_path)
+        candidate = None
+    finally:
+        if candidate is not None:
+            try:
+                candidate.unlink()
+            except OSError:
+                pass
 
     for batch in pending:
-        state[str(batch["batch_seq"])] = batch.get("batch_digest", "")
+        digest = batch.get("batch_digest") or ""
+        state[str(batch["batch_seq"])] = digest
     secure_write_json(state_path, state, indent=1)
     print(f"applied {len(pending)} batch(es); signed + verified; "
           f"backup {backup.name}")
@@ -174,11 +223,7 @@ def run(argv: list[str] | None = None) -> int:
 
 
 def main() -> int:
-    try:
-        return run()
-    except ApplyError as exc:
-        print(f"apply-promotion-batch: {exc}", file=sys.stderr)
-        return 1
+    return run()
 
 
 if __name__ == "__main__":
