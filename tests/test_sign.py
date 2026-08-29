@@ -479,3 +479,21 @@ def test_verify_cli_strict_fails_on_unsigned(verify_cli, sign_cli, tmp_path):
     unsigned_file.write_text(json.dumps([make_fact("a")]))
     rc = verify_cli.run(["--facts", str(unsigned_file), "--pub", str(pub_path), "--strict"])
     assert rc == 3
+
+
+def test_verify_cli_strict_fails_on_parent_suspect(verify_cli, sign, tmp_path):
+    """N10026: --strict treats PARENT_SUSPECT as a gate failure (unsigned
+    batches and broken Merkle ancestry must not be marked applied)."""
+    key = sign.load_or_create_key(tmp_path / "k", tmp_path / "k.pub")
+    parent = make_fact("parent-1", content="Original pricing: $29/mo")
+    child = make_fact("child-1", content="Derived: terminal tier is $29/mo")
+    child["parent_fact_ids"] = ["parent-1"]
+    facts = [parent, child]
+    sign.sign_facts(facts, key)
+    facts_file = tmp_path / "facts.json"
+    facts_file.write_text(json.dumps([facts[1]]))  # parent gone → child parent-suspect
+    rc = verify_cli.run(["--facts", str(facts_file), "--pub", str(tmp_path / "k.pub")])
+    assert rc == 0  # default: parent-suspect is reported, not blocking
+    rc = verify_cli.run(["--facts", str(facts_file), "--pub", str(tmp_path / "k.pub"),
+                         "--strict"])
+    assert rc == 3

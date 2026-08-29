@@ -42,6 +42,32 @@ def test_check_chain_rejects_broken_parent(apply_promotion_batch):
         apply_promotion_batch.check_chain(broken)
 
 
+def test_check_chain_refuses_null_digest(apply_promotion_batch):
+    """N10026: a missing batch_digest must not reset the chain and skip the
+    next parent comparison."""
+    with pytest.raises(apply_promotion_batch.ApplyError, match="batch_digest"):
+        apply_promotion_batch.check_chain([
+            {"batch_seq": 1, "batch_digest": "", "parent_batch_digest": None,
+             "payload": {"facts": []}},
+        ])
+
+
+def test_check_chain_anchors_to_last_applied_digest(apply_promotion_batch):
+    """N10026: pending batches must chain onto applied-batches.json, not
+    start prev=None."""
+    pending = [_batch(2, [], parent="digest-WRONG")]
+    with pytest.raises(apply_promotion_batch.ApplyError, match="chain"):
+        apply_promotion_batch.check_chain(pending, anchor_digest="digest-1")
+    apply_promotion_batch.check_chain(
+        [_batch(2, [], parent="digest-1")], anchor_digest="digest-1")
+
+
+def test_last_applied_digest_picks_highest_seq(apply_promotion_batch):
+    assert apply_promotion_batch.last_applied_digest({}) is None
+    assert apply_promotion_batch.last_applied_digest(
+        {"1": "digest-1", "10": "digest-10"}) == "digest-10"
+
+
 def test_run_applies_signs_and_records_state(apply_promotion_batch, tmp_path, monkeypatch):
     store_dir = tmp_path / "store"
     store_dir.mkdir()
@@ -58,17 +84,23 @@ def test_run_applies_signs_and_records_state(apply_promotion_batch, tmp_path, mo
     calls = []
     monkeypatch.setattr(
         apply_promotion_batch.subprocess, "run",
-        lambda cmd, **k: (calls.append(cmd[1]), type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})())[1],
+        lambda cmd, **k: (calls.append(cmd), type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})())[1],
     )
 
     code = apply_promotion_batch.run(["--agent", "mira-nockos", "--store-dir", str(store_dir)])
     assert code == 0
     facts = json.loads((store_dir / "facts.json").read_text())
     assert [f["id"] for f in facts] == ["old", "new1"]
-    assert any("sign-facts.py" in c for c in calls) and any("verify-facts.py" in c for c in calls)
+    assert any("sign-facts.py" in c[1] for c in calls)
+    verify_cmd = next(c for c in calls if "verify-facts.py" in c[1])
+    assert "--strict" in verify_cmd
+    assert verify_cmd[verify_cmd.index("--facts") + 1].endswith("facts.json.applying")
+    sign_cmd = next(c for c in calls if "sign-facts.py" in c[1])
+    assert sign_cmd[sign_cmd.index("--facts") + 1].endswith("facts.json.applying")
     state = json.loads((store_dir / "applied-batches.json").read_text())
     assert state == {"1": "digest-1"}  # rolled-back batch is a no-op
     assert list(store_dir.glob("facts.json.bak-preapply-*"))
+    assert not list(store_dir.glob("facts.json.applying"))
 
     # Idempotent: second run applies nothing.
     code = apply_promotion_batch.run(["--agent", "mira-nockos", "--store-dir", str(store_dir)])
@@ -93,3 +125,23 @@ def test_run_aborts_before_write_when_verify_fails(apply_promotion_batch, tmp_pa
     code = apply_promotion_batch.run(["--agent", "mira-nockos", "--store-dir", str(store_dir)])
     assert code == 1
     assert not (store_dir / "applied-batches.json").exists()  # never recorded applied
+    assert json.loads((store_dir / "facts.json").read_text()) == []  # live untouched
+    assert not (store_dir / "facts.json.applying").exists()
+
+
+def test_run_refuses_pending_that_does_not_chain_to_state(
+        apply_promotion_batch, tmp_path, monkeypatch):
+    store_dir = tmp_path / "store"
+    store_dir.mkdir()
+    (store_dir / "facts.json").write_text(json.dumps([{"id": "old"}]))
+    (store_dir / "applied-batches.json").write_text(json.dumps({"1": "digest-1"}))
+    monkeypatch.setenv("NOCKCC_API_KEY", "k")
+    monkeypatch.setenv("NOCKBRAIN_MACHINE", "mac-kevin")
+    monkeypatch.setattr(
+        apply_promotion_batch, "fetch_batches",
+        lambda *a: [_batch(2, [{"id": "n", "content": "y"}], parent=None)],
+    )
+    code = apply_promotion_batch.run(["--agent", "mira-nockos", "--store-dir", str(store_dir)])
+    assert code == 1
+    assert json.loads((store_dir / "facts.json").read_text()) == [{"id": "old"}]
+    assert json.loads((store_dir / "applied-batches.json").read_text()) == {"1": "digest-1"}
