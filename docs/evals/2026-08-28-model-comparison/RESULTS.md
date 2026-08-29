@@ -10,6 +10,7 @@
 
 | | Opus 4.7 | Opus 4.8 | Opus 5 | Fable |
 |---|---|---|---|---|
+| **Effort** | `high` (pinned) | `high` (pinned) | `high` (pinned) | `high` (pinned) |
 | Findings | 8 | 4 | 9 | 10 |
 | Claims graded | 21 | 22 | 19 | 30 |
 | Confirmed | 18 | 19 | 18 | 28 |
