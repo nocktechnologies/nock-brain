@@ -49,7 +49,7 @@ from _sign import (  # noqa: E402
     sign_claim_fact_v2,
     verify_fact,
 )
-from _store import secure_write_text  # noqa: E402
+from _store import secure_write_json  # noqa: E402
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 
@@ -236,8 +236,8 @@ def run(argv: "list[str] | None" = None) -> int:
 
     if args.apply:
         if summary["resigned"]:
-            secure_write_text(
-                args.facts, json.dumps(data, indent=2, ensure_ascii=False)
+            secure_write_json(
+                args.facts, data, indent=2, ensure_ascii=False
             )
             print(f"\nWrote {args.facts} ({summary['resigned']} fact(s) re-signed)")
         else:
