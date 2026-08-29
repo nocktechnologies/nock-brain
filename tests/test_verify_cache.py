@@ -942,7 +942,12 @@ def test_sidecar_status_mismatched_alg_is_not_fresh(tmp_path, sign_lib):
     key = sign_lib.load_or_create_key(tmp_path / "k", tmp_path / "k.pub")
     facts = tmp_path / "facts.json"
     facts.write_text("[]", encoding="utf-8")
-    _matching_sidecar(vc, facts, key_id=key.key_id, alg="hmac-sha256")
+    mismatched_alg = (
+        sign_lib.ALG_HMAC
+        if key.alg != sign_lib.ALG_HMAC
+        else sign_lib.ALG_ED25519
+    )
+    _matching_sidecar(vc, facts, key_id=key.key_id, alg=mismatched_alg)
     status = vc.sidecar_status(facts, key_id=key.key_id, alg=key.alg)
     assert status["fresh"] is False
     assert status["reason"] == "rejected"
