@@ -841,12 +841,18 @@ def _maybe_dense_fuse(all_facts: list[dict], seeds: list[dict], query: str,
     if not semantic:
         return seeds, frozenset()
     import _dense_recall  # local import: never loaded on the off-path
-    return _dense_recall.fuse(
-        all_facts, seeds, query, include_superseded, now,
-        min_confidence=MIN_CONFIDENCE,
-        currently_valid=fact_currently_valid,
-        embed_query=_embed_query_text(query),
-    )
+    try:
+        return _dense_recall.fuse(
+            all_facts, seeds, query, include_superseded, now,
+            min_confidence=MIN_CONFIDENCE,
+            currently_valid=fact_currently_valid,
+            embed_query=_embed_query_text(query),
+        )
+    except Exception as exc:  # noqa: BLE001 - BM25 is the floor; a semantic
+        # crash must never take down the whole recall (N10024).
+        print(f"semantic recall failed, using flat BM25: {exc}",
+              file=sys.stderr)
+        return seeds, frozenset()
 
 
 def select_recall(query: str, facts_file: "Path | None",

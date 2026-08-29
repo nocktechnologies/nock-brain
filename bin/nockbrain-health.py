@@ -27,7 +27,29 @@ SENSITIVE_ENV_NAMES = {"API_KEY", "TOKEN", "SECRET", "PASSWORD"}
 def load_json(path: Path | None, default: Any) -> Any:
     if not path or not path.exists():
         return default
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def load_facts_document(path: Path | None) -> tuple[list[Any], str | None]:
+    """Parse facts.json without raising.
+
+    Returns ``(facts, None)`` on a readable list (including a missing file,
+    which is an empty store). Returns ``([], error)`` when the file exists
+    but cannot be read or is not a JSON list — health reports that as
+    unreadable instead of crashing (N10030).
+    """
+    if not path or not path.exists():
+        return [], None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return [], str(exc)
+    if not isinstance(data, list):
+        return [], "expected a JSON list of facts"
+    return data, None
 
 
 def load_events(path: Path | None) -> tuple[list[dict[str, Any]], int]:
@@ -140,9 +162,12 @@ def load_projection_receipts(path: Path | None) -> dict[str, Any]:
             "artifacts": len(artifacts), "ambiguous": ambiguous, "last_at": last_at}
 
 
-def malformed_facts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def malformed_facts(facts: list[Any]) -> list[dict[str, Any]]:
     bad = []
     for fact in facts:
+        if not isinstance(fact, dict):
+            bad.append({"id": "", "missing": ["not an object"]})
+            continue
         missing = sorted(field for field in REQUIRED_FACT_FIELDS if field not in fact)
         if missing:
             bad.append({"id": fact.get("id", ""), "missing": missing})
@@ -257,8 +282,10 @@ def build_report(
     receipts_path: Path | None = None,
 ) -> dict[str, Any]:
     events, malformed_event_lines = load_events(events_path)
-    facts = load_json(facts_path, [])
+    facts, facts_unreadable = load_facts_document(facts_path)
     stats = load_json(stats_path, {}) if stats_path else {}
+    if not isinstance(stats, dict):
+        stats = {}
     bad_facts = malformed_facts(facts)
     live_secret_locations = scan_live_secret_values(env_paths, scan_roots)
 
@@ -276,6 +303,7 @@ def build_report(
             "path": str(facts_path) if facts_path else "",
             "count": len(facts),
             "malformed": bad_facts,
+            "unreadable": facts_unreadable,
         },
         "notes": {
             "path": str(notes_dir) if notes_dir else "",
@@ -295,7 +323,7 @@ def build_report(
             "live_secret_findings": len(live_secret_locations),
             "live_secret_locations": live_secret_locations,
         },
-        "recall_ready": bool(facts) and not bad_facts,
+        "recall_ready": bool(facts) and not bad_facts and not facts_unreadable,
         "signing_key": signing_key_report(facts if isinstance(facts, list) else []),
     }
     degradations = load_degradations(degradations_path)
@@ -344,6 +372,8 @@ def render_text(report: dict[str, Any]) -> str:
         ),
         f"- Recall ready: {str(report['recall_ready']).lower()}",
     ]
+    if report.get("facts", {}).get("unreadable"):
+        lines.append(f"- FACTS UNREADABLE: {report['facts']['unreadable']}")
     sk = report.get("signing_key") or {}
     if sk.get("mismatch"):
         store_ids = ", ".join(sk.get("store_key_ids") or [])

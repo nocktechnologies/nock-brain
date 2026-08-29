@@ -41,6 +41,26 @@ def test_load_facts_skips_malformed_records_with_stderr_count(tmp_path, capsys):
     assert "skipped 2 malformed fact" in capsys.readouterr().err
 
 
+def test_load_facts_non_utf8_returns_empty_not_raise(tmp_path, capsys):
+    """N10024/N10030: a byte-corrupt store must not raise through the
+    never-raises contract (UnicodeDecodeError is a ValueError)."""
+    fact_store = load_fact_store()
+    facts_file = tmp_path / "facts.json"
+    facts_file.write_bytes(b"\xff\xfe not utf-8")
+
+    assert fact_store.load_facts(facts_file) == []
+    assert "skipped malformed fact store" in capsys.readouterr().err
+
+
+def test_load_facts_truncated_json_returns_empty_not_raise(tmp_path, capsys):
+    fact_store = load_fact_store()
+    facts_file = tmp_path / "facts.json"
+    facts_file.write_text("{")
+
+    assert fact_store.load_facts(facts_file) == []
+    assert "skipped malformed fact store" in capsys.readouterr().err
+
+
 def test_filter_valid_facts_fills_source_date_from_source_time():
     """N10020: v2 claims omit source_date; recall requires it to rank."""
     fact_store = load_fact_store()

@@ -228,6 +228,14 @@ def test_budget_recall_missing_file_is_empty(budget_recall, tmp_path):
     assert budget_recall.budget_recall("anything", tmp_path / "nope.json") == ""
 
 
+def test_budget_recall_byte_corrupt_store_is_empty_not_crash(budget_recall, tmp_path):
+    """N10024: non-UTF-8 facts.json must degrade to empty recall, not raise
+    UnicodeDecodeError through the hook (which would inject {})."""
+    fp = tmp_path / "facts.json"
+    fp.write_bytes(b"\xff\xfe not utf-8")
+    assert budget_recall.budget_recall("pricing", fp) == ""
+
+
 def test_insights_surface_first_and_dedup_their_sources(budget_recall, tmp_path):
     f1 = fact("pricing tier correction one")
     f2 = fact("pricing tier correction two")
