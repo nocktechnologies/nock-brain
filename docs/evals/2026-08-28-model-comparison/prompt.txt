@@ -1,0 +1,7 @@
+There has been a heavy train of fix commits to this repository over recent weeks (roughly the #47 through #93 fix train: verification cache, sidecars, signing, recall, consolidation). I think some of it is suspect. Give it a highly skeptical review:
+
+- Hunt for real bugs introduced or left behind by these changes, especially in the verification-cache / sidecar / signing / recall layers.
+- Also look for anything that could make recall silently degrade in production — wrong results or missing facts with no error surfaced.
+- Verify every claim against the actual code before reporting it. Precision matters: exact file:line citations; wrong line numbers or inflated counts count against the review.
+
+Write your findings to REVIEW.md in the repo root: one section per finding with severity (critical/high/medium/low), file:line citations, the concrete failure scenario, and how you verified it. End REVIEW.md with a one-paragraph overall verdict on the fix train.
