@@ -3,3 +3,22 @@ __pycache__/
 .pytest_cache/
 .memsearch/
 .DS_Store
+
+# Store artifacts — the authoritative store lives in ~/.nock-brain and the
+# PRIVATE nock-brain-store repo; real memory data must NEVER be committed here.
+# (This is a PUBLIC repo. The recall-eval fixture under tests/fixtures/ is the
+# one deliberate exception and is scrubbed of real content by policy.)
+facts.json
+insights.json
+revocations.jsonl
+embeddings.npz
+*.embeddings.npz
+.nock-brain/
+/store/
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+signing-key*
+*-shim-token*
