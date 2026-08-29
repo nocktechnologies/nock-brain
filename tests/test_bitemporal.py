@@ -132,3 +132,40 @@ def test_supersede_overwrites_future_invalid_at(tmp_path, monkeypatch):
     fact = json.loads(store.read_text())[0]
     assert fact["status"] == "superseded"
     assert fact["invalid_at"] < future  # window closed now, not at the future bound
+
+
+def test_currently_valid_honors_v2_valid_from_valid_to(facts_lib):
+    """N10022: signed v2 window fields close recall the same way as v1 bounds."""
+    assert facts_lib.fact_currently_valid(
+        _fact("a", "x", valid_from=FUTURE), NOW) is False
+    assert facts_lib.fact_currently_valid(
+        _fact("a", "x", valid_to=PAST), NOW) is False
+    assert facts_lib.fact_currently_valid(
+        _fact("a", "x", valid_from=PAST, valid_to=FUTURE), NOW) is True
+
+
+def test_expired_v2_claim_drops_from_default_recall(budget_recall):
+    facts = [
+        _fact("live", "cloudflare dns migration plan"),
+        _fact("dead", "cloudflare dns migration plan", valid_to=PAST),
+    ]
+    ids = {f["id"] for f in budget_recall.search(facts, "cloudflare dns migration", now=NOW)}
+    assert "live" in ids
+    assert "dead" not in ids
+
+
+def test_revokes_revision_ids_drop_revoked_revision_from_recall(budget_recall):
+    """N10022: a current claim that revokes a peer revision hides that peer."""
+    old = _fact(
+        "old", "cloudflare dns migration plan",
+        revision_id="sha256:" + "a" * 64,
+    )
+    new = _fact(
+        "new", "cloudflare dns migration plan revised",
+        revision_id="sha256:" + "b" * 64,
+        revokes_revision_ids=["sha256:" + "a" * 64],
+    )
+    ids = {f["id"] for f in budget_recall.search(
+        [old, new], "cloudflare dns migration", now=NOW)}
+    assert "new" in ids
+    assert "old" not in ids

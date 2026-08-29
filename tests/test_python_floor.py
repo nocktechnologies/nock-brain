@@ -85,6 +85,7 @@ def test_hook_reachable_closure_is_acknowledged():
         "_facts.py",
         "_graph_recall.py",
         "_projection.py",
+        "_revoke.py",
         "_sign.py",
         "_store.py",
         "_storeback.py",

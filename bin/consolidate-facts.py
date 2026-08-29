@@ -61,7 +61,9 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
+from _revoke import record_supersessions
 from _store import secure_write_json
+from _storeback import resolve_store
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 MANIFEST_NAME = "consolidate-facts-manifest.json"
@@ -213,7 +215,9 @@ def apply_supersessions(rows: list[dict], clusters: list[dict],
                         now: str | None = None) -> int:
     """Flip every cluster loser to status=superseded with a superseded_by
     pointer at the canonical fact. Status-only: id/kind/content/evidence are
-    never touched, so attestations stay valid."""
+    never touched, so attestations stay valid. Closes the validity window
+    (invalid_at) the same way dedup-facts / supersede-fact do, so recall
+    drops the loser even if status is later flipped (N10025)."""
     stamp = now or datetime.now(timezone.utc).isoformat()
     canonical_by_loser = supersession_map(clusters)
     n = 0
@@ -227,6 +231,10 @@ def apply_supersessions(rows: list[dict], clusters: list[dict],
                 f"near-duplicate consolidated by consolidate-facts; "
                 f"canonical={canonical_id}"
             )
+            # Overwrite a missing OR future-dated invalid_at so the close
+            # takes effect now; never push an already-past close later.
+            if not f.get("invalid_at") or f["invalid_at"] > stamp:
+                f["invalid_at"] = stamp
             n += 1
     return n
 
@@ -374,7 +382,17 @@ def main() -> int:
     print(f"backup written: {backup}")
 
     n = apply_supersessions(rows, sel["clusters"])
-    secure_write_json(args.facts, data, indent=2, default=str)
+    store = resolve_store(args.facts)
+    if store.kind == "sqlite":
+        store.replace_all(rows)
+    else:
+        secure_write_json(args.facts, data, indent=2, default=str)
+    marked = [f for f in rows if str(f.get("id")) in live_map]
+    written, warning = record_supersessions(store.freshness_path, marked)
+    if warning:
+        print(warning, file=sys.stderr)
+    elif written:
+        print(f"wrote {written} revocation event(s)")
     current = sum(1 for f in rows if f.get("status", "current") == "current")
     print(f"superseded {n} facts; store now {len(rows)} rows ({current} current).")
     print(POST_EXECUTE_RULE)

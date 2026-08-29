@@ -17,6 +17,7 @@ if str(BIN_DIR) not in sys.path:
 
 from _facts import REQUIRED_FACT_FIELDS
 from _projection import load_receipts, last_status
+from _sign import resolve_verify_key
 from _verify_cache import sidecar_status
 
 SENSITIVE_ENV_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
@@ -194,6 +195,36 @@ def iter_scan_files(scan_roots: list[Path] | None) -> list[Path]:
     return files
 
 
+def signing_key_report(facts: list) -> dict[str, Any]:
+    """Compare recall's verify key to the store's attestation key_ids (N10013).
+
+    A mismatch is a hard warning, not a recall_ready flip: rebuild's health
+    gate runs before signing, so unsigned staging must stay recall-ready.
+    """
+    store_ids: list[str] = []
+    seen: set[str] = set()
+    if isinstance(facts, list):
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            att = fact.get("attestation")
+            if not isinstance(att, dict):
+                continue
+            kid = att.get("key_id")
+            if isinstance(kid, str) and kid and kid not in seen:
+                seen.add(kid)
+                store_ids.append(kid)
+    key, err = resolve_verify_key()
+    verify_id = key.key_id if key is not None else None
+    mismatch = bool(verify_id and store_ids and verify_id not in seen)
+    return {
+        "verify_key_id": verify_id,
+        "store_key_ids": store_ids,
+        "mismatch": mismatch,
+        "load_error": err,
+    }
+
+
 def scan_live_secret_values(env_paths: list[Path] | None, scan_roots: list[Path] | None) -> list[dict[str, Any]]:
     secrets = load_env_secret_values(env_paths)
     if not secrets:
@@ -265,6 +296,7 @@ def build_report(
             "live_secret_locations": live_secret_locations,
         },
         "recall_ready": bool(facts) and not bad_facts,
+        "signing_key": signing_key_report(facts if isinstance(facts, list) else []),
     }
     degradations = load_degradations(degradations_path)
     degradations["threshold"] = degradation_threshold
@@ -286,7 +318,12 @@ def build_report(
     # silent-degradation this surfaces. Never flips recall_ready — rebuild's
     # hard gate stays facts+secrets.
     if facts_path is not None:
-        report["verification_cache"] = sidecar_status(facts_path)
+        verify_key, _err = resolve_verify_key()
+        report["verification_cache"] = sidecar_status(
+            facts_path,
+            key_id=verify_key.key_id if verify_key is not None else None,
+            alg=verify_key.alg if verify_key is not None else None,
+        )
     return report
 
 
@@ -307,6 +344,13 @@ def render_text(report: dict[str, Any]) -> str:
         ),
         f"- Recall ready: {str(report['recall_ready']).lower()}",
     ]
+    sk = report.get("signing_key") or {}
+    if sk.get("mismatch"):
+        store_ids = ", ".join(sk.get("store_key_ids") or [])
+        lines.append(
+            f"- SIGNING KEY MISMATCH: recall verifies {sk.get('verify_key_id')}, "
+            f"store attestations signed with {store_ids}"
+        )
     degradations = report.get("recall_degradations", {})
     if degradations.get("flagged"):
         lines.append(
@@ -364,6 +408,8 @@ def render_text(report: dict[str, Any]) -> str:
             lines.append("- Verification cache: present, oversized, writable")
         elif cache.get("reason") == "unreadable":
             lines.append("- Verification cache: present, unreadable, writable")
+        elif cache.get("reason") == "rejected":
+            lines.append("- Verification cache: present, rejected, writable")
         else:
             lines.append("- Verification cache: present, stale stamp, writable")
     return "\n".join(lines) + "\n"

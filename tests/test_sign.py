@@ -273,7 +273,6 @@ def test_parent_suspect_is_cached_and_repair_forces_reverify(sign, tmp_path):
     spec.loader.exec_module(vc)
 
     key = sign.load_or_create_key(tmp_path / "k", tmp_path / "k.pub")
-    pub = sign.load_public_key(tmp_path / "k.pub")
 
     parent = make_fact("parent-1", content="Original pricing: $29/mo")
     child = make_fact("child-1", content="Derived: terminal tier is $29/mo")
@@ -286,7 +285,7 @@ def test_parent_suspect_is_cached_and_repair_forces_reverify(sign, tmp_path):
     facts_by_id = {f["id"]: f for f in facts}
 
     cache = vc.VerifiedSignatureCache(
-        tmp_path / "cache.json", pub.key_id, pub.alg, {"mtime_ns": 1, "size": 1}, set()
+        tmp_path / "cache.json", key.key_id, key.alg, {"mtime_ns": 1, "size": 1}, set()
     )
 
     real_verify = sign.SigningKey.verify_bytes
@@ -299,11 +298,11 @@ def test_parent_suspect_is_cached_and_repair_forces_reverify(sign, tmp_path):
     sign.SigningKey.verify_bytes = counting
     try:
         calls["n"] = 0
-        status_cold = sign.verify_fact(child, pub, facts_by_id=facts_by_id, verified_cache=cache)
+        status_cold = sign.verify_fact(child, key, facts_by_id=facts_by_id, verified_cache=cache)
         ops_cold = calls["n"]
 
         calls["n"] = 0
-        status_warm = sign.verify_fact(child, pub, facts_by_id=facts_by_id, verified_cache=cache)
+        status_warm = sign.verify_fact(child, key, facts_by_id=facts_by_id, verified_cache=cache)
         ops_warm = calls["n"]
 
         assert status_cold == sign.PARENT_SUSPECT
@@ -317,7 +316,7 @@ def test_parent_suspect_is_cached_and_repair_forces_reverify(sign, tmp_path):
         facts_by_id = {f["id"]: f for f in facts}
         calls["n"] = 0
         status_repaired = sign.verify_fact(
-            child, pub, facts_by_id=facts_by_id, verified_cache=cache
+            child, key, facts_by_id=facts_by_id, verified_cache=cache
         )
         ops_repaired = calls["n"]
 
@@ -337,13 +336,12 @@ def test_verify_facts_threads_verified_cache(sign, tmp_path):
     spec.loader.exec_module(vc)
 
     key = sign.load_or_create_key(tmp_path / "k", tmp_path / "k.pub")
-    pub = sign.load_public_key(tmp_path / "k.pub")
     facts = [make_fact("f-1", content="ed25519 rollout was approved"),
              make_fact("f-2", content="ed25519 rollout owner is mira")]
     sign.sign_facts(facts, key)
 
     cache = vc.VerifiedSignatureCache(
-        tmp_path / "cache.json", pub.key_id, pub.alg,
+        tmp_path / "cache.json", key.key_id, key.alg,
         {"mtime_ns": 1, "size": 1}, set(),
     )
     real_verify = sign.SigningKey.verify_bytes
@@ -356,18 +354,18 @@ def test_verify_facts_threads_verified_cache(sign, tmp_path):
     sign.SigningKey.verify_bytes = counting
     try:
         calls["n"] = 0
-        cold = sign.verify_facts(facts, pub, verified_cache=cache)
+        cold = sign.verify_facts(facts, key, verified_cache=cache)
         ops_cold = calls["n"]
         assert cold["valid"] == 2
         assert ops_cold == 2
 
         calls["n"] = 0
-        warm = sign.verify_facts(facts, pub, verified_cache=cache)
+        warm = sign.verify_facts(facts, key, verified_cache=cache)
         assert warm["valid"] == 2
         assert calls["n"] == 0, "warm verify_facts must skip the public-key op"
 
         calls["n"] = 0
-        uncached = sign.verify_facts(facts, pub)
+        uncached = sign.verify_facts(facts, key)
         assert uncached["valid"] == 2
         assert calls["n"] == 2, "verified_cache=None is a full cryptographic pass"
     finally:

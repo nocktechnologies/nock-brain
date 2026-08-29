@@ -6,7 +6,8 @@ sessions undetected. These tests pin the closed loop:
 - a tampered signed fact is EXCLUDED from recall and counted on stderr;
 - an unsigned fact stays recallable by default (much of the store predates
   signing) but is counted, and falls to --strict-verify (fail closed);
-- with no signing key on disk, verification is skipped entirely.
+- with no signing key on disk, verification is skipped entirely (default);
+  --strict-verify with no key fails closed (empty recall + loud error).
 """
 import json
 import sys
@@ -152,7 +153,7 @@ def test_no_signing_key_skips_verification(budget_recall, tmp_path, capsys):
     assert err == ""  # no verification ran, no warning
 
 
-def test_strict_verify_without_key_warns_and_still_recalls(
+def test_strict_verify_without_key_fails_closed_empty_recall(
         budget_recall, tmp_path, capsys):
     plain = signable_fact("f-plain", "ed25519 rollout was approved")
     facts_file = write_facts(tmp_path, [plain])
@@ -161,7 +162,8 @@ def test_strict_verify_without_key_warns_and_still_recalls(
                                       strict_verify=True)
     err = capsys.readouterr().err
 
-    assert "approved" in out  # no key -> skipped, not fail-everything
+    assert "approved" not in out  # fail closed: nothing injected
+    assert "fail closed" in err
     assert "no signing key" in err
 
 
@@ -203,3 +205,31 @@ def test_cli_strict_verify_via_env(budget_recall, sign_lib, signing_key,
 
     assert "runbook" not in out
     assert "No matching facts found." in out
+
+
+def test_resurrected_fact_excluded_from_recall(
+        budget_recall, sign_lib, signing_key, revoke_lib, tmp_path, capsys):
+    """N10016: a current fact that a trusted revocation says is dead must not
+    inject, even though the signature on the immutable core still verifies
+    VALID. Status is unsigned; the revocation sidecar is the source of truth.
+    """
+    dead = signable_fact("f-dead", "we use the old pricing model")
+    live = signable_fact("f-live", "we use the new pricing model")
+    sign_lib.sign_facts([dead, live], signing_key)
+    dead["status"] = "current"  # unsigned flip-back
+    facts_file = write_facts(tmp_path, [dead, live])
+    event = revoke_lib.sign_revocation(
+        signing_key,
+        superseded_id="f-dead",
+        superseding_id="f-live",
+        reason="replaced",
+        superseded_at="2026-08-01T00:00:00+00:00",
+    )
+    revoke_lib.append_revocation(tmp_path / "revocations.jsonl", event)
+
+    out = budget_recall.budget_recall("pricing model", facts_file)
+    err = capsys.readouterr().err
+
+    assert "new pricing" in out
+    assert "old pricing" not in out
+    assert "resurrected" in err

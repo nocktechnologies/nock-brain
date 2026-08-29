@@ -38,6 +38,7 @@ import hashlib
 import hmac
 import json
 import math
+import os
 import re
 import secrets
 import uuid
@@ -428,20 +429,24 @@ class SigningKey:
             # to embed in every attestation.
             self.key_id = key_fingerprint(hashlib.sha256(hmac_secret).digest(), alg)
 
-    def cache_key_material(self) -> bytes:
+    def cache_key_material(self) -> bytes | None:
         """Secret bytes that key the verification-cache MAC (see cache_digest).
 
-        For HMAC it is the shared secret; for Ed25519 it is the raw public-key
-        bytes. This is exactly the material an attacker must be able to READ to
-        recompute a cache digest — the same key-file read access that the store
-        directory does not by itself grant when the key lives on a protected
-        path (NOCKBRAIN_SIGNING_PUB/KEY). key_id alone does NOT suffice: it is a
-        truncated one-way fingerprint that is public in every attestation, so
-        keying on it would leave the cache forgeable from facts.json alone.
-        Never the Ed25519 private key — the verify-only recall path never has
-        it, and the public bytes are unrecoverable from signatures."""
+        For HMAC it is the shared secret; for Ed25519 it is the private-key
+        bytes when this object can sign. Public-only Ed25519 keys return None
+        so the cache short-circuit is skipped (N10018): the public key is not
+        secret, and keying the MAC on it let a store-dir writer forge VALID
+        cache entries. key_id alone does NOT suffice either — it is a
+        truncated one-way fingerprint that is public in every attestation.
+        """
         if self.alg == ALG_ED25519:
-            return self._pub_bytes
+            if self._ed_private is None:
+                return None
+            return self._ed_private.private_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PrivateFormat.Raw,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
         return self._hmac_secret
 
     # -- signing/verifying primitives --
@@ -561,6 +566,95 @@ def load_public_key(pub_path: Path = DEFAULT_PUB_PATH) -> SigningKey:
     if alg == ALG_HMAC:
         return SigningKey(ALG_HMAC, hmac_secret=bytes.fromhex(doc["secret"]))
     raise RuntimeError(f"unknown key alg: {alg!r}")
+
+
+def resolve_key_paths(
+    key_path: Path | None = None,
+    pub_path: Path | None = None,
+    *,
+    store_dir: Path | None = None,
+) -> tuple[Path, Path]:
+    """Resolve (private, public) key paths: explicit args > env > defaults.
+
+    ``store_dir`` (rebuild) defaults to ``store_dir/signing-key`` instead of
+    ``~/.nock-brain``. Empty env values fall through. This is the single
+    resolver for sign-facts, verify-facts, rebuild-store, and recall (N10013).
+    """
+    default_key = (
+        Path(store_dir) / "signing-key" if store_dir is not None else DEFAULT_KEY_PATH
+    )
+    default_pub = (
+        Path(store_dir) / "signing-key.pub" if store_dir is not None else DEFAULT_PUB_PATH
+    )
+    env_key = os.environ.get("NOCKBRAIN_SIGNING_KEY", "").strip()
+    env_pub = os.environ.get("NOCKBRAIN_SIGNING_PUB", "").strip()
+    resolved_key = Path(key_path) if key_path is not None else Path(env_key or default_key)
+    resolved_pub = Path(pub_path) if pub_path is not None else Path(env_pub or default_pub)
+    return resolved_key, resolved_pub
+
+
+def resolve_signing_key(
+    key_path: Path | None = None,
+    pub_path: Path | None = None,
+    *,
+    store_dir: Path | None = None,
+    create: bool = False,
+) -> SigningKey | None:
+    """Load (or optionally create) the signing key at the resolved paths.
+
+    Returns None when the key is missing or unloadable and ``create`` is False.
+    """
+    kp, pp = resolve_key_paths(key_path, pub_path, store_dir=store_dir)
+    try:
+        return load_or_create_key(kp, pp, create=create)
+    except (FileNotFoundError, RuntimeError, ValueError, KeyError, OSError,
+            json.JSONDecodeError, TypeError):
+        return None
+
+
+def resolve_verify_key(
+    key_path: Path | None = None,
+    pub_path: Path | None = None,
+    *,
+    store_dir: Path | None = None,
+) -> tuple[SigningKey | None, str | None]:
+    """Load the verification key used by recall, verify-facts, and health.
+
+    Path order matches ``resolve_key_paths``. Prefers the private key when
+    present so the verify-cache MAC has secret material (N10018); falls back
+    to the public key (verify-only; Ed25519 cache short-circuit disabled).
+
+    Exception: if the operator named only a public key via
+    ``NOCKBRAIN_SIGNING_PUB`` (and no ``NOCKBRAIN_SIGNING_KEY`` / CLI
+    ``--key``), do not fall through to a default private key of a different
+    identity. recall-eval uses this to verify the committed fixture.
+
+    Returns ``(key, error)``. ``error`` is set when a key file existed but
+    could not be loaded. Both None means signing was never set up.
+    """
+    kp, pp = resolve_key_paths(key_path, pub_path, store_dir=store_dir)
+    env_key = os.environ.get("NOCKBRAIN_SIGNING_KEY", "").strip()
+    env_pub = os.environ.get("NOCKBRAIN_SIGNING_PUB", "").strip()
+    skip_private = (
+        key_path is None
+        and not env_key
+        and bool(env_pub)
+        and pub_path is None
+    )
+    errors: list[str] = []
+    if not skip_private and kp.exists():
+        try:
+            return load_or_create_key(kp, pp, create=False), None
+        except Exception as exc:  # noqa: BLE001 - never break callers on key trouble
+            errors.append(f"{kp}: {exc}")
+    if pp.exists():
+        try:
+            return load_public_key(pp), None
+        except Exception as exc:  # noqa: BLE001 - never break callers on key trouble
+            errors.append(f"{pp}: {exc}")
+    if errors:
+        return None, "; ".join(errors)
+    return None, None
 
 
 # --- signing facts -----------------------------------------------------------
@@ -793,8 +887,9 @@ PARENT_SUSPECT = "parent-suspect"
 # suffix is bumped whenever the digest scheme changes so stale sidecars are
 # rejected wholesale by _verify_cache.CACHE_VERSION; v2 switched the digest
 # from a plain sha256 of public inputs to an HMAC keyed under the verifying key
-# material (see cache_digest) to close a sidecar-forgery bypass.
-_CACHE_DOMAIN = b"nockbrain-verify-cache-v2"
+# material (see cache_digest) to close a sidecar-forgery bypass. v3 keys the
+# Ed25519 HMAC on private-key bytes instead of the public key (N10018).
+_CACHE_DOMAIN = b"nockbrain-verify-cache-v3"
 
 
 def is_cacheable_signature(signature_hex: Any) -> bool:
@@ -836,14 +931,14 @@ def cache_digest(key: SigningKey, signature_hex: str, payload: bytes,
     It is an HMAC keyed under ``key.cache_key_material()`` (NOT a bare hash of
     public inputs): every non-keyed input here (alg, the public key_id
     fingerprint, the signature, the payload, the status label) is computable
-    by anyone who can read facts.json. Keying the digest under the verifying
-    key material means a forged sidecar entry cannot mint a VALID result
-    without read access to the key file — restoring the intended 'forging
-    the cache needs the same access as replacing the key' property even when
-    the key sits on a protected path. ``signature_hex`` is a caller-validated
-    hex string (see is_cacheable_signature), so the NUL-joined field encoding
-    is unambiguous (hex/alg/fingerprint/status bytes contain no NUL and the
-    variable-length payload comes last)."""
+    by anyone who can read facts.json. Keying the digest under secret
+    material (Ed25519 private bytes, or the HMAC shared secret) means a
+    forged sidecar entry cannot mint a VALID result without read access to
+    the private key file. Public-only Ed25519 keys have no cache material —
+    callers must skip the short-circuit. ``signature_hex`` is a
+    caller-validated hex string (see is_cacheable_signature), so the
+    NUL-joined field encoding is unambiguous (hex/alg/fingerprint/status
+    bytes contain no NUL and the variable-length payload comes last)."""
     fields = [
         _CACHE_DOMAIN,
         key.alg.encode("utf-8"),
@@ -855,7 +950,10 @@ def cache_digest(key: SigningKey, signature_hex: str, payload: bytes,
         fields.append(status.encode("utf-8"))
     fields.append(payload)
     preimage = b"\0".join(fields)
-    return hmac.new(key.cache_key_material(), preimage, hashlib.sha256).hexdigest()
+    material = key.cache_key_material()
+    if not material:
+        raise ValueError("cache_digest requires secret cache-key material")
+    return hmac.new(material, preimage, hashlib.sha256).hexdigest()
 
 
 def _cached_signature_status(
@@ -876,7 +974,12 @@ def _cached_signature_status(
     """
     digest_valid = None
     digest_fail = None
-    if verified_cache is not None and is_cacheable_signature(signature):
+    can_cache = (
+        verified_cache is not None
+        and is_cacheable_signature(signature)
+        and key.cache_key_material() is not None
+    )
+    if can_cache:
         digest_valid = cache_digest(key, signature, payload)
         if verified_cache.hit(digest_valid):
             return VALID

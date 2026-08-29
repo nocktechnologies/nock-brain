@@ -73,20 +73,22 @@ recall — so a stuck store cannot fill hook-errors.log.
 
 Threat model: the sidecar lives next to facts.json and is attacker-writable,
 so a forged entry must never be able to mint a VALID result. It cannot: the
-digest is an HMAC keyed under _sign.SigningKey.cache_key_material() (the raw
-Ed25519 public-key bytes, or the HMAC secret), so computing a digest that
-hit()s requires READING the key file — the very access that would let an
-attacker delete/replace the key and disable verification anyway. A truncated,
-public key_id is embedded in every attestation, but that alone is not enough to
-key the HMAC, so an attacker with only facts.json (+ sidecar) write access —
-the case that matters when the key lives on a protected path via
-NOCKBRAIN_SIGNING_PUB/KEY — cannot forge a bypass. (An earlier design keyed the
-digest on public inputs only and WAS forgeable in that split-key posture, even
-under --strict-verify; the HMAC keying closes it, and CACHE_VERSION was bumped
-so pre-fix sidecars are rejected.) The sidecar holds only opaque digests, no
-fact content. purge-fact unlinks the sidecar wholesale (no fact-id mapping
-to drop rows) and the next recall cold-starts; a dirty save still prunes
-to this-run live set if the sidecar is left in place.
+digest is an HMAC keyed under _sign.SigningKey.cache_key_material() (Ed25519
+private-key bytes, or the HMAC secret). Public-only Ed25519 keys have no
+cache material, so the short-circuit is skipped and every signature is
+checked. Computing a digest that hit()s requires READING the private key
+file — the very access that would let an attacker sign forged facts
+anyway. A truncated, public key_id is embedded in every attestation, but
+that alone is not enough to key the HMAC, so an attacker with only
+facts.json (+ sidecar) write access and the public key — the case that
+matters when the key lives on a protected path via NOCKBRAIN_SIGNING_KEY —
+cannot forge a bypass. (v2 keyed the HMAC on Ed25519 public-key bytes and
+WAS forgeable by a store-dir writer who could read .pub; v3 closed that.
+CACHE_VERSION was bumped so pre-fix sidecars are rejected.) The sidecar
+holds only opaque digests, no fact content. purge-fact unlinks the sidecar
+wholesale (no fact-id mapping to drop rows) and the next recall cold-starts;
+a dirty save still prunes to this-run live set if the sidecar is left in
+place.
 """
 # Deferred annotations keep this module importable on Python 3.9 (stock macOS
 # /usr/bin/python3): it is reachable from the memory-inject hook's hot path.
@@ -106,7 +108,7 @@ if str(Path(__file__).resolve().parent) not in sys.path:
 
 from _store import FILE_MODE, secure_write_json_atomic  # noqa: E402,F401
 
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 
 # Leftover mkstemp files from a SIGKILL'd save() (the memory-inject hook's
 # caller does not run Python finally/except). Sweep anything matching this
@@ -398,14 +400,25 @@ def _typed_store(value):
     return {"mtime_ns": mtime_ns, "size": size}
 
 
-def _sidecar_header_ok(doc, key_id, alg) -> bool:
+def _sidecar_shape_ok(doc) -> bool:
+    """Version + digests-list shape, without key identity.
+
+    Shared by sidecar_status (when no verify key is loaded) and
+    _sidecar_header_ok so health and the recall loader cannot drift (N10031).
+    """
     return (
         isinstance(doc, dict)
         and _json_int(doc.get("version")) == CACHE_VERSION
-        and doc.get("key_id") == key_id
-        and doc.get("alg") == alg
         and isinstance(doc.get("digests"), list)
         and all(isinstance(d, str) for d in doc["digests"])
+    )
+
+
+def _sidecar_header_ok(doc, key_id, alg) -> bool:
+    return (
+        _sidecar_shape_ok(doc)
+        and doc.get("key_id") == key_id
+        and doc.get("alg") == alg
     )
 
 
@@ -513,22 +526,29 @@ def _warn_save(path: Path, exc: BaseException) -> None:
     )
 
 
-def sidecar_status(store_path: Path) -> dict:
+def sidecar_status(store_path: Path, *, key_id: str | None = None,
+                   alg: str | None = None) -> dict:
     """present / fresh / writable / reason for nockbrain-health.
 
     A missing sidecar is a cold start, not an outage. An uncreated
     parent directory is the same case: writable is False (nowhere to
     persist) but flagged is False (not an outage). An unwritable
     existing parent is the silent degradation this surfaces: every new
-    process re-verifies. Fresh means the sidecar's recorded store stamp
-    matches the current store (mtime_ns, size) — informational after
-    per-entry retention.
+    process re-verifies. Fresh means the sidecar is loadable by recall
+    (same header predicate as _load_digests) AND its recorded store
+    stamp matches the current store.
 
     When present but not fresh, reason names why: "stale_stamp" (the
-    recorded stamp moved), "oversized" (refused unread), or
-    "unreadable" (read or parse failure). reason is None when the
-    sidecar is fresh or absent — absence is not a not-fresh reason.
-    Does not affect recall_ready."""
+    recorded stamp moved), "oversized" (refused unread), "unreadable"
+    (read or parse failure), or "rejected" (parsed but header/shape
+    would fail the loader — wrong version, key_id, alg, or digests
+    shape). reason is None when the sidecar is fresh or absent —
+    absence is not a not-fresh reason. Does not affect recall_ready.
+
+    ``key_id`` / ``alg`` come from the shared verify-key resolver when
+    health has a key; without them, freshness still requires the shared
+    shape predicate so a malformed digests field cannot report fresh.
+    """
     store_path = Path(store_path)
     path = cache_path_for(store_path)
     present = path.is_file()
@@ -560,16 +580,18 @@ def sidecar_status(store_path: Path) -> dict:
                         _typed_store(doc.get("store"))
                         if isinstance(doc, dict) else None
                     )
-                    if (
-                        isinstance(doc, dict)
-                        and _json_int(doc.get("version")) == CACHE_VERSION
-                        and recorded is not None
-                    ):
+                    if key_id is not None and alg is not None:
+                        usable = _sidecar_header_ok(doc, key_id, alg)
+                    else:
+                        usable = _sidecar_shape_ok(doc)
+                    if usable and recorded is not None:
                         if current is not None and recorded == current:
                             fresh = True
                             reason = None
                         else:
                             reason = "stale_stamp"
+                    elif not usable:
+                        reason = "rejected"
         except Exception:  # noqa: BLE001 - unreadable sidecar is not fresh
             fresh = False
             reason = "unreadable"
