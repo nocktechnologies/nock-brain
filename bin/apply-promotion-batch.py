@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib.util as _ilu
 import json
 import os
 import subprocess  # nosec B404 - only invokes trusted sibling bin/ CLIs
@@ -36,7 +37,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-import importlib.util as _ilu
+from _store import secure_write_json  # noqa: E402
 
 _spec = _ilu.spec_from_file_location("extract_facts", BIN_DIR / "extract-facts.py")
 _extract_facts = _ilu.module_from_spec(_spec)
@@ -149,7 +150,7 @@ def run(argv: list[str] | None = None) -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup = facts_path.with_name(f"facts.json.bak-preapply-{stamp}")
     backup.write_bytes(facts_path.read_bytes())
-    facts_path.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
+    secure_write_json(facts_path, store, ensure_ascii=False)
 
     # Re-sign and strict-verify with the store's own toolchain; the batch is
     # recorded applied ONLY after verification passes.
@@ -166,7 +167,7 @@ def run(argv: list[str] | None = None) -> int:
 
     for batch in pending:
         state[str(batch["batch_seq"])] = batch.get("batch_digest", "")
-    state_path.write_text(json.dumps(state, indent=1), encoding="utf-8")
+    secure_write_json(state_path, state, indent=1)
     print(f"applied {len(pending)} batch(es); signed + verified; "
           f"backup {backup.name}")
     return 0

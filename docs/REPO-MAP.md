@@ -14,7 +14,8 @@ v2 `source_date`/`valid_from`/`valid_to`, purge tombstones, `resolve_store`
 basename, `--strict-verify` fail-closed.
 Contract updates 2026-08-29: `load_facts` catches `ValueError` (non-UTF-8);
 JSON-path degradations; sidecar shape guards; dense `fuse` crash → BM25;
-health reports unreadable `facts.json` instead of crashing.
+health reports unreadable `facts.json` instead of crashing; `secure_write_json`
+is atomic (N10027).
 
 ---
 
@@ -132,7 +133,7 @@ never overwritten by a re-extracted `current` copy.
 
 | Module | Owns | Key API |
 |---|---|---|
-| `_store.py` | Filesystem permission discipline (0700/0600) | `secure_mkdir/write_text/write_json/copyfile`; atomic `secure_write_json_atomic` / `secure_replace_text` / `secure_replace_bytes` (mkstemp + chmod 0600 + os.replace; optional `before_replace` skip) |
+| `_store.py` | Filesystem permission discipline (0700/0600) | `secure_mkdir/write_text/write_json/copyfile`; `secure_write_json` **is** atomic (`secure_write_json_atomic`: mkstemp + chmod 0600 + os.replace); `secure_replace_text` / `secure_replace_bytes` (optional `before_replace` skip); `secure_write_text` stays non-atomic |
 | `_facts.py` | The v1 fact-record contract, defensive loading, bi-temporal validity, agent ownership | `REQUIRED_FACT_FIELDS`, `RECALL_ITEM_FIELDS`, `load_facts` (`on_unreadable` callback on I/O/parse failure), `fill_source_date` (v2 `source_time` → operational `source_date`), `fact_currently_valid` (v1 `valid_at`/`invalid_at` **and** v2 `valid_from`/`valid_to`), `fact_source` (default `"mira"`), `content_tokens`, `jaccard`, `malformed_fact_reason`, `load_jsonl_ids` / `TOMBSTONES_FILENAME` |
 | `_scrub.py` | Secret redaction + structural-noise discrimination, shared by EVERY extraction path | `scrub_secrets`, `is_structural_noise`, `SECRET_PATTERNS` |
 | `_sign.py` (977 L) | Both attestation contracts, keys, canonicalization, the verification state machine | `sign_facts` (per-fact routing), `sign_fact`, `sign_claim_fact_v2` (also fills `source_date` from `source_time`), `is_v2_claim_fact`, `verify_fact` → `VALID/TAMPERED/UNSIGNED/PARENT_SUSPECT`, `verify_facts(..., verified_cache=None)` (caching is a property of verification; the offline auditor passes None), `load_or_create_key`, `resolve_key_paths` / `resolve_signing_key` / `resolve_verify_key` (shared env-aware resolver: CLI > `NOCKBRAIN_SIGNING_KEY`/`_PUB` > store_dir/`~/.nock-brain`), `SigningKey.cache_key_material()` (Ed25519 private bytes or `None` if pub-only), verifier receipts |
@@ -147,8 +148,10 @@ never overwritten by a re-extracted `current` copy.
 
 Per-module invariants worth memorizing:
 
-- `_store.secure_write_text` is **not atomic** (write then chmod). Atomic
-  writers go through `secure_write_json_atomic` / `secure_replace_text` /
+- `_store.secure_write_text` is **not atomic** (write then chmod). JSON writes
+  go through `secure_write_json`, which is `secure_write_json_atomic`
+  (mkstemp + chmod 0600 + os.replace) so a kill cannot torn-tail `facts.json`.
+  Bytes/text atomic helpers remain `secure_replace_text` /
   `secure_replace_bytes` (`_verify_cache.save`, `_embed.save_sidecar`).
 - `_facts`: `source` is deliberately not required (would invalidate pre-scoping
   facts). Bi-temporal bounds default open — a malformed bound never breaks

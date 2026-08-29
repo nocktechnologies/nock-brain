@@ -28,8 +28,13 @@ def secure_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None
     path.chmod(FILE_MODE)
 
 
-def secure_write_json(path: Path, value: Any, **json_kwargs: Any) -> None:
-    secure_write_text(path, json.dumps(value, **json_kwargs))
+def secure_write_json(path: Path, value: Any, **json_kwargs: Any) -> bool:
+    """Atomic owner-only JSON write (mode FILE_MODE).
+
+    Authoritative store writes go through here so a kill mid-write cannot
+    torn-tail facts.json (N10027). Markdown/text still uses secure_write_text.
+    """
+    return secure_write_json_atomic(path, value, **json_kwargs)
 
 
 def secure_replace_bytes(

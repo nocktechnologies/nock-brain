@@ -227,6 +227,30 @@ def test_successful_promote_backs_up_before_swap(rebuild_store, tmp_path):
     assert any("facts.json.bak-" in b for b in result["backed_up"])
 
 
+def test_move_into_place_does_not_unlink_live_file_before_replace(
+        rebuild_store, tmp_path, monkeypatch):
+    """N10027: unlink-then-move leaves a window where live facts.json is gone.
+    File promotes must rename over the destination."""
+    src = tmp_path / "staging" / "facts.json"
+    src.parent.mkdir()
+    src.write_text('[{"id": "new"}]', encoding="utf-8")
+    dst = tmp_path / "live" / "facts.json"
+    dst.parent.mkdir()
+    dst.write_text('[{"id": "old"}]', encoding="utf-8")
+
+    unlinked = []
+    real_unlink = Path.unlink
+
+    def tracking_unlink(self, *args, **kwargs):
+        unlinked.append(str(self.resolve()) if self.exists() else str(self))
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", tracking_unlink)
+    rebuild_store._move_into_place(src, dst)
+    assert json.loads(dst.read_text(encoding="utf-8"))[0]["id"] == "new"
+    assert str(dst.resolve()) not in unlinked
+
+
 def test_promote_into_empty_store_creates_no_backups(rebuild_store, tmp_path):
     """First-ever promote (no existing live store) swaps in without backups."""
     store_dir = tmp_path / "live"  # does not exist yet
