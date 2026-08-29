@@ -114,7 +114,7 @@ def make_id(content: str, date: str) -> str:
 # deliberately: free-form host strings drift ("mac-kevin" vs "macbook") and
 # poison cross-machine reconciliation. Adding a machine = adding a line here,
 # in a PR, on purpose.
-KNOWN_MACHINES = {"mac-kevin", "fleet-02"}
+KNOWN_MACHINES = {"mac-kevin", "fleet-02", "kevins-linux"}
 
 
 def machine_tag() -> str:
