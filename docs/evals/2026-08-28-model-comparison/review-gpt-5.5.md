@@ -1,0 +1,65 @@
+# Skeptical Review of the Fix Train
+
+## Finding 1: Recall ignores signed revocations and can inject resurrected facts
+
+Severity: critical
+
+Citations: `bin/_sign.py:171`, `bin/_sign.py:177`, `bin/_sign.py:180`, `bin/budget-recall.py:634`, `bin/budget-recall.py:635`, `bin/budget-recall.py:637`, `bin/budget-recall.py:639`, `bin/budget-recall.py:643`, `bin/_revoke.py:143`, `bin/_revoke.py:165`, `bin/_revoke.py:167`, `bin/verify-facts.py:96`, `bin/verify-facts.py:106`, `bin/verify-facts.py:157`, `bin/verify-facts.py:158`, `bin/verify-facts.py:159`.
+
+Concrete failure scenario: revocation events are signed specifically because legacy fact attestations do not cover mutable lifecycle fields. The legacy signed core is only `id`, `kind`, and `content` (`bin/_sign.py:171`, `bin/_sign.py:177`, `bin/_sign.py:180`), so flipping a superseded fact back to `status: current` does not break the fact signature. `budget-recall` only calls `_sign.verify_facts` and filters `TAMPERED` statuses (`bin/budget-recall.py:634`, `bin/budget-recall.py:635`, `bin/budget-recall.py:637`, `bin/budget-recall.py:639`, `bin/budget-recall.py:643`); it never audits `revocations.jsonl`. The offline verifier does run the revocation audit (`bin/verify-facts.py:96`, `bin/verify-facts.py:106`) and exits non-zero when `blocking_findings` reports resurrected facts (`bin/verify-facts.py:157`, `bin/verify-facts.py:158`, `bin/verify-facts.py:159`), but production recall does not use that path. A current fact whose id appears in a trusted revocation event is exactly the `resurrected` case the revocation layer defines (`bin/_revoke.py:143`, `bin/_revoke.py:165`, `bin/_revoke.py:167`), yet recall will still return it.
+
+How I verified it: I created a temporary signed fact, appended a valid signed revocation event for that fact, then left the fact in `facts.json` as `status: current`. `python3 bin/verify-facts.py --facts ... --revocations ...` exited `4` and reported `1 RESURRECTED`. The same store passed through `python3 bin/budget-recall.py --facts ... old pricing` with exit `0` and injected the revoked content `pricing uses old flat fee`, with no stderr warning. This proves the signed revocation sidecar protects the offline audit but not the production injection path.
+
+## Finding 2: v2 claim `valid_to`/`valid_from` windows are verified but not enforced by recall
+
+Severity: high
+
+Citations: `bin/_sign.py:307`, `bin/_sign.py:308`, `bin/_sign.py:309`, `bin/_sign.py:332`, `bin/_sign.py:333`, `bin/_facts.py:131`, `bin/_facts.py:142`, `bin/_facts.py:143`, `bin/_facts.py:144`, `bin/_facts.py:146`, `bin/budget-recall.py:427`, `bin/budget-recall.py:433`, `bin/budget-recall.py:434`.
+
+Concrete failure scenario: v2 claim authority signs `valid_from` and `valid_to` (`bin/_sign.py:307`, `bin/_sign.py:308`, `bin/_sign.py:309`, `bin/_sign.py:332`, `bin/_sign.py:333`), but default recall's validity gate calls `fact_currently_valid` (`bin/budget-recall.py:427`, `bin/budget-recall.py:433`, `bin/budget-recall.py:434`). That helper only reads legacy `valid_at` and `invalid_at` (`bin/_facts.py:131`, `bin/_facts.py:142`, `bin/_facts.py:143`, `bin/_facts.py:144`, `bin/_facts.py:146`). A v2 claim whose signed `valid_to` is in the past but lacks `invalid_at` is treated as unbounded and current. That silently returns expired authority facts even though their v2 contract contains the correct expiry field.
+
+How I verified it: I signed a synthetic v2 claim with `valid_from=2026-07-01T00:00:00.000000Z`, `valid_to=2026-07-02T00:00:00.000000Z`, `status=current`, and `source_date=2026-07-01`. `_sign.verify_fact` returned `valid`. Running `python3 bin/budget-recall.py --facts ... pricing expired` after that expiry still returned `pricing uses expired seat rule`. No error or warning was emitted because the recall gate never looks at the signed v2 window fields.
+
+## Finding 3: Under SQLite cutover, `insights.json` is resolved to `brain.db` and real insights disappear
+
+Severity: high
+
+Citations: `bin/budget-recall.py:862`, `bin/budget-recall.py:865`, `bin/budget-recall.py:870`, `bin/budget-recall.py:881`, `bin/budget-recall.py:884`, `bin/budget-recall.py:670`, `bin/budget-recall.py:673`, `bin/budget-recall.py:674`, `bin/budget-recall.py:689`, `bin/_storeback.py:310`, `bin/_storeback.py:311`, `bin/_storeback.py:312`, `bin/_storeback.py:318`, `bin/_storeback.py:319`.
+
+Concrete failure scenario: `select_recall` loads insights by passing `insights_file` through the same `_load` helper used for the authoritative fact store (`bin/budget-recall.py:862`, `bin/budget-recall.py:865`, `bin/budget-recall.py:870`). `_load` always calls `resolve_store(path)` (`bin/budget-recall.py:670`, `bin/budget-recall.py:673`, `bin/budget-recall.py:674`, `bin/budget-recall.py:689`). With a `store-v2` marker and `brain.db` in the same directory, `resolve_store` ignores the basename of the path, derives the store directory, and returns `SqliteStore(brain.db)` (`bin/_storeback.py:310`, `bin/_storeback.py:311`, `bin/_storeback.py:312`, `bin/_storeback.py:318`, `bin/_storeback.py:319`). Therefore the "insights" load reads the fact database, not `insights.json`. The real insight records are missing, and the raw facts can be duplicated because recall prepends `insight_results` before `fact_results` (`bin/budget-recall.py:881`, `bin/budget-recall.py:884`).
+
+How I verified it: I created a temp store with one raw fact in `facts.json`, one consolidated insight in `insights.json` covering that fact, then built `brain.db` from only the raw fact and touched `store-v2`. In JSON mode, `budget_recall(..., insights_file=insights.json)` returned just the insight `pricing strategy repeatedly converged on seat based billing`. With `store-v2` present, the same call returned the raw decision twice and did not return the insight at all. This is silent recall degradation: no exception, no health flag, and the result looks superficially successful.
+
+## Finding 4: Promotion batches are applied to `facts.json` even when production recall reads SQLite
+
+Severity: high
+
+Citations: `bin/apply-promotion-batch.py:117`, `bin/apply-promotion-batch.py:119`, `bin/apply-promotion-batch.py:145`, `bin/apply-promotion-batch.py:147`, `bin/apply-promotion-batch.py:148`, `bin/apply-promotion-batch.py:152`, `bin/apply-promotion-batch.py:163`, `bin/apply-promotion-batch.py:165`, `bin/budget-recall.py:673`, `bin/budget-recall.py:674`, `bin/_storeback.py:318`, `bin/_storeback.py:319`.
+
+Concrete failure scenario: the promotion-batch applier directly reads and writes `store_dir/facts.json` (`bin/apply-promotion-batch.py:117`, `bin/apply-promotion-batch.py:119`, `bin/apply-promotion-batch.py:145`, `bin/apply-promotion-batch.py:147`, `bin/apply-promotion-batch.py:148`) and records the batch as applied after its JSON-only sign/verify subprocesses return success (`bin/apply-promotion-batch.py:152`, `bin/apply-promotion-batch.py:163`, `bin/apply-promotion-batch.py:165`). It never calls the backend contract. Once `store-v2` selects `brain.db`, production recall uses `_storeback.resolve_store` through `budget-recall` (`bin/budget-recall.py:673`, `bin/budget-recall.py:674`, `bin/_storeback.py:318`, `bin/_storeback.py:319`). The command can therefore report a batch applied, update the idempotency state, and still leave production recall unable to see any of the newly promoted facts.
+
+How I verified it: I created a temp store with `facts.json`, `brain.db`, and `store-v2`, then monkeypatched only `fetch_batches` to avoid network and let the real `sign-facts.py`/`verify-facts.py` subprocesses run. `apply_promotion_batch.run(...)` printed `applied 1 batch(es); signed + verified`; `facts.json` contained `['old', 'new']`; `brain.db` still contained only `['old']`. A production-style `budget_recall('batch promoted pricing', facts.json, ...)` returned no recall even though the batch was recorded as applied.
+
+## Finding 5: A malformed-but-loadable embedding sidecar can crash semantic recall instead of falling back to BM25
+
+Severity: medium
+
+Citations: `bin/_embed.py:175`, `bin/_embed.py:176`, `bin/_embed.py:177`, `bin/_embed.py:178`, `bin/_embed.py:180`, `bin/_embed.py:184`, `bin/_embed.py:188`, `bin/_dense_recall.py:75`, `bin/_dense_recall.py:77`, `bin/_dense_recall.py:85`, `bin/_dense_recall.py:92`, `bin/_dense_recall.py:122`, `bin/_dense_recall.py:126`, `bin/budget-recall.py:810`, `bin/budget-recall.py:811`, `bin/budget-recall.py:812`, `hooks/memory-inject.sh:86`, `hooks/memory-inject.sh:87`, `hooks/memory-inject.sh:88`.
+
+Concrete failure scenario: `_embed.load_sidecar` accepts a `.npz` as long as it can load `ids`, `hashes`, `model`, and `mat`, and only checks that `len(ids) == mat.shape[0]` (`bin/_embed.py:175`, `bin/_embed.py:176`, `bin/_embed.py:177`, `bin/_embed.py:178`, `bin/_embed.py:180`, `bin/_embed.py:184`, `bin/_embed.py:188`). It does not check that `len(hashes) == len(ids)` or that the matrix dimension matches the encoder. `_dense_recall.fuse` catches `EmbedUnavailable` around encoder/sidecar loading (`bin/_dense_recall.py:75`, `bin/_dense_recall.py:77`) and handles a `None` sidecar (`bin/_dense_recall.py:85`), but after that it assumes the arrays are aligned. It indexes `sidecar["ids"][idx]` and `sidecar["hashes"][idx]` in the dense loop (`bin/_dense_recall.py:122`, `bin/_dense_recall.py:126`). `budget-recall` does not wrap `_dense_recall.fuse` in a fallback catch (`bin/budget-recall.py:810`, `bin/budget-recall.py:811`, `bin/budget-recall.py:812`). In the hook, a failed recall command produces an empty command substitution and the hook returns `{}` (`hooks/memory-inject.sh:86`, `hooks/memory-inject.sh:87`, `hooks/memory-inject.sh:88`), so a corrupt derived sidecar can silently turn all semantic-on recalls into no injected memory instead of flat BM25.
+
+How I verified it: in-process, I set `NOCKBRAIN_EMBED_STUB=1`, patched `_embed.DEFAULT_SIDECAR` to a temp `.npz` with one `id`, zero `hashes`, model `stub-hash-32`, and a one-row 32-dimensional matrix, then called `budget_recall(..., semantic=True)`. The lexical fact matched BM25, but semantic fusion raised `IndexError: list index out of range` at the hash lookup instead of returning the flat BM25 result. That is exactly the corruption class the sidecar loader should reject as unusable.
+
+## Finding 6: The signing and verification CLIs can certify the wrong store after SQLite selection
+
+Severity: medium
+
+Citations: `bin/sign-facts.py:54`, `bin/sign-facts.py:55`, `bin/sign-facts.py:63`, `bin/sign-facts.py:64`, `bin/sign-facts.py:66`, `bin/sign-facts.py:67`, `bin/verify-facts.py:70`, `bin/verify-facts.py:71`, `bin/verify-facts.py:90`, `bin/budget-recall.py:670`, `bin/budget-recall.py:673`, `bin/budget-recall.py:674`, `bin/_storeback.py:316`, `bin/_storeback.py:317`, `bin/_storeback.py:318`, `bin/_storeback.py:319`.
+
+Concrete failure scenario: `sign-facts.py` and `verify-facts.py` operate directly on the JSON file passed as `--facts` (`bin/sign-facts.py:54`, `bin/sign-facts.py:55`, `bin/sign-facts.py:63`, `bin/sign-facts.py:64`, `bin/sign-facts.py:66`, `bin/sign-facts.py:67`, `bin/verify-facts.py:70`, `bin/verify-facts.py:71`, `bin/verify-facts.py:90`). They do not use `_storeback.resolve_store`. Production recall does use that resolver (`bin/budget-recall.py:670`, `bin/budget-recall.py:673`, `bin/budget-recall.py:674`), and SQLite is selected by either `NOCKBRAIN_STORE=sqlite` or `store-v2` plus `brain.db` (`bin/_storeback.py:316`, `bin/_storeback.py:317`, `bin/_storeback.py:318`, `bin/_storeback.py:319`). After cutover, an operator can re-sign and verify `facts.json` successfully while `brain.db`, the store recall actually reads, remains unsigned, stale, or divergent. In default recall this quietly allows unsigned database facts; in strict recall it can drop them despite the signing command having just reported success.
+
+How I verified it: the promotion-batch reproduction above exercises the same split-brain: JSON was updated and the applier's JSON-only sign/verify step was considered successful, while `brain.db` stayed unchanged and production recall missed the new fact. I also traced the direct JSON read/write calls in both CLIs and confirmed there is no backend resolution in those files.
+
+## Overall verdict
+
+The fix train did close several real classes of bugs, especially around per-entry verification-cache retention and v2 signing route selection, but it left dangerous seams between layers. The cache itself is better tested than the systems around it; the weaker spots are where derived sidecars, revocation authority, v2 authority windows, and the optional SQLite backend meet production recall. The highest-risk pattern is split-brain behavior: offline tools can report signed/verified/applied while the hot path reads a different artifact or ignores the sidecar that gives the signature meaning. I would not trust this train as production-safe until recall enforces revocations and v2 validity, and every mutator/auditor either uses the backend contract or explicitly refuses to run under SQLite cutover.
