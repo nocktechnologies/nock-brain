@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build the committed, signed recall-eval fixture store from a source store.
+"""Build a signed recall-eval fixture slice from a source store — LOCAL ONLY.
+
+WARNING (public repo): this tool only *secret*-scrubs; its output still contains
+real memory prose, paths, and labels. DO NOT COMMIT its output. The committed
+public fixture must be SYNTHETIC — regenerate it with bin/scrub-recall-fixture.py
+instead. Use this tool only for local experiments against your own store.
 
 DEV / MAINTAINER TOOL, not run in CI. It reads a source fact store READ-ONLY
 (default: the live ~/.nock-brain/facts.json) and writes a small, self-contained
