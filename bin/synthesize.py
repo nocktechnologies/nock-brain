@@ -165,9 +165,13 @@ def is_valid_lesson(text: str) -> bool:
     """True iff ``text`` reads like a durable lesson, not a chat reply.
 
     Rejects empty/too-short output, questions (a lesson asserts, it doesn't
-    ask), and known chat/meta shapes. Deterministic and dependency-free so it
-    runs identically in the hook floor."""
+    ask), known chat/meta shapes, and output echoing a registered judge
+    template (a marker-carrying "lesson" would re-plant the N10052 leak at
+    generation). Deterministic and dependency-free so it runs identically in
+    the hook floor."""
     if not isinstance(text, str):
+        return False
+    if any(marker in text for marker in JUDGE_PROMPT_MARKERS):
         return False
     # Normalize smart quotes/apostrophes and strip surrounding quotes FIRST:
     # a quote-wrapped question ends with '"' not '?', and a curly-apostrophe

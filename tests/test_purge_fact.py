@@ -503,3 +503,83 @@ def test_purge_pattern_does_not_match_signature_hex(tmp_path):
     )
     assert json.loads(facts.read_text())[0]["id"] == "keep"
 
+
+
+def test_purge_sweeps_contaminated_insight_and_reports_counts(tmp_path):
+    """N10052 residual: contaminated clusters quote a leaked judge-prompt fact
+    verbatim in content's "Most recent:" excerpt while citing already-absent
+    facts — and the summary line printed no insight count, so whether the
+    match fired was invisible in receipts. Locks in: the content match sweeps
+    the contaminated shape (keyword-only themes never match), counts are
+    reported, and a zero-fact-match apply still leaves facts.json alone."""
+    facts = tmp_path / "facts.json"
+    events = tmp_path / "events.jsonl"
+    notes = tmp_path / "sessions"
+    vault = tmp_path / "vault"
+    notes.mkdir()
+    vault.mkdir()
+    facts.write_text(json.dumps([
+        {
+            "id": "keep",
+            "kind": "decision",
+            "status": "current",
+            "confidence": 0.9,
+            "content": "Kevin kept safe memory",
+            "source_date": "2026-06-12",
+            "evidence": [],
+        },
+    ]))
+    events.write_text("")
+    template = "Two memory facts from the same project, EARLIER then LATER."
+    (tmp_path / "insights.json").write_text(json.dumps([
+        {
+            # the real N10052 shape: mostly-genuine cluster whose latest
+            # member was a leaked prompt fact, quoted verbatim in content
+            "id": "ins-contaminated",
+            "kind": "insight",
+            "status": "current",
+            "confidence": 0.9,
+            "theme": "directive, recurring, lesson, sentence, clean",
+            "content": f"Recurring directive (seen 33x): directive, recurring. "
+                       f"Most recent: {template}",
+            "source_date": "2026-08-01",
+            "source_ids": ["already-purged-fact"],
+        },
+        {
+            # keyword-coincidence theme, clean content: must survive
+            "id": "ins-keep",
+            "kind": "insight",
+            "status": "current",
+            "confidence": 0.9,
+            "theme": "memory, facts, project, earlier, later",
+            "content": "recurring safe memory",
+            "source_date": "2026-06-12",
+            "source_ids": ["keep"],
+        },
+    ]))
+
+    argv = [
+        sys.executable,
+        str(REPO / "bin" / "purge-fact.py"),
+        "--pattern", template,
+        "--facts", str(facts),
+        "--events", str(events),
+        "--notes-dir", str(notes),
+        "--vault", str(vault),
+        "--sidecar", str(tmp_path / "embeddings.npz"),
+    ]
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+
+    dry = subprocess.run(argv, cwd=REPO, env=env, text=True,
+                         capture_output=True, check=True)
+    assert "1 insight(s)" in dry.stdout
+    # dry-run must not touch the file
+    assert len(json.loads((tmp_path / "insights.json").read_text())) == 2
+
+    wet = subprocess.run(argv + ["--apply"], cwd=REPO, env=env, text=True,
+                         capture_output=True, check=True)
+    assert "1 insight(s)" in wet.stdout
+    insights = json.loads((tmp_path / "insights.json").read_text())
+    assert [item["id"] for item in insights] == ["ins-keep"]
+    # zero fact matches: the fact store must be untouched (N10028)
+    assert [f["id"] for f in json.loads(facts.read_text())] == ["keep"]

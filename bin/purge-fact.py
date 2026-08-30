@@ -145,7 +145,17 @@ def purge_sidecar(path: Path, removed_ids: set[str], apply: bool) -> tuple[str, 
 def purge_insights(
     path: Path, removed_ids: set[str], patterns: list[str],
 ) -> tuple[list[dict[str, Any]] | None, int]:
-    """Drop insights that cite a purged fact or still carry its content."""
+    """Drop insights that cite a purged fact or still carry its content.
+
+    The content match covers the N10052 contaminated-cluster shape: the
+    heuristic quotes the latest member in "Most recent: ...", so an insight
+    whose cluster included a leaked judge-prompt fact carries the template
+    verbatim in ``content`` even when most members are genuine. Dropping it
+    is safe — insights are derived and the next synthesize regenerates the
+    cluster cleanly from the surviving members. (``theme`` is deliberately
+    NOT matched: cluster_theme is a top-5 keyword join and can never carry a
+    full pattern sentence, so a theme match could only fire on keyword
+    coincidence.)"""
     if not path.exists():
         return None, 0
     try:
@@ -295,7 +305,8 @@ def run(argv: list[str] | None = None) -> int:
         f"{'would remove' if not args.apply else 'removed'} "
         f"{removed_facts} fact(s), {removed_events} event(s), "
         f"{removed_note_lines} note line(s), {removed_vault_lines} vault line(s), "
-        f"{'all' if removed_vectors < 0 else removed_vectors} vector(s)"
+        f"{'all' if removed_vectors < 0 else removed_vectors} vector(s), "
+        f"{removed_insights} insight(s), {removed_graph} graph item(s)"
     )
     if sidecar_note:
         print(sidecar_note, file=sys.stderr)
