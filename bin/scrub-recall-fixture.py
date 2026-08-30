@@ -47,7 +47,7 @@ def marker(i):  # unique bigram for index i (< 24*24 = 576)
     return f"{ADJ[i % len(ADJ)]} {NOUN[(i // len(ADJ)) % len(NOUN)]}"
 
 def synth(fid, kind, marker_phrase, *, reps=1, filler=True):
-    dom = DOMAINS[int(hashlib.sha1(fid.encode()).hexdigest(), 16) % len(DOMAINS)]
+    dom = DOMAINS[int(hashlib.sha1(fid.encode(), usedforsecurity=False).hexdigest(), 16) % len(DOMAINS)]
     body = f"Synthetic {kind} record concerning the {marker_phrase} {dom}. " * reps
     tail = (f"The {dom} {VERB.get(kind, 'is tracked for the digest')}; this is "
             "placeholder content in the public test fixture and contains no real "
@@ -88,7 +88,7 @@ def main():
     # while preserving the session grouping companionship depends on. Each
     # distinct original session/anchor maps to a stable synthetic token.
     def tok(prefix, v):
-        return prefix + hashlib.sha1(str(v).encode()).hexdigest()[:8]
+        return prefix + hashlib.sha1(str(v).encode(), usedforsecurity=False).hexdigest()[:8]
     # idempotent: a value already carrying the synthetic prefix is left as-is,
     # so re-running (or running on prior output) is stable.
     sess_map, anchor_map = {}, {}
