@@ -50,6 +50,7 @@ from _facts import content_tokens, fact_currently_valid
 from _scrub import scrub_secrets
 from _store import secure_mkdir, secure_write_json, secure_write_text
 from _storeback import resolve_store
+from _scrub import JUDGE_PROMPT_MARKERS
 from synthesize import DEFAULT_LLM_MODEL, DEFAULT_LLM_TIMEOUT, _call_claude
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
@@ -156,7 +157,7 @@ def make_claude_judge(model: str = DEFAULT_LLM_MODEL,
     borderline — the pass degrades, never crashes."""
     def _judge(early: str, late: str) -> str:
         prompt = (
-            "Two memory facts from the same project, EARLIER then LATER.\n"
+            JUDGE_PROMPT_MARKERS[1] + "\n"
             "Does the LATER one contradict or replace the EARLIER one, such that "
             "the earlier fact is now stale and should be marked superseded?\n"
             "Answer on the first line exactly `VERDICT: yes`, `VERDICT: no`, or "

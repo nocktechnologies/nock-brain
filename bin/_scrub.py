@@ -26,6 +26,21 @@ _STRUCTURAL_NOISE_PREFIXES = (
 # (e.g. an [INSIGHT] note that happened to open with '==='). Note '[{"' is NOT
 # matched here ('{' is not A-Z), so JSON-array noise is still caught below.
 _GENUINE_TAG_RE = re.compile(r"^\[[A-Z][A-Z0-9 _/-]*\]")
+
+# N10052: the nightly LLM judges' own prompt templates. The judges run via
+# ``claude -p``; their one-shot transcripts landed under ~/.claude/projects
+# (rebuild-store's default source root) and the prompts were minted back into
+# the store as "facts". These exact sentences are the single source of truth:
+# synthesize.py / detect-contradictions.py BUILD their prompts from them, and
+# is_structural_noise drops any candidate embedding one — the only substring
+# (not prefix) rule in this module, and deliberately checked BEFORE the
+# genuine-[TAG] escape: a leaked injected-insight rendering arrives tagged
+# ("[INSIGHT] Recurring directive (seen 33x): ..."), and no genuine fact ever
+# contains a judge template verbatim.
+JUDGE_PROMPT_MARKERS = (
+    "These notes are the same recurring lesson from past work sessions.",
+    "Two memory facts from the same project, EARLIER then LATER.",
+)
 # 3+ '=' at line start = a bus/shell/verification dump header. Covers
 # '=== AGENT MESSAGE', '=== TELEGRAM', '=== SYSTEM', the generic '=== ...', and
 # longer banners like '===== #8129 FULL ====='.
@@ -49,16 +64,23 @@ def is_structural_noise(content: str) -> bool:
       - matches ^={3,}  (=== ... bus/shell/dump headers), OR
       - matches ^\\d+\\t (cat -n line-numbered file dumps).
 
-    Prefix/pattern-based ONLY (never substring): a genuine fact like
-    "[CORRECTION] ...CRM_AGENT_NAME=mira was passing author_surface=..." must be
-    spared, so we never match 'CRM_AGENT_NAME=' anywhere in the text, and a
-    leading [TAG] is an explicit escape hatch. Empty/whitespace returns False.
+    Prefix/pattern-based with ONE deliberate substring exception: a genuine
+    fact like "[CORRECTION] ...CRM_AGENT_NAME=mira was passing
+    author_surface=..." must be spared, so we never match 'CRM_AGENT_NAME='
+    anywhere in the text, and a leading [TAG] is an explicit escape hatch.
+    The exception is JUDGE_PROMPT_MARKERS (N10052): a full judge-template
+    sentence anywhere in the text — [TAG]ged or not — is always noise, since
+    no genuine fact embeds the tooling's own prompts verbatim.
+    Empty/whitespace returns False.
     """
     if not content:
         return False
     stripped = content.lstrip()
     if not stripped:
         return False
+    # Judge-template check outranks the [TAG] escape (see JUDGE_PROMPT_MARKERS).
+    if any(marker in stripped for marker in JUDGE_PROMPT_MARKERS):
+        return True
     if _GENUINE_TAG_RE.match(stripped):
         return False
     if stripped.startswith(_STRUCTURAL_NOISE_PREFIXES):

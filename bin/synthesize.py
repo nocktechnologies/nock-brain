@@ -41,7 +41,7 @@ BIN_DIR = Path(__file__).resolve().parent
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-from _scrub import scrub_secrets
+from _scrub import JUDGE_PROMPT_MARKERS, scrub_secrets
 from _store import secure_mkdir, secure_write_json
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
@@ -133,7 +133,11 @@ def _call_claude(prompt: str, model: str, timeout: float) -> str:
     """
     try:
         proc = subprocess.run(  # nosec B603 B607 - fixed argv, no shell, trusted local CLI
-            ["claude", "-p", "--model", model, prompt],
+            # N10052: never persist the one-shot session — a persisted judge
+            # transcript lands under the active config dir's projects/ tree,
+            # which rebuild-store scans by default, and the prompt template
+            # gets minted back into the store as "facts".
+            ["claude", "-p", "--model", model, "--no-session-persistence", prompt],
             capture_output=True, text=True, timeout=timeout, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -199,7 +203,7 @@ def make_claude_synthesizer(model: str = DEFAULT_LLM_MODEL,
             f"- {scrub_secrets(f.get('content', ''))[0][:300]}" for f in cluster[:25]
         )
         prompt = (
-            "These notes are the same recurring lesson from past work sessions. "
+            JUDGE_PROMPT_MARKERS[0] + " "
             "Write ONE clear, specific sentence (max 45 words) stating the durable, "
             "reusable lesson — what to do or avoid next time. Output only the "
             "sentence, no preamble or quotes.\n\n" + members
