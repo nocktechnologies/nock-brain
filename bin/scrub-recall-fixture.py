@@ -11,8 +11,10 @@ while preserving every retrieval-relevant structure so the CI gate stays green:
 Run from repo root. Writes fixture + gold + curated suite in place. Local-only.
 """
 from __future__ import annotations
-import collections, hashlib, importlib.util, json, sys
+import collections, hashlib, importlib.util, json, sys, uuid
 from pathlib import Path
+
+SYNTH_NS = uuid.UUID("00000000-0000-0000-0000-5eedf1c70000")  # fixture-only namespace
 
 REPO = Path(__file__).resolve().parent.parent
 BIN = REPO / "bin"
@@ -104,6 +106,24 @@ def main():
         if "category" in f: f["category"] = "synthetic-category"
         if "curated_name" in f and not str(f["curated_name"]).startswith("curated-"):
             f["curated_name"] = tok("curated-", f["curated_name"])
+        # provenance: keep the DATE of every timestamp (retrieval-relevant) but
+        # drop time-of-day cadence, real row/proposal ids, and content digests.
+        # Every replacement is a function of the fact id, so re-runs are stable.
+        for tf in ("created_at", "source_time", "applied_at", "valid_from", "valid_to"):
+            if f.get(tf):  # canonical UTC form claim_payload_v2 requires
+                f[tf] = str(f[tf])[:10] + "T00:00:00.000000Z"
+        if "memory_id" in f:
+            f["memory_id"] = str(uuid.uuid5(SYNTH_NS, f["id"]))
+        if isinstance(f.get("curator"), dict) and "proposal_id" in f["curator"]:
+            f["curator"]["proposal_id"] = int(hashlib.sha256(f["id"].encode()).hexdigest()[:4], 16)
+        for i, e in enumerate(f.get("evidence") or []):
+            if isinstance(e, dict):
+                if "source_id" in e:
+                    e["source_id"] = tok("src-", f"{f['id']}:{i}")
+                if "digest" in e:
+                    e["digest"] = hashlib.sha256(f"synthetic-evidence:{f['id']}:{i}".encode()).hexdigest()
+                if e.get("source_created_at"):
+                    e["source_created_at"] = str(e["source_created_at"])[:10] + "T00:00:00Z"
 
     scrubbed = 0
     for f in facts:
@@ -133,7 +153,11 @@ def main():
         gold["queries"][gid] = f"which record mentioned the {mk[gid]} in the notes"
     gold["_meta"]["limitation"] = ("SYNTHETIC fixture: content and queries are "
         "generated placeholders (no real memory data) so this public repo carries "
-        "no store content; regenerate via scrub_fixture.py, not from a live store.")
+        "no store content; regenerate via bin/scrub-recall-fixture.py, not from a live store.")
+    gold["_meta"]["regenerate_ids"] = ("ids are fixed by the committed synthetic "
+        "fixture; regenerate everything via bin/scrub-recall-fixture.py, never "
+        "from a live store")
+    gold["_meta"]["source_pilot"] = "internal (not in this repository)"
     GOLD.write_text(json.dumps(gold, indent=2) + "\n")
 
     # curated suite -> synthetic, referentially valid (ids exist; tokens present)
