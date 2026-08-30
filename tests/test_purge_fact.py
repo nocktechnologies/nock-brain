@@ -505,13 +505,13 @@ def test_purge_pattern_does_not_match_signature_hex(tmp_path):
 
 
 
-def test_purge_matches_insight_theme_and_reports_counts(tmp_path):
-    """N10052 residual: 3 pre-purge insights carried the judge template in
-    `theme` (content was LLM-clean prose) and cited already-absent facts, so
-    the content-only pattern match and same-run source_ids sweep both missed
-    them — and the summary line printed no insight count, so the miss was
-    invisible. Locks in: theme is matched, and insight/graph counts are
-    reported."""
+def test_purge_sweeps_contaminated_insight_and_reports_counts(tmp_path):
+    """N10052 residual: contaminated clusters quote a leaked judge-prompt fact
+    verbatim in content's "Most recent:" excerpt while citing already-absent
+    facts — and the summary line printed no insight count, so whether the
+    match fired was invisible in receipts. Locks in: the content match sweeps
+    the contaminated shape (keyword-only themes never match), counts are
+    reported, and a zero-fact-match apply still leaves facts.json alone."""
     facts = tmp_path / "facts.json"
     events = tmp_path / "events.jsonl"
     notes = tmp_path / "sessions"
@@ -533,21 +533,25 @@ def test_purge_matches_insight_theme_and_reports_counts(tmp_path):
     template = "Two memory facts from the same project, EARLIER then LATER."
     (tmp_path / "insights.json").write_text(json.dumps([
         {
-            "id": "ins-theme-leak",
+            # the real N10052 shape: mostly-genuine cluster whose latest
+            # member was a leaked prompt fact, quoted verbatim in content
+            "id": "ins-contaminated",
             "kind": "insight",
             "status": "current",
             "confidence": 0.9,
-            "theme": template,
-            "content": "Review earlier facts before acting on later ones.",
+            "theme": "directive, recurring, lesson, sentence, clean",
+            "content": f"Recurring directive (seen 33x): directive, recurring. "
+                       f"Most recent: {template}",
             "source_date": "2026-08-01",
             "source_ids": ["already-purged-fact"],
         },
         {
+            # keyword-coincidence theme, clean content: must survive
             "id": "ins-keep",
             "kind": "insight",
             "status": "current",
             "confidence": 0.9,
-            "theme": "safe memory",
+            "theme": "memory, facts, project, earlier, later",
             "content": "recurring safe memory",
             "source_date": "2026-06-12",
             "source_ids": ["keep"],
