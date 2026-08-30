@@ -1,10 +1,42 @@
 [
-  ["S1", "voice transcription mixing up agent names", "id:462382c5026f"],
-  ["S2", "cost monitor released with a defect", "id:edfddf626821"],
-  ["S3", "CI minutes exploding because secret scans fire on every commit", "id:c91cf2d730fe"],
-  ["S4", "agent liveness monitoring", "token:heartbeat"],
-  ["S5", "hosting platform downtime incident", "token:railway"],
-  ["C1", "gitleaks scan status", "token:gitleaks"],
-  ["C2", "railway outage recovery", "token:railway"],
-  ["C3", "deepgram transcription bug", "token:deepgram"]
+  [
+    "S1",
+    "the copper marmot record",
+    "id:5f5b83893cc9"
+  ],
+  [
+    "S2",
+    "the cobalt marmot record",
+    "id:a8aa15ee84f4"
+  ],
+  [
+    "S3",
+    "the amber marmot record",
+    "id:c21e0e65df12"
+  ],
+  [
+    "S4",
+    "the slate marmot record",
+    "id:1c0f9faf9576"
+  ],
+  [
+    "S5",
+    "the ivory marmot record",
+    "id:fde7489ddf8d"
+  ],
+  [
+    "C1",
+    "records mentioning marmot",
+    "token:marmot"
+  ],
+  [
+    "C2",
+    "records mentioning sprocket",
+    "token:sprocket"
+  ],
+  [
+    "C3",
+    "records mentioning lantern",
+    "token:lantern"
+  ]
 ]

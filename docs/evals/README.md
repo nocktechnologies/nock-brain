@@ -90,13 +90,26 @@ verification is symmetric, so the `.pub` is the same secret). It has **no
 relationship to the production signing key** and is safe under `tests/`
 (gitleaks-allowlisted; bandit scans `bin/` only).
 
-## Regenerating the artifacts
+## Privacy: the committed fixture is SYNTHETIC
 
-Both generators read a source store **read-only** and treat the fixture/gold as
-**derived** data (ONE SOURCE OF TRUTH: the live store), never a second vault.
+This is a **public** repo. The committed `recall-eval-store.json`, `recall-gold-v1.json`,
+and `curated-recall-suite.json` carry **no real memory content** — every fact's
+`content`, every query, and every path/UUID/host label is a generated placeholder.
+The eval still exercises the real `select_recall` path because the *structure* is
+preserved (ids, kinds, dates, sessions, the 05-19 date-flood cap lever, session
+siblings). Regenerate only with the scrubber:
 
 ```bash
-# Rebuild the signed fixture slice (gold + session-siblings + same-date distractors):
+python3 bin/scrub-recall-fixture.py     # rewrites the 3 files as synthetic, re-signs, self-verifies
+```
+
+**Do NOT commit `build-recall-fixture.py` output** — that tool slices the *live*
+store and only secret-scrubs, so its output contains real memory prose and must
+stay local. Use it for local experiments; use `scrub-recall-fixture.py` for the
+committed public fixture.
+
+```bash
+# Local-only (real content — never commit the result):
 python3 bin/build-recall-fixture.py                 # from the live store
 python3 bin/build-recall-fixture.py --distractors 10
 
