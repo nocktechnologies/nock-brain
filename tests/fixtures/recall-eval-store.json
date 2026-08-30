@@ -7,7 +7,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "3028e71316991ac7d137ae627ae1832953b209ff9dc71ccf30039fe72eaa3bf2",
-   "signed_at": "2026-08-30T04:31:34.410733+00:00",
+   "signed_at": "2026-08-30T04:37:55.028118+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -28,7 +28,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "918cca4e157d033179bbec936b13eb88c694ff791db68d3cc6e90fe133daaeb9",
-   "signed_at": "2026-08-30T04:31:34.410891+00:00",
+   "signed_at": "2026-08-30T04:37:55.028415+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -51,7 +51,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "83e5d0ba4e5942ec2c1ff9bbe3c5f082e03f6aa61ee8ef60e97861ac5c14f5fc",
-   "signed_at": "2026-08-30T04:31:34.410905+00:00",
+   "signed_at": "2026-08-30T04:37:55.028430+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -74,7 +74,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "d042f335a7cfc1bec60f86e2971c9cc5e60839c0b467cf015d7c859367dd9874",
-   "signed_at": "2026-08-30T04:31:34.410915+00:00",
+   "signed_at": "2026-08-30T04:37:55.028440+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -97,7 +97,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "8ce6c13099b4db575f9eeababa887a137d3c3ef5bd5639700a4b038a6e29a76b",
-   "signed_at": "2026-08-30T04:31:34.410978+00:00",
+   "signed_at": "2026-08-30T04:37:55.028450+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -120,7 +120,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "f26cc3b8deeb3509bf52c0b83552b92c6fe06777d1149337a3879ed81f71286d",
-   "signed_at": "2026-08-30T04:31:34.410991+00:00",
+   "signed_at": "2026-08-30T04:37:55.028459+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -143,7 +143,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "d97548aa1bee802f8ac8d8a792b9c0813cd841a7ef209e7d2ce72b9ef1034d2d",
-   "signed_at": "2026-08-30T04:31:34.411001+00:00",
+   "signed_at": "2026-08-30T04:37:55.028467+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -184,7 +184,7 @@
    },
    "schema": "nock-claim-attestation/v2",
    "signature": "e3c595869f59f7e3446e54b63a548735eee5d12f21b4d060bcb03d49e2f04222",
-   "signed_at": "2026-08-30T04:31:34.411050+00:00"
+   "signed_at": "2026-08-30T04:37:55.028529+00:00"
   },
   "category": "synthetic-category",
   "confidence": 0.8,
@@ -251,7 +251,7 @@
    },
    "schema": "nock-claim-attestation/v2",
    "signature": "674c988fcab7815458c6a1910e32a0a7f0f8842d58e5c2f684d31badf0ccae1d",
-   "signed_at": "2026-08-30T04:31:34.411078+00:00"
+   "signed_at": "2026-08-30T04:37:55.028560+00:00"
   },
   "category": "synthetic-category",
   "confidence": 0.8,
@@ -300,7 +300,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "3d53b925336647549db996ba36d7214dfbcef34d2eb33401a80f9098b44a6381",
-   "signed_at": "2026-08-30T04:31:34.411088+00:00",
+   "signed_at": "2026-08-30T04:37:55.028570+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.8,
@@ -321,7 +321,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "5082cf545f80b09c0fed7fadaed74b8f609fab9f82ae04866b58816954f00b59",
-   "signed_at": "2026-08-30T04:31:34.411098+00:00",
+   "signed_at": "2026-08-30T04:37:55.028578+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -344,7 +344,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "375b5508530547c52eb4cff9ee6486d55e59f513b97e5bd0b6db48d790a82c70",
-   "signed_at": "2026-08-30T04:31:34.411106+00:00",
+   "signed_at": "2026-08-30T04:37:55.028587+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -367,7 +367,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "0503facde5bdafa708ae961aa8f3b044161c68b09e907870d29ba6584f948527",
-   "signed_at": "2026-08-30T04:31:34.411115+00:00",
+   "signed_at": "2026-08-30T04:37:55.028595+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -390,7 +390,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "d46f385afa3bdea4f8cdf20b641781b7c1d82712d33ee8df3a205fe57612204f",
-   "signed_at": "2026-08-30T04:31:34.411123+00:00",
+   "signed_at": "2026-08-30T04:37:55.028603+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -413,7 +413,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "530564a8501ac0dadd60032a83ac7f50d3491dffe149b8abdee8fadb3dcc0be5",
-   "signed_at": "2026-08-30T04:31:34.411131+00:00",
+   "signed_at": "2026-08-30T04:37:55.028611+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -436,7 +436,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "9f3b771af4d044d04ac8018aa93bda6d72ba241e2c9b33d992fd029b5928ed00",
-   "signed_at": "2026-08-30T04:31:34.411140+00:00",
+   "signed_at": "2026-08-30T04:37:55.028620+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -459,7 +459,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "78c12cd117b87eab8f02966cf13a6d8c75294f88a8460b42a491706602f2574a",
-   "signed_at": "2026-08-30T04:31:34.411148+00:00",
+   "signed_at": "2026-08-30T04:37:55.028629+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -480,7 +480,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "5b5b8bc587a4dc4bfe375cb4fa22fa597475910de86a6d15fc99b69f9ecc5a48",
-   "signed_at": "2026-08-30T04:31:34.411157+00:00",
+   "signed_at": "2026-08-30T04:37:55.028644+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -503,7 +503,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "808c58a7ed0b1136969b89437be22df509f9a7a1b93a24a461b10ae79035f6fb",
-   "signed_at": "2026-08-30T04:31:34.411165+00:00",
+   "signed_at": "2026-08-30T04:37:55.028653+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -524,7 +524,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "b656b4d7c03e303261881a52227ed5ab1cd2b94d8cbb38ef147571349a607283",
-   "signed_at": "2026-08-30T04:31:34.411174+00:00",
+   "signed_at": "2026-08-30T04:37:55.028661+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -548,7 +548,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "40a8d6d216a31b268426c1fc12868f8c8c8e6ae4831fff790bb4ecac8b9790bd",
-   "signed_at": "2026-08-30T04:31:34.411182+00:00",
+   "signed_at": "2026-08-30T04:37:55.028669+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -569,7 +569,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "ecb06df91a88f016e7c4b9521f83386c5d8b3a27042ee7dda925e546c0342ea3",
-   "signed_at": "2026-08-30T04:31:34.411190+00:00",
+   "signed_at": "2026-08-30T04:37:55.028677+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -590,7 +590,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "698d11e6de5ad5ebc4242f68fa8a0dc2e38d4f5ad61946aa1744d59ba4118967",
-   "signed_at": "2026-08-30T04:31:34.411198+00:00",
+   "signed_at": "2026-08-30T04:37:55.028685+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -611,7 +611,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "7698a72ff41284600c98d94c4d16349480dc66ec3bcceeefb72229e4c251bbb5",
-   "signed_at": "2026-08-30T04:31:34.411206+00:00",
+   "signed_at": "2026-08-30T04:37:55.028693+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -632,7 +632,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "69498299932a6a278fb3d4630f3236ec7ffb0f118fd0e028c94e54d5da9073de",
-   "signed_at": "2026-08-30T04:31:34.411215+00:00",
+   "signed_at": "2026-08-30T04:37:55.028707+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -655,7 +655,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "0e7365f7b47fd5b9901a4fc0afc07dc88041d2e23e7ff89adecf01b401a49d0a",
-   "signed_at": "2026-08-30T04:31:34.411223+00:00",
+   "signed_at": "2026-08-30T04:37:55.028715+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -678,7 +678,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "2c77d749c0feb16954af0cf64a2477f17bce5f8e4acbeab0c3fb9ecf2d6046c6",
-   "signed_at": "2026-08-30T04:31:34.411231+00:00",
+   "signed_at": "2026-08-30T04:37:55.028723+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -701,7 +701,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "344957fe44285c5d4b09a63d219ff4a7d5860ea88d7ce10b326277177b16fecf",
-   "signed_at": "2026-08-30T04:31:34.411239+00:00",
+   "signed_at": "2026-08-30T04:37:55.028731+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -724,7 +724,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "472418f5979549f50f31ead99cc856dc14b608f636672ee9fe81a8131776d452",
-   "signed_at": "2026-08-30T04:31:34.411247+00:00",
+   "signed_at": "2026-08-30T04:37:55.028739+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -747,7 +747,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "c9e0972a2b18a03beb02cb5b553883c69061bb016eb182bb4d2b430dfd6c32d0",
-   "signed_at": "2026-08-30T04:31:34.411256+00:00",
+   "signed_at": "2026-08-30T04:37:55.028747+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -770,7 +770,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "1f7b7316674678804b9bff461c7027e790443d668ce0663e3ab0f5bec6c5adc1",
-   "signed_at": "2026-08-30T04:31:34.411264+00:00",
+   "signed_at": "2026-08-30T04:37:55.028756+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.85,
@@ -791,7 +791,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "d1a407c5cc9de856787b4217dc97dee1696e7dacd1d37504cd7fc47a8f15d7a4",
-   "signed_at": "2026-08-30T04:31:34.411272+00:00",
+   "signed_at": "2026-08-30T04:37:55.028764+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -814,7 +814,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "b964d346d7a2544880f99c0fd1d5c95ac504ca93d8e160f01da94827c3884e46",
-   "signed_at": "2026-08-30T04:31:34.411280+00:00",
+   "signed_at": "2026-08-30T04:37:55.028772+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -837,7 +837,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "e92b3f42d9721a85c6803069f51fe9e20875e8d5ca0956802d074c7a293de92d",
-   "signed_at": "2026-08-30T04:31:34.411288+00:00",
+   "signed_at": "2026-08-30T04:37:55.028780+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -860,7 +860,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "e2dc0395a669b90f3dbe1d5b1d0204cfcf47fe278b39222efba9258a843c7eef",
-   "signed_at": "2026-08-30T04:31:34.411317+00:00",
+   "signed_at": "2026-08-30T04:37:55.028788+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -883,7 +883,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "8cc0aa04fb938dbe869019e20c34a9a7807049d1ea3be2bb945aeb36d62b104f",
-   "signed_at": "2026-08-30T04:31:34.411331+00:00",
+   "signed_at": "2026-08-30T04:37:55.028795+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -906,7 +906,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "599cafaac252a74a4e85b113bf7db2cd4d1b1c02661b523fb15731e87f7cff7d",
-   "signed_at": "2026-08-30T04:31:34.411341+00:00",
+   "signed_at": "2026-08-30T04:37:55.028803+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -929,7 +929,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "b2ae2f657c9d5c93d7de617ea31da5a11ee77063615eb09ac6e2c2f41c0c46bb",
-   "signed_at": "2026-08-30T04:31:34.411350+00:00",
+   "signed_at": "2026-08-30T04:37:55.028811+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -950,7 +950,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "6eaeb590f4cbd75ed2aa125604e99cc42c06fca80341854c2b9499ae2d0dadca",
-   "signed_at": "2026-08-30T04:31:34.411359+00:00",
+   "signed_at": "2026-08-30T04:37:55.028819+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -973,7 +973,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "13bc5ac2c26b75c107e80a54b3dad2756dc79390e5160c9ce4930e16d0d594d4",
-   "signed_at": "2026-08-30T04:31:34.411367+00:00",
+   "signed_at": "2026-08-30T04:37:55.028827+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -994,7 +994,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "4589ce60b983876b24a46fd3c86d1d72001afe6881e1e09a3aba540fc889946e",
-   "signed_at": "2026-08-30T04:31:34.411376+00:00",
+   "signed_at": "2026-08-30T04:37:55.028835+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1035,7 +1035,7 @@
    },
    "schema": "nock-claim-attestation/v2",
    "signature": "39171b4c54c93470add8fea26533980e646909d11ef6a740abdc3d14df1cc534",
-   "signed_at": "2026-08-30T04:31:34.411413+00:00"
+   "signed_at": "2026-08-30T04:37:55.028858+00:00"
   },
   "category": "synthetic-category",
   "confidence": 0.8,
@@ -1084,7 +1084,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "03ba14834c7477d8666bf24e74e8cd204bbcb21bdab1b136857786599770c69f",
-   "signed_at": "2026-08-30T04:31:34.411423+00:00",
+   "signed_at": "2026-08-30T04:37:55.028867+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -1105,7 +1105,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "87ee36b12fa1a4f365b68b2333b12f6546863ab61fd802d319be54fd484b66b1",
-   "signed_at": "2026-08-30T04:31:34.411432+00:00",
+   "signed_at": "2026-08-30T04:37:55.028875+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -1126,7 +1126,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "ca64f4e400a91c0dbf20bb66a95fe9375145a9eda58b41e9504a791646921062",
-   "signed_at": "2026-08-30T04:31:34.411441+00:00",
+   "signed_at": "2026-08-30T04:37:55.028883+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1149,7 +1149,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "280ff21b49c1c5ae2825ef472a9aadbc60d7d02f93613024ffc85e860d7d6811",
-   "signed_at": "2026-08-30T04:31:34.411449+00:00",
+   "signed_at": "2026-08-30T04:37:55.028891+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.55,
@@ -1170,7 +1170,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "e7b54857d74020f6c702ecf1b826a68f1e8adccd9cb92213b91e80739821a5cb",
-   "signed_at": "2026-08-30T04:31:34.411458+00:00",
+   "signed_at": "2026-08-30T04:37:55.028899+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -1193,7 +1193,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "f8f5ab6ea0491229d83d8c8557b462b6074fe8e62cc83f0cc17e642e529deee2",
-   "signed_at": "2026-08-30T04:31:34.411466+00:00",
+   "signed_at": "2026-08-30T04:37:55.028907+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1216,7 +1216,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "9f984925473d471e4db419fe3746da36a8b93cf9cf3cc043fdc80cf4b6bf53b9",
-   "signed_at": "2026-08-30T04:31:34.411475+00:00",
+   "signed_at": "2026-08-30T04:37:55.028915+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1239,7 +1239,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "d045de5cb5779851aa19e4a61e3a9ab4ce4a056fcce5e490640b59a1fe38ecce",
-   "signed_at": "2026-08-30T04:31:34.411483+00:00",
+   "signed_at": "2026-08-30T04:37:55.028923+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1260,7 +1260,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "f15027c85edfcc9ba1c1d7a0c10db3197969cbfdfc9b89e33c1563c63ca355d5",
-   "signed_at": "2026-08-30T04:31:34.411491+00:00",
+   "signed_at": "2026-08-30T04:37:55.028932+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.8,
@@ -1283,7 +1283,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "3303254ca6c5a1d92e8ced80f906ef60f13627a10e5b2a1b688c1ab77b356a1e",
-   "signed_at": "2026-08-30T04:31:34.411499+00:00",
+   "signed_at": "2026-08-30T04:37:55.028939+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.85,
@@ -1306,7 +1306,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "4f736ac1285d9e3f2432a17594bc5cd7e9ca8cffa2b30609359caa2b2444575c",
-   "signed_at": "2026-08-30T04:31:34.411507+00:00",
+   "signed_at": "2026-08-30T04:37:55.028947+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1329,7 +1329,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "8496ebd715dcd7d20aced3f25febb0f9ce74ad4dc81e76001493f4fd20b12a3e",
-   "signed_at": "2026-08-30T04:31:34.411515+00:00",
+   "signed_at": "2026-08-30T04:37:55.028955+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1352,7 +1352,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "4ab0d3fb0de27eac46f86a746177dc835ae25d573921a019262e643aba86f82d",
-   "signed_at": "2026-08-30T04:31:34.411524+00:00",
+   "signed_at": "2026-08-30T04:37:55.028963+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1373,7 +1373,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "39d58e907198df25be20b3195695c3d8da43fd3945c3447a15b752a19e271979",
-   "signed_at": "2026-08-30T04:31:34.411532+00:00",
+   "signed_at": "2026-08-30T04:37:55.028971+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1396,7 +1396,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "28436a5d8ad16edcff7b42ff4acf3137a2001a2d6d0c370bf70f06f8d12a3f3f",
-   "signed_at": "2026-08-30T04:31:34.411540+00:00",
+   "signed_at": "2026-08-30T04:37:55.028979+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1417,7 +1417,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "2cd5fe6a288216941650817e3c0425226ec5219a30e9ea3c4398537b42856407",
-   "signed_at": "2026-08-30T04:31:34.411548+00:00",
+   "signed_at": "2026-08-30T04:37:55.028986+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1440,7 +1440,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "62433e800568c738fcad1e46b80ca7490fd97c042fb509ccf7888d8caff795c4",
-   "signed_at": "2026-08-30T04:31:34.411556+00:00",
+   "signed_at": "2026-08-30T04:37:55.028993+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1463,7 +1463,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "464cc51941088374bec57454b9428ebf1877821eac459caec68b7a1d010b2a67",
-   "signed_at": "2026-08-30T04:31:34.411564+00:00",
+   "signed_at": "2026-08-30T04:37:55.029000+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1486,7 +1486,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "f9d66b56c07681aec0607017b05fbe4f7449f3c07b075b1017327012594f64b5",
-   "signed_at": "2026-08-30T04:31:34.411572+00:00",
+   "signed_at": "2026-08-30T04:37:55.029007+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1507,7 +1507,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "f98b4e74d2cd33ee85b9e5c6bfc352916c27cb382e81781d5388044d23c42687",
-   "signed_at": "2026-08-30T04:31:34.411580+00:00",
+   "signed_at": "2026-08-30T04:37:55.029014+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1530,7 +1530,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "7cbfd08aa4b2c1a74be000e24d762eda2c04a347494d1f84256d4ff3c019fb9d",
-   "signed_at": "2026-08-30T04:31:34.411588+00:00",
+   "signed_at": "2026-08-30T04:37:55.029021+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1551,7 +1551,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "05a5ddae2cf25f760014d2fc7765130e41dedd4edef2588235ad3953ede74018",
-   "signed_at": "2026-08-30T04:31:34.411597+00:00",
+   "signed_at": "2026-08-30T04:37:55.029031+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1574,7 +1574,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "7b7101d2ac62d37250d2e4082676d9272af05377d803f22a598c7f9349d10cbd",
-   "signed_at": "2026-08-30T04:31:34.411605+00:00",
+   "signed_at": "2026-08-30T04:37:55.029038+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1595,7 +1595,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "3cc91129992770cbbdce3251fab1584c9a5416674d339ed628049c59add57998",
-   "signed_at": "2026-08-30T04:31:34.411613+00:00",
+   "signed_at": "2026-08-30T04:37:55.029045+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1616,7 +1616,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "8bae2193addf7aedcae9e034596a60649438190211667a8805d7f6fa68ec83f1",
-   "signed_at": "2026-08-30T04:31:34.411621+00:00",
+   "signed_at": "2026-08-30T04:37:55.029053+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1639,7 +1639,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "44f25649788cca0e0a4ef20cc33a37971800ac6524a52cf314427b7f402ad25d",
-   "signed_at": "2026-08-30T04:31:34.411630+00:00",
+   "signed_at": "2026-08-30T04:37:55.029060+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1662,7 +1662,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "6b71b93d07438b5b2b540ca1a1ddb3c8898031a90ab31654d4cbaa3e394afbb6",
-   "signed_at": "2026-08-30T04:31:34.411638+00:00",
+   "signed_at": "2026-08-30T04:37:55.029067+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -1683,7 +1683,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "140c81576608158a7ec87cb8878f71414ea4db20a0cc41631c251b2fd06e19d9",
-   "signed_at": "2026-08-30T04:31:34.411646+00:00",
+   "signed_at": "2026-08-30T04:37:55.029074+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -1704,7 +1704,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "670aaafe6de85042e984c0e8f399ace2df1c6c2749dd7ec97b5ac6b100e98481",
-   "signed_at": "2026-08-30T04:31:34.411654+00:00",
+   "signed_at": "2026-08-30T04:37:55.029081+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1727,7 +1727,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "35e45da6ebdf863c8807787b50e3eeb5b22a6c9099be7d9d27d132a64cce5a74",
-   "signed_at": "2026-08-30T04:31:34.411662+00:00",
+   "signed_at": "2026-08-30T04:37:55.029088+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1750,7 +1750,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "0beec68091c2c8fbcbca3cf6dabda752188c84c1b754e8b1667151eefbd8f596",
-   "signed_at": "2026-08-30T04:31:34.411670+00:00",
+   "signed_at": "2026-08-30T04:37:55.029095+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1773,7 +1773,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "00d5729e738e2798164a1751130ebcf8ad1e22cf410cff77c62dcd5cfcaa4444",
-   "signed_at": "2026-08-30T04:31:34.411679+00:00",
+   "signed_at": "2026-08-30T04:37:55.029103+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -1794,7 +1794,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "e6e042ed3fa13a4c8a4e28de4236b90c8904b3fd475c6cf014863dd0b2ca07a8",
-   "signed_at": "2026-08-30T04:31:34.411687+00:00",
+   "signed_at": "2026-08-30T04:37:55.029109+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1815,7 +1815,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "e2866783e84d5bae768e9155c2ddc31a28f0906bda59436ba2e4b31af9043f8c",
-   "signed_at": "2026-08-30T04:31:34.411695+00:00",
+   "signed_at": "2026-08-30T04:37:55.029116+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1838,7 +1838,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "22dbf62ce5b86f56ce06650f40b1b9e80042db2b5fa8096da0d530669a6f2671",
-   "signed_at": "2026-08-30T04:31:34.411703+00:00",
+   "signed_at": "2026-08-30T04:37:55.029123+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1861,7 +1861,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "e9e264e16fdc71fcee6cdf296c2b762e1c3483cd2657300b6d8160b8b176eadb",
-   "signed_at": "2026-08-30T04:31:34.411711+00:00",
+   "signed_at": "2026-08-30T04:37:55.029131+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1884,7 +1884,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "1abb021861f205123c74c47e833391c9ff471eb712545110aa65e93c6849e925",
-   "signed_at": "2026-08-30T04:31:34.411719+00:00",
+   "signed_at": "2026-08-30T04:37:55.029138+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1907,7 +1907,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "cdc2f636194936f6523bedd691a87ad2f33b46ac2e3195c064952bf95ef7be40",
-   "signed_at": "2026-08-30T04:31:34.411727+00:00",
+   "signed_at": "2026-08-30T04:37:55.029145+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1928,7 +1928,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "31cae783ae29bbdd60ce90de46b049d9ad644e56c2f281ac686d144772c015f8",
-   "signed_at": "2026-08-30T04:31:34.411735+00:00",
+   "signed_at": "2026-08-30T04:37:55.029152+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1949,7 +1949,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "0edb46561ff21f531911db6cc28596a47254926ac965846db0f4417b77a550de",
-   "signed_at": "2026-08-30T04:31:34.411743+00:00",
+   "signed_at": "2026-08-30T04:37:55.029165+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -1970,7 +1970,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "282c52c7603cadffb94489cd4eb6b22bd320fa0285458a19d5f450dc8622c195",
-   "signed_at": "2026-08-30T04:31:34.411751+00:00",
+   "signed_at": "2026-08-30T04:37:55.029172+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -1993,7 +1993,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "c0b77ab680652a76a915a29531ff40f9b2b9342622f43d06d6c4f92f52e95978",
-   "signed_at": "2026-08-30T04:31:34.411759+00:00",
+   "signed_at": "2026-08-30T04:37:55.029179+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2016,7 +2016,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "5d568cfcc4064004b23ff725f495687030e540d44641a2385c6a37e07c87f7a1",
-   "signed_at": "2026-08-30T04:31:34.411767+00:00",
+   "signed_at": "2026-08-30T04:37:55.029192+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2055,7 +2055,7 @@
    },
    "schema": "nock-claim-attestation/v2",
    "signature": "5ebe85a0b5d45c58d730075694a00d20850dd037c7ba38f6cde8bcb27539f4d9",
-   "signed_at": "2026-08-30T04:31:34.411791+00:00"
+   "signed_at": "2026-08-30T04:37:55.029211+00:00"
   },
   "category": "synthetic-category",
   "confidence": 0.8,
@@ -2104,7 +2104,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "733f416864fb897c061557aa26b1eb777c352b279a380c5f5597ee19d81a37db",
-   "signed_at": "2026-08-30T04:31:34.411799+00:00",
+   "signed_at": "2026-08-30T04:37:55.029219+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2127,7 +2127,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "54df6e8ae1b79f34ec1b40497ed40d9ad49bff979e25afb56e6afb5fef1ee38b",
-   "signed_at": "2026-08-30T04:31:34.411806+00:00",
+   "signed_at": "2026-08-30T04:37:55.029226+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.85,
@@ -2150,7 +2150,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "458b9b6d4987a4bf685f6f8f2020364914e545388bf15cc94a9b4d62381ea887",
-   "signed_at": "2026-08-30T04:31:34.411813+00:00",
+   "signed_at": "2026-08-30T04:37:55.029233+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -2173,7 +2173,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "86f93992ffd2ffc94ea13fe61c02ed0e9d7eb68a214d691145940b660f231a1a",
-   "signed_at": "2026-08-30T04:31:34.411821+00:00",
+   "signed_at": "2026-08-30T04:37:55.029240+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2200,7 +2200,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "45887657cd422f631773e937077096f29370cbf01b88adc406f8483f09644585",
-   "signed_at": "2026-08-30T04:31:34.411828+00:00",
+   "signed_at": "2026-08-30T04:37:55.029247+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2223,7 +2223,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "ec0025081d460e8452faff921396fe4a8faee9c013f6995839b0e38f09aaa84b",
-   "signed_at": "2026-08-30T04:31:34.411835+00:00",
+   "signed_at": "2026-08-30T04:37:55.029254+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -2246,7 +2246,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "8262633d4b31dc57c5d4eadf0a55893fff08c522fd39170eb83fe80d7cce6f35",
-   "signed_at": "2026-08-30T04:31:34.411842+00:00",
+   "signed_at": "2026-08-30T04:37:55.029262+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.8,
@@ -2267,7 +2267,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "72e7d0aed5b58feeb4589f5b6ad987a155076fbb97fc249275d6a5249882810b",
-   "signed_at": "2026-08-30T04:31:34.411850+00:00",
+   "signed_at": "2026-08-30T04:37:55.029269+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2293,7 +2293,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "c3974b80de4f22bcfb108caa07b5afb3e0b568eaf57bdabbc50061c2db1af369",
-   "signed_at": "2026-08-30T04:31:34.411858+00:00",
+   "signed_at": "2026-08-30T04:37:55.029276+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.8,
@@ -2316,7 +2316,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "a498276e3090def7091a25ce58b1ddc402b1dbfadf4e088635f75d1e5933e294",
-   "signed_at": "2026-08-30T04:31:34.411866+00:00",
+   "signed_at": "2026-08-30T04:37:55.029283+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2337,7 +2337,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "ca9b771b999ea6b77a28792030963f655f6da1124c03201b5cb81cf37c72e828",
-   "signed_at": "2026-08-30T04:31:34.411877+00:00",
+   "signed_at": "2026-08-30T04:37:55.029297+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2360,7 +2360,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "1992ce108dfac30a971fbbdeab04717266fe04ed0b9e8c61952776e8bcc806ef",
-   "signed_at": "2026-08-30T04:31:34.411885+00:00",
+   "signed_at": "2026-08-30T04:37:55.029304+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2401,7 +2401,7 @@
    },
    "schema": "nock-claim-attestation/v2",
    "signature": "83b324a532af4a2c2ff9331a1b50e4e06e284209ba43aad2d00351427e6211f8",
-   "signed_at": "2026-08-30T04:31:34.411907+00:00"
+   "signed_at": "2026-08-30T04:37:55.029322+00:00"
   },
   "category": "synthetic-category",
   "confidence": 0.8,
@@ -2450,7 +2450,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "dc7fdd3d0769973a9dee6c010e60536f5ab52b8dcf064327d2bd9961c7c6b280",
-   "signed_at": "2026-08-30T04:31:34.411915+00:00",
+   "signed_at": "2026-08-30T04:37:55.029329+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2473,7 +2473,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "a33e61d54b21e892a58d50ed5a16a742e9ddfb8c004179cff1f4494ba2d4d441",
-   "signed_at": "2026-08-30T04:31:34.411923+00:00",
+   "signed_at": "2026-08-30T04:37:55.029336+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -2496,7 +2496,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "62b22dea90562a0665cf8dcb65b7291b0d9ef1dacf2bce126fab25cf983cff05",
-   "signed_at": "2026-08-30T04:31:34.411931+00:00",
+   "signed_at": "2026-08-30T04:37:55.029343+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2519,7 +2519,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "a96e2d838d1b99185d4efe8d90f2af86849ac2eeadb766939880992b8aba5974",
-   "signed_at": "2026-08-30T04:31:34.411939+00:00",
+   "signed_at": "2026-08-30T04:37:55.029350+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -2542,7 +2542,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "3fd59b01ec64fbe78143499ace315812494acd9836b34535ea19cfcc874f57b8",
-   "signed_at": "2026-08-30T04:31:34.411947+00:00",
+   "signed_at": "2026-08-30T04:37:55.029357+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -2581,7 +2581,7 @@
    },
    "schema": "nock-claim-attestation/v2",
    "signature": "46a6494fcc05e1c40659f244100e2470aa56d90ed0552ca39f0df776a80cfcb0",
-   "signed_at": "2026-08-30T04:31:34.411967+00:00"
+   "signed_at": "2026-08-30T04:37:55.029374+00:00"
   },
   "category": "synthetic-category",
   "confidence": 0.8,
@@ -2630,7 +2630,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "08feb38fd2403a4081fe311c2db27b786efd05e0bf76a1595390967199d40d38",
-   "signed_at": "2026-08-30T04:31:34.411975+00:00",
+   "signed_at": "2026-08-30T04:37:55.029382+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2651,7 +2651,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "f60fc1cfdae91aa9a9e05fb7e2ce37892741b0429ed88b8b1fa8e78226a9a41c",
-   "signed_at": "2026-08-30T04:31:34.411984+00:00",
+   "signed_at": "2026-08-30T04:37:55.029389+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -2672,7 +2672,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "4ceafc272f782673e443cf96a12bc771718d3637a5ce9ae50bf6f23caa716c80",
-   "signed_at": "2026-08-30T04:31:34.411992+00:00",
+   "signed_at": "2026-08-30T04:37:55.029396+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2695,7 +2695,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "dadbf07204ffc34279ae9744eae8f7f44616e257deaeb8e3692876a4940c39bf",
-   "signed_at": "2026-08-30T04:31:34.412000+00:00",
+   "signed_at": "2026-08-30T04:37:55.029403+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -2718,7 +2718,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "69e954f2fb3e028ff4c5fdab9544db3a182ff9f2bbf0db88bb5edc9fa000e10e",
-   "signed_at": "2026-08-30T04:31:34.412010+00:00",
+   "signed_at": "2026-08-30T04:37:55.029410+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -2741,7 +2741,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "b4c917f2eaf78e18ca4142d59021e9f03ab8850d75bcb0dfc52e6a9685880850",
-   "signed_at": "2026-08-30T04:31:34.412018+00:00",
+   "signed_at": "2026-08-30T04:37:55.029417+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2762,7 +2762,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "b05fd5cdabf5dd32d0296f8d8abc4754a3d3006aa609aae4b29ae1d83b616226",
-   "signed_at": "2026-08-30T04:31:34.412026+00:00",
+   "signed_at": "2026-08-30T04:37:55.029424+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -2785,7 +2785,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "8b05b2368f838b05d5fa27f3b93d06f10248f618f8ae85bb5599cb356a68a1db",
-   "signed_at": "2026-08-30T04:31:34.412034+00:00",
+   "signed_at": "2026-08-30T04:37:55.029431+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2808,7 +2808,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "4c5c5884717f485b92a437849d50d025474092128448dd67b2afee2521161b73",
-   "signed_at": "2026-08-30T04:31:34.412042+00:00",
+   "signed_at": "2026-08-30T04:37:55.029438+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2850,7 +2850,7 @@
    },
    "schema": "nock-claim-attestation/v2",
    "signature": "e78119237abeb8abe733bd63f23f7236c2b25d6e1d46e088b2975aa68f64353a",
-   "signed_at": "2026-08-30T04:31:34.412171+00:00"
+   "signed_at": "2026-08-30T04:37:55.029456+00:00"
   },
   "category": "synthetic-category",
   "confidence": 0.8,
@@ -2899,7 +2899,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "ca821d2cbb7e1d8d8cf50aecb2202be1a27789d86d3de951fec58cdb612dde5f",
-   "signed_at": "2026-08-30T04:31:34.412191+00:00",
+   "signed_at": "2026-08-30T04:37:55.029463+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -2922,7 +2922,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "392be30c3215c0af06853be267aa8b9f35c02aa025df0b9aa4d211ff60e55974",
-   "signed_at": "2026-08-30T04:31:34.412205+00:00",
+   "signed_at": "2026-08-30T04:37:55.029470+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -2945,7 +2945,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "e7cf8ea7bf46d10c5571f75c75649ca07854f2c3607fe76d46d56cb36c9daab9",
-   "signed_at": "2026-08-30T04:31:34.412214+00:00",
+   "signed_at": "2026-08-30T04:37:55.029477+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -2968,7 +2968,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "6f4bf79c92b91cb8a2c2ae42948aa7806d8b6f6a596d6045caa1042282d0ba74",
-   "signed_at": "2026-08-30T04:31:34.412223+00:00",
+   "signed_at": "2026-08-30T04:37:55.029484+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -2991,7 +2991,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "fbfa46d638d9516813d0282feea81845c9f188650ad302970b1d3dbadd9f2898",
-   "signed_at": "2026-08-30T04:31:34.412232+00:00",
+   "signed_at": "2026-08-30T04:37:55.029491+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.8,
@@ -3017,7 +3017,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "4fa7c2896559ff98dcc5027218d1ab396bd724288b978b6133e796862139b869",
-   "signed_at": "2026-08-30T04:31:34.412242+00:00",
+   "signed_at": "2026-08-30T04:37:55.029498+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.8,
@@ -3038,7 +3038,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "3ce061d738a89a06ab7fd5e4afa5626dd0eda35b4a7ca1f2bc9d2860a176dcda",
-   "signed_at": "2026-08-30T04:31:34.412250+00:00",
+   "signed_at": "2026-08-30T04:37:55.029506+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3061,7 +3061,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "184e14e4bc4d8b418bb389ea8e0f7a7c2d413b4ac272bc37ab03747c372485fa",
-   "signed_at": "2026-08-30T04:31:34.412259+00:00",
+   "signed_at": "2026-08-30T04:37:55.029513+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -3082,7 +3082,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "d887d3ecbf316422311637deeb0f60dacbfc25b1868de11b68f32c3f9a232b5e",
-   "signed_at": "2026-08-30T04:31:34.412268+00:00",
+   "signed_at": "2026-08-30T04:37:55.029520+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -3105,7 +3105,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "d58664157857faaacb208037455f43ab55d06829aead2b5572ac27038154c11c",
-   "signed_at": "2026-08-30T04:31:34.412276+00:00",
+   "signed_at": "2026-08-30T04:37:55.029527+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -3128,7 +3128,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "444eecb04681a8caf2d37f7cd8e0d9c8c3e6b44014fc12a6f089b877f77efab3",
-   "signed_at": "2026-08-30T04:31:34.412284+00:00",
+   "signed_at": "2026-08-30T04:37:55.029534+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -3149,7 +3149,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "acdf692f6f156f70febd0240ca4c96ab71b2a42249ac1892f15846b7a6443acf",
-   "signed_at": "2026-08-30T04:31:34.412293+00:00",
+   "signed_at": "2026-08-30T04:37:55.029541+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3172,7 +3172,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "1529cf63286ff026fd7ea3aab2160daf684377a173cd962e257261572ce9c61a",
-   "signed_at": "2026-08-30T04:31:34.412301+00:00",
+   "signed_at": "2026-08-30T04:37:55.029548+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -3195,7 +3195,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "171afd3f901bcb2ca804e08d1bde4912ebcf21e120f7b924bc0ca16c5f7f0a7e",
-   "signed_at": "2026-08-30T04:31:34.412310+00:00",
+   "signed_at": "2026-08-30T04:37:55.029555+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3218,7 +3218,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "7cef4848bbac6c1d087020e6d341ace54aa9b51f8fe411fee9eef140d7bcca60",
-   "signed_at": "2026-08-30T04:31:34.412318+00:00",
+   "signed_at": "2026-08-30T04:37:55.029562+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -3239,7 +3239,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "aba2744f2f9f2ad40e71d85eb884a3ecb716474d8a4309bea6acb1d9f1ec4b32",
-   "signed_at": "2026-08-30T04:31:34.412326+00:00",
+   "signed_at": "2026-08-30T04:37:55.029569+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3262,7 +3262,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "3d95be0339234386eee38fc92dacaac244a9a44e55a60402c11ef990552609d3",
-   "signed_at": "2026-08-30T04:31:34.412335+00:00",
+   "signed_at": "2026-08-30T04:37:55.029577+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3285,7 +3285,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "e679aba13644d41161cc29c918fdc092ae4c1be72cbc5a35688b6064df85703e",
-   "signed_at": "2026-08-30T04:31:34.412343+00:00",
+   "signed_at": "2026-08-30T04:37:55.029584+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3308,7 +3308,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "f141732784c70e8c15f799e537117479c3de38572d6dcf7b09b733a797cd212c",
-   "signed_at": "2026-08-30T04:31:34.412352+00:00",
+   "signed_at": "2026-08-30T04:37:55.029591+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -3331,7 +3331,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "45674d66c9f9d69fa2b7e58247bf36f854d748d2fc1a30859721ddbb7cbc9862",
-   "signed_at": "2026-08-30T04:31:34.412360+00:00",
+   "signed_at": "2026-08-30T04:37:55.029598+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.8,
@@ -3354,7 +3354,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "cf650c1c4d5138a73036a702b25639cabe0c541b3d5064d703f53015c4f1c608",
-   "signed_at": "2026-08-30T04:31:34.412368+00:00",
+   "signed_at": "2026-08-30T04:37:55.029605+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3377,7 +3377,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "193c67ffe7cc58fc047b1b9637d2c3d63157cfbca95110d6c78937e66413aa1f",
-   "signed_at": "2026-08-30T04:31:34.412377+00:00",
+   "signed_at": "2026-08-30T04:37:55.029612+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -3403,7 +3403,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "13283928fe681e8d258d94f109cd60eec9b0181cb73c10eeed45a31cccbec4ab",
-   "signed_at": "2026-08-30T04:31:34.412385+00:00",
+   "signed_at": "2026-08-30T04:37:55.029619+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3426,7 +3426,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "49d9b68d2c5725d5b6c767ec1b38535f86a9248627caecffeff76fbb3dd1291c",
-   "signed_at": "2026-08-30T04:31:34.412393+00:00",
+   "signed_at": "2026-08-30T04:37:55.029626+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3467,7 +3467,7 @@
    },
    "schema": "nock-claim-attestation/v2",
    "signature": "0bd1125b4b483a3b0d0487efc10535950ff9de599348fbfb265cf3c2890fb7e0",
-   "signed_at": "2026-08-30T04:31:34.412429+00:00"
+   "signed_at": "2026-08-30T04:37:55.029643+00:00"
   },
   "category": "synthetic-category",
   "confidence": 0.8,
@@ -3516,7 +3516,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "433e3f9e9f0abec415d7eb05621df2a6c93bf4edda118fcc63e3d3062f0fc591",
-   "signed_at": "2026-08-30T04:31:34.412439+00:00",
+   "signed_at": "2026-08-30T04:37:55.029650+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -3539,7 +3539,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "427c6cc6141aa344fbf5fb33721da8d4fef85713248e64b156f9bcaac06a8d64",
-   "signed_at": "2026-08-30T04:31:34.412448+00:00",
+   "signed_at": "2026-08-30T04:37:55.029657+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -3560,7 +3560,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "7013db6db6043cd3d42fc174c44ea73724883a1031ada5d6b3ea733c1e037e06",
-   "signed_at": "2026-08-30T04:31:34.412456+00:00",
+   "signed_at": "2026-08-30T04:37:55.029665+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -3583,7 +3583,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "c66275e7e73de0ffd2df455e688d677e12508d0d85eb34fc011b028975a95009",
-   "signed_at": "2026-08-30T04:31:34.412464+00:00",
+   "signed_at": "2026-08-30T04:37:55.029675+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3606,7 +3606,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "b5804ae13c820306da53b8a20930dc3847efb98230bb3ae60597078c9b514d55",
-   "signed_at": "2026-08-30T04:31:34.412473+00:00",
+   "signed_at": "2026-08-30T04:37:55.029682+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -3627,7 +3627,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "6cfd8ff37faa58e88658f8c6a488be328ac80c050fd4a813a15d56fb30d1cf7a",
-   "signed_at": "2026-08-30T04:31:34.412481+00:00",
+   "signed_at": "2026-08-30T04:37:55.029689+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -3648,7 +3648,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "cbb4f7611714c3973ce0d5dab1031baf4e91a6a30408f1e99696e76e3c021a65",
-   "signed_at": "2026-08-30T04:31:34.412489+00:00",
+   "signed_at": "2026-08-30T04:37:55.029696+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3671,7 +3671,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "3f12b6814da4fd28ee1b9c778d0bb665e8ce12ae1efe3795fbed05f6e9dd182d",
-   "signed_at": "2026-08-30T04:31:34.412497+00:00",
+   "signed_at": "2026-08-30T04:37:55.029704+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3694,7 +3694,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "e2b45266f0031a8704a6cea0928cc073c396ab1e7a77a0a522006e4cc8b9510d",
-   "signed_at": "2026-08-30T04:31:34.412506+00:00",
+   "signed_at": "2026-08-30T04:37:55.029711+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -3715,7 +3715,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "8586c7b74ae279ad36d36f1d82b41cfd4bea5a8c90911b7f255cba4897c7a293",
-   "signed_at": "2026-08-30T04:31:34.412514+00:00",
+   "signed_at": "2026-08-30T04:37:55.029718+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -3738,7 +3738,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "a846a7b95ae85b6996f2ddefc163e1829b4c2f7a4796c240b73ab048686b4670",
-   "signed_at": "2026-08-30T04:31:34.412522+00:00",
+   "signed_at": "2026-08-30T04:37:55.029725+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -3761,7 +3761,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "7ee121325c9141a805834e44358c0e199bf30fc7f057fc5932f485a80b4e9f4b",
-   "signed_at": "2026-08-30T04:31:34.412530+00:00",
+   "signed_at": "2026-08-30T04:37:55.029732+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -3784,7 +3784,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "c1199c160d057bc60a1561b09da72d49d238d8cb2cbf136ac4b67ccd50585d22",
-   "signed_at": "2026-08-30T04:31:34.412539+00:00",
+   "signed_at": "2026-08-30T04:37:55.029738+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3807,7 +3807,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "1129afb1240cbe886cbb99554912c18c30f46e46245202d65c0f808f99ebfe8a",
-   "signed_at": "2026-08-30T04:31:34.412547+00:00",
+   "signed_at": "2026-08-30T04:37:55.029745+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -3828,7 +3828,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "32a83621dee962d25091d2e7bb319033f44ad87fe4a210b38fdf9f65b9e28873",
-   "signed_at": "2026-08-30T04:31:34.412556+00:00",
+   "signed_at": "2026-08-30T04:37:55.029752+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3869,7 +3869,7 @@
    },
    "schema": "nock-claim-attestation/v2",
    "signature": "3dc86c03dab5dcf618141a2f667813f85bd66465199351d72e8c8be1a014c8a9",
-   "signed_at": "2026-08-30T04:31:34.412579+00:00"
+   "signed_at": "2026-08-30T04:37:55.029770+00:00"
   },
   "category": "synthetic-category",
   "confidence": 0.8,
@@ -3918,7 +3918,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "f9feb1900d00729328f6d4300631efda625b01ed5a4c7e5d5b6bd1117c24d3d4",
-   "signed_at": "2026-08-30T04:31:34.412589+00:00",
+   "signed_at": "2026-08-30T04:37:55.029777+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -3941,7 +3941,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "16752e6e77a368b347fd014c1fdbe0b3f420ba09b6e35b7433826d1bac1bc0ee",
-   "signed_at": "2026-08-30T04:31:34.412598+00:00",
+   "signed_at": "2026-08-30T04:37:55.029785+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.95,
@@ -3965,7 +3965,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "849944a83ddb20bb392c1f42899a583d47490f502dd2dd5a07e27cb3b6347776",
-   "signed_at": "2026-08-30T04:31:34.412607+00:00",
+   "signed_at": "2026-08-30T04:37:55.029792+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.95,
@@ -3989,7 +3989,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "86b87efe283c6ecaf61eba8c54da14d8a1fae2940bffe08b30f7e18200e200fe",
-   "signed_at": "2026-08-30T04:31:34.412616+00:00",
+   "signed_at": "2026-08-30T04:37:55.029799+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.95,
@@ -4013,7 +4013,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "65c3208a3a7a3f874c7714696faa5a68007cfeacb4cc9abbc5ceba2a98bf02de",
-   "signed_at": "2026-08-30T04:31:34.412625+00:00",
+   "signed_at": "2026-08-30T04:37:55.029806+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.95,
@@ -4037,7 +4037,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "44de3cd565eb08f54212a597c9b9587e5d882d1f0c52b274e979ad30feb6a173",
-   "signed_at": "2026-08-30T04:31:34.412633+00:00",
+   "signed_at": "2026-08-30T04:37:55.029813+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.95,
@@ -4061,7 +4061,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "37a29d6396293adb4ff1691d93e86d99b6b33dd6aa7337a1a2e5840813759660",
-   "signed_at": "2026-08-30T04:31:34.412642+00:00",
+   "signed_at": "2026-08-30T04:37:55.029821+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4084,7 +4084,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "22bddbd3f09c278926efcc841864341aab31cb62904df6dfb5c2583a76ed361a",
-   "signed_at": "2026-08-30T04:31:34.412650+00:00",
+   "signed_at": "2026-08-30T04:37:55.029830+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -4107,7 +4107,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "3465e6ac4c27558be6805904e642c862af674d2967717ccf666852d3c9b73167",
-   "signed_at": "2026-08-30T04:31:34.412658+00:00",
+   "signed_at": "2026-08-30T04:37:55.029837+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.55,
@@ -4130,7 +4130,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "1d6c18754e6961a1c31f4487b0bc4a0f1ea7da9a85f55fd2972474dda8189431",
-   "signed_at": "2026-08-30T04:31:34.412707+00:00",
+   "signed_at": "2026-08-30T04:37:55.029845+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -4151,7 +4151,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "881ae2ee698c65eafe013013c64bcb2643dd19923acdecac09eb471735556ab0",
-   "signed_at": "2026-08-30T04:31:34.412717+00:00",
+   "signed_at": "2026-08-30T04:37:55.029852+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -4174,7 +4174,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "e75de742474c04f0663284339d9b6a424a792cdc1186e03ac3da95bfb2f0f124",
-   "signed_at": "2026-08-30T04:31:34.412726+00:00",
+   "signed_at": "2026-08-30T04:37:55.029859+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4197,7 +4197,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "5eaab6c1775bf91834fb5514094ddac4dc8b4be5270b147a6161a3efa13f4ce3",
-   "signed_at": "2026-08-30T04:31:34.412736+00:00",
+   "signed_at": "2026-08-30T04:37:55.029866+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -4223,7 +4223,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "84c0dd0699f7f08fc0741131e429c9343667e59e3d47bb97f518a6456e75085c",
-   "signed_at": "2026-08-30T04:31:34.412744+00:00",
+   "signed_at": "2026-08-30T04:37:55.029873+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4246,7 +4246,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "4725a52c9bf455bdc6fb6c90f2ee7844a6fd6648ae31934c916b5aad8ef1ed57",
-   "signed_at": "2026-08-30T04:31:34.412752+00:00",
+   "signed_at": "2026-08-30T04:37:55.029881+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -4269,7 +4269,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "430803f283be6e4b15d5c9d47f6f069f9317aa85b1b237286a30aec426bc5240",
-   "signed_at": "2026-08-30T04:31:34.412780+00:00",
+   "signed_at": "2026-08-30T04:37:55.029888+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -4292,7 +4292,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "e2dcb47f387c63d42768be95d62da7dcdd413c706aeded30d46f5a9f5ce4de4f",
-   "signed_at": "2026-08-30T04:31:34.412789+00:00",
+   "signed_at": "2026-08-30T04:37:55.029894+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4313,7 +4313,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "bc87dec69422abfdeb83e3cc0436ef928d55fc3538ad049d298744f31061bb81",
-   "signed_at": "2026-08-30T04:31:34.412797+00:00",
+   "signed_at": "2026-08-30T04:37:55.029902+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -4336,7 +4336,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "085602d6165ef5d5e0815945d0b57ff84249329dffbcee6765f31a66c88c4638",
-   "signed_at": "2026-08-30T04:31:34.412805+00:00",
+   "signed_at": "2026-08-30T04:37:55.029908+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -4359,7 +4359,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "ddbc5e83eaa7faa1161eccb4bad134848af70e0e70b7e60da505833401e1f5f2",
-   "signed_at": "2026-08-30T04:31:34.412831+00:00",
+   "signed_at": "2026-08-30T04:37:55.029915+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -4380,7 +4380,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "6142cf4c525f874e5be5c4500ad2fcef7857ea0c4b602e91703e65414fe6240e",
-   "signed_at": "2026-08-30T04:31:34.412871+00:00",
+   "signed_at": "2026-08-30T04:37:55.029922+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -4403,7 +4403,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "d3ee5935a066ab3032b8c86ea0e2a83a2fe2ccc215dbe79358fb284deb958856",
-   "signed_at": "2026-08-30T04:31:34.412882+00:00",
+   "signed_at": "2026-08-30T04:37:55.029929+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4424,7 +4424,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "ae780b13963a793c1063c396cab77f0bf92c9408f125fef810675dc44ce002b9",
-   "signed_at": "2026-08-30T04:31:34.412892+00:00",
+   "signed_at": "2026-08-30T04:37:55.029936+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.85,
@@ -4447,7 +4447,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "5184430a9b41b1ac3dce5fa563610bd1d9a5c315142d35bd1d1ca0cfba16580d",
-   "signed_at": "2026-08-30T04:31:34.412901+00:00",
+   "signed_at": "2026-08-30T04:37:55.029944+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -4470,7 +4470,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "59f1364b894741a2dd9af08591407ff51294f85d0acc25ba7139fde15a48d3c5",
-   "signed_at": "2026-08-30T04:31:34.412911+00:00",
+   "signed_at": "2026-08-30T04:37:55.029950+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.7,
@@ -4497,7 +4497,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "6b97ecf01766d768265d248c7c441a35658b404092f244510be8fbbcb666d370",
-   "signed_at": "2026-08-30T04:31:34.412919+00:00",
+   "signed_at": "2026-08-30T04:37:55.029958+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4520,7 +4520,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "2a125f6e15149f9d57331f8ec727ac397e9defd3ce7b3884d95fea3ab10d4681",
-   "signed_at": "2026-08-30T04:31:34.412929+00:00",
+   "signed_at": "2026-08-30T04:37:55.029965+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4541,7 +4541,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "455ba6a7dec24cf75dbf534cf9285db293d2b1b7c563effb7d722d50d64f1443",
-   "signed_at": "2026-08-30T04:31:34.412938+00:00",
+   "signed_at": "2026-08-30T04:37:55.029972+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.8,
@@ -4562,7 +4562,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "46bb086c826a7fb5ebe16e752a5cd6d907f57a2109de780764e346bb540f8658",
-   "signed_at": "2026-08-30T04:31:34.412946+00:00",
+   "signed_at": "2026-08-30T04:37:55.029979+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4601,7 +4601,7 @@
    },
    "schema": "nock-claim-attestation/v2",
    "signature": "827447d31d454394b0178399ddbacbff33c3f2b40aa1be33318afb580e3ff20a",
-   "signed_at": "2026-08-30T04:31:34.412976+00:00"
+   "signed_at": "2026-08-30T04:37:55.029997+00:00"
   },
   "category": "synthetic-category",
   "confidence": 0.8,
@@ -4650,7 +4650,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "5e38fea4892a67e277197634c5d5d2e389e6b87830fbc89dda90d98b2e6dbd8b",
-   "signed_at": "2026-08-30T04:31:34.412986+00:00",
+   "signed_at": "2026-08-30T04:37:55.030005+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.8,
@@ -4675,7 +4675,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "7d2d85a748310711f281f7afdebca1d97d70c8108d19d3e6b4749d2eec450cc4",
-   "signed_at": "2026-08-30T04:31:34.412995+00:00",
+   "signed_at": "2026-08-30T04:37:55.030012+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4696,7 +4696,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "a5ff23574e7c331521b8cb1f916a2841749f0ee0d7f10f2f46f96f50a269f244",
-   "signed_at": "2026-08-30T04:31:34.413003+00:00",
+   "signed_at": "2026-08-30T04:37:55.030019+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4717,7 +4717,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "c3bed7a25297e3b4bce122b18ff745a9b3dc03870eb47dd13a5da9616c7a9518",
-   "signed_at": "2026-08-30T04:31:34.413012+00:00",
+   "signed_at": "2026-08-30T04:37:55.030026+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -4740,7 +4740,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "649c06094f2896adaf1a42125d4362929bd1916dd1777eefd913d1b1588a6b5d",
-   "signed_at": "2026-08-30T04:31:34.413020+00:00",
+   "signed_at": "2026-08-30T04:37:55.030034+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -4763,7 +4763,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "3ec26d0d44a6edff82787d0b48f9f11055fd884e06af0419429c58af0cb2b6cc",
-   "signed_at": "2026-08-30T04:31:34.413028+00:00",
+   "signed_at": "2026-08-30T04:37:55.030041+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,
@@ -4786,7 +4786,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "6626d2f4df19150fe32b2bbd3b50ed65de70048b9fbbd058ac18a0c2e18cbe96",
-   "signed_at": "2026-08-30T04:31:34.413037+00:00",
+   "signed_at": "2026-08-30T04:37:55.030048+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4807,7 +4807,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "0af3f7bd4b1fa92ef3227953185406fb56083ef6ee6b74d73376cf35a13ba941",
-   "signed_at": "2026-08-30T04:31:34.413045+00:00",
+   "signed_at": "2026-08-30T04:37:55.030055+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4830,7 +4830,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "7941ad2f168f70a0d04c5793ff4c37303fb13caf41ad780237ec417089971ae1",
-   "signed_at": "2026-08-30T04:31:34.413054+00:00",
+   "signed_at": "2026-08-30T04:37:55.030062+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.75,
@@ -4853,7 +4853,7 @@
    "key_id": "hmac-sha256:e85db2a0981b1a78",
    "parent_fact_ids": [],
    "signature": "b57a64a1f1bc2f7561c82926ae53b13955e4bf1864e132e7886e14ea3088d0ae",
-   "signed_at": "2026-08-30T04:31:34.413062+00:00",
+   "signed_at": "2026-08-30T04:37:55.030069+00:00",
    "source_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
   },
   "confidence": 0.9,

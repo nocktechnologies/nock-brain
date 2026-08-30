@@ -154,6 +154,10 @@ def main():
     gold["_meta"]["limitation"] = ("SYNTHETIC fixture: content and queries are "
         "generated placeholders (no real memory data) so this public repo carries "
         "no store content; regenerate via bin/scrub-recall-fixture.py, not from a live store.")
+    gold["_meta"]["regenerate_ids"] = ("ids are fixed by the committed synthetic "
+        "fixture; regenerate everything via bin/scrub-recall-fixture.py, never "
+        "from a live store")
+    gold["_meta"]["source_pilot"] = "internal (not in this repository)"
     GOLD.write_text(json.dumps(gold, indent=2) + "\n")
 
     # curated suite -> synthetic, referentially valid (ids exist; tokens present)

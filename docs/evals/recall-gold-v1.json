@@ -7,8 +7,8 @@
     "queries": "one topic-paraphrase query per gold fact, HAND-AUTHORED (not machine-generated), overlap-guarded against the fact's verbatim wording so recall is not trivially lexical",
     "validity": "every eval measurement is a within-subjects delta (baseline vs a technique on identical queries+gold), so query-difficulty bias cancels; the absolute numbers are a floor, not a point estimate",
     "limitation": "SYNTHETIC fixture: content and queries are generated placeholders (no real memory data) so this public repo carries no store content; regenerate via bin/scrub-recall-fixture.py, not from a live store.",
-    "regenerate_ids": "python3 bin/gen-recall-gold.py --source <store> (stratified id sampler); queries must then be hand-authored",
-    "source_pilot": "reports/2026-08-22-openviking-recall-pilot.md ; design: reports/2026-08-22-recall-session-hierarchy-design.md"
+    "regenerate_ids": "ids are fixed by the committed synthetic fixture; regenerate everything via bin/scrub-recall-fixture.py, never from a live store",
+    "source_pilot": "internal (not in this repository)"
   },
   "queries": {
     "5f5b83893cc9": "which record mentioned the copper marmot in the notes",
