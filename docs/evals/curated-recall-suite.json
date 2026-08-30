@@ -1,0 +1,42 @@
+[
+  [
+    "S1",
+    "the copper marmot record",
+    "id:5f5b83893cc9"
+  ],
+  [
+    "S2",
+    "the cobalt marmot record",
+    "id:a8aa15ee84f4"
+  ],
+  [
+    "S3",
+    "the amber marmot record",
+    "id:c21e0e65df12"
+  ],
+  [
+    "S4",
+    "the slate marmot record",
+    "id:1c0f9faf9576"
+  ],
+  [
+    "S5",
+    "the ivory marmot record",
+    "id:fde7489ddf8d"
+  ],
+  [
+    "C1",
+    "records mentioning marmot",
+    "token:marmot"
+  ],
+  [
+    "C2",
+    "records mentioning sprocket",
+    "token:sprocket"
+  ],
+  [
+    "C3",
+    "records mentioning lantern",
+    "token:lantern"
+  ]
+]
