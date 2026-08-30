@@ -162,10 +162,12 @@ Per-module invariants worth memorizing:
   records that as `json-error:` in `recall-degradations.jsonl` via
   `on_unreadable`. v2 facts missing `source_date` get it filled from
   `source_time` so they pass `RECALL_ITEM_FIELDS`.
-- `_scrub`: matching is prefix/pattern only, never substring. A leading
-  `[UPPER TAG]` is an escape hatch checked first, so genuine tagged facts
-  survive every noise rule. Bare-32-hex pattern is aggressive — it redacts git
-  SHAs in legitimate content.
+- `_scrub`: matching is prefix/pattern only — with ONE substring exception,
+  `JUDGE_PROMPT_MARKERS` (N10052), which outranks everything: a judge-template
+  sentence anywhere in the text is always noise, even `[TAG]`ged. Otherwise a
+  leading `[UPPER TAG]` is an escape hatch checked first, so genuine tagged
+  facts survive every noise rule. Bare-32-hex pattern is aggressive — it
+  redacts git SHAs in legitimate content.
 - `_storeback`: a SQLite read must never create an empty `brain.db`
   (`exists()` checked first). Broken db **or** unreadable `facts.json` → `[]`
   + row in `recall-degradations.jsonl` — **the loudest silent-degradation path
