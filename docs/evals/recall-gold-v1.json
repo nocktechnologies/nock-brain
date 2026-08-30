@@ -6,7 +6,7 @@
     "gold_definition": "clean, current, prose facts (confidence >= 0.7), stratified across kinds (directive/decision/bug/architecture/correction) and dates, avoiding over-picking the 2026-05-19 backfill",
     "queries": "one topic-paraphrase query per gold fact, HAND-AUTHORED (not machine-generated), overlap-guarded against the fact's verbatim wording so recall is not trivially lexical",
     "validity": "every eval measurement is a within-subjects delta (baseline vs a technique on identical queries+gold), so query-difficulty bias cancels; the absolute numbers are a floor, not a point estimate",
-    "limitation": "SYNTHETIC fixture: content and queries are generated placeholders (no real memory data) so this public repo carries no store content; regenerate via scrub_fixture.py, not from a live store.",
+    "limitation": "SYNTHETIC fixture: content and queries are generated placeholders (no real memory data) so this public repo carries no store content; regenerate via bin/scrub-recall-fixture.py, not from a live store.",
     "regenerate_ids": "python3 bin/gen-recall-gold.py --source <store> (stratified id sampler); queries must then be hand-authored",
     "source_pilot": "reports/2026-08-22-openviking-recall-pilot.md ; design: reports/2026-08-22-recall-session-hierarchy-design.md"
   },
