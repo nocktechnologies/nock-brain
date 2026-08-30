@@ -121,3 +121,15 @@ def test_judge_prompts_carry_registered_markers(synthesize, detect_contradiction
     monkeypatch.setattr(detect_contradictions, "_call_claude", capture)
     detect_contradictions.make_claude_judge()("early fact", "late fact")
     assert any(m in captured["p"] for m in scrub.JUDGE_PROMPT_MARKERS)
+
+
+def test_marker_echo_rejected_at_generation(synthesize, scrub):
+    # A model echoing a registered judge template must fall back to the
+    # heuristic content, never become insight prose.
+    for marker in scrub.JUDGE_PROMPT_MARKERS:
+        assert not synthesize.is_valid_lesson(
+            f"Remember that {marker} and act accordingly."
+        )
+    assert synthesize.is_valid_lesson(
+        "Always verify the store backup before running a purge apply."
+    )

@@ -302,7 +302,7 @@ def run(argv: list[str] | None = None) -> int:
         f"{removed_facts} fact(s), {removed_events} event(s), "
         f"{removed_note_lines} note line(s), {removed_vault_lines} vault line(s), "
         f"{'all' if removed_vectors < 0 else removed_vectors} vector(s), "
-        f"{removed_insights} insight(s), {removed_graph} graph node(s)"
+        f"{removed_insights} insight(s), {removed_graph} graph item(s)"
     )
     if sidecar_note:
         print(sidecar_note, file=sys.stderr)
