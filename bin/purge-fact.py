@@ -145,7 +145,12 @@ def purge_sidecar(path: Path, removed_ids: set[str], apply: bool) -> tuple[str, 
 def purge_insights(
     path: Path, removed_ids: set[str], patterns: list[str],
 ) -> tuple[list[dict[str, Any]] | None, int]:
-    """Drop insights that cite a purged fact or still carry its content."""
+    """Drop insights that cite a purged fact or still carry its content.
+
+    Pattern matching covers ``content`` AND ``theme``: the N10052 residuals
+    carried the judge template only in ``theme`` (the LLM had rewritten
+    ``content`` into clean prose) and cited already-absent facts, so the
+    content-only match and the same-run source_ids sweep both missed them."""
     if not path.exists():
         return None, 0
     try:
@@ -165,6 +170,7 @@ def purge_insights(
             (item.get("id") and str(item.get("id")) in removed_ids)
             or any(str(sid) in removed_ids for sid in source_ids)
             or matches_text(str(item.get("content", "")), patterns)
+            or matches_text(str(item.get("theme", "")), patterns)
         )
         if drop:
             removed += 1
@@ -295,7 +301,8 @@ def run(argv: list[str] | None = None) -> int:
         f"{'would remove' if not args.apply else 'removed'} "
         f"{removed_facts} fact(s), {removed_events} event(s), "
         f"{removed_note_lines} note line(s), {removed_vault_lines} vault line(s), "
-        f"{'all' if removed_vectors < 0 else removed_vectors} vector(s)"
+        f"{'all' if removed_vectors < 0 else removed_vectors} vector(s), "
+        f"{removed_insights} insight(s), {removed_graph} graph node(s)"
     )
     if sidecar_note:
         print(sidecar_note, file=sys.stderr)
