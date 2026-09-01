@@ -15,8 +15,10 @@ batch digest and are stamped with this machine's provenance tag, then the
 store is re-signed and verified; the batch is recorded applied only after
 verification passes (idempotent across reruns via applied-batches.json).
 
-Usage:
-    NOCKCC_API_KEY=... NOCKBRAIN_MACHINE=fleet-02 \
+Usage (NOCKBRAIN_MACHINE must name the seat you are actually on — it is a
+closed enum in extract-facts.KNOWN_MACHINES and mints the applied facts'
+provenance; the retired fleet-02 seat no longer mints):
+    NOCKCC_API_KEY=... NOCKBRAIN_MACHINE=kevins-linux \
         python3 apply-promotion-batch.py --agent mira-nockos [--dry-run]
 """
 # Deferred annotations keep this importable on Python 3.9 (stock macOS

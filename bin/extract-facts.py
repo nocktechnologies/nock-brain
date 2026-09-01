@@ -113,25 +113,50 @@ def make_id(content: str, date: str) -> str:
 # The machine provenance enum (step 1.5, Mira msgs 59545/59574). CLOSED set,
 # deliberately: free-form host strings drift ("mac-kevin" vs "macbook") and
 # poison cross-machine reconciliation. Adding a machine = adding a line here,
-# in a PR, on purpose.
-KNOWN_MACHINES = {"mac-kevin", "fleet-02", "kevins-linux"}
+# in a PR, on purpose. Retiring one is the same act in reverse.
+#
+# Retired: "fleet-02" — the 2026-08-27 seat migration re-homed the resident
+# distiller to "kevins-linux" (see #93 / b421f50). Retirement is a MINT gate
+# only: it stops NEW facts being stamped with a decommissioned seat's
+# provenance. It never hides history — see machine_tag()'s contract note.
+KNOWN_MACHINES = {"mac-kevin", "kevins-linux"}
+
+# Names that were registered once and no longer mint. Kept solely so the raise
+# below can say *why* a previously-working seat stopped: an operator whose
+# wrapper still exports a retired tag sees "retired", not "typo".
+RETIRED_MACHINES = {
+    "fleet-02": "retired at the 2026-08-27 seat migration; use kevins-linux",
+}
 
 
 def machine_tag() -> str:
     """Enum-validated host tag stamped on every fact for cross-machine
-    provenance. Requires NOCKBRAIN_MACHINE in KNOWN_MACHINES — unset or unknown
-    raises, so extraction on an unregistered machine fails LOUDLY at mint time
-    instead of silently minting drifting provenance (the failure mode behind
-    the 2026-08 store divergence). Recall never calls this; only the distiller
-    paths do.
+    provenance. Requires NOCKBRAIN_MACHINE in KNOWN_MACHINES — unset, unknown,
+    or RETIRED raises, so extraction on an unregistered machine fails LOUDLY at
+    mint time instead of silently minting drifting provenance (the failure mode
+    behind the 2026-08 store divergence). Recall never calls this; only the
+    distiller paths do.
+
+    CONTRACT — the enum gates MINTING ONLY. Facts already stamped with a
+    retired machine stay readable, verifiable, and recallable forever: no read,
+    recall, verify, export, or health path consults KNOWN_MACHINES or even
+    looks at the `machine` field, and `machine` is outside BOTH attestation
+    payloads (canonical_fact_core is id+kind+content; claim_payload_v2 does not
+    enumerate it), so signatures are independent of its value. Do not turn this
+    into a read filter — that would orphan every fact minted on a retired seat.
+    tests/test_extract_facts.py pins both halves.
 
     Provenance only, never identity: make_id stays content+date derived so the
     same fact minted on two machines still collapses to one on store merge.
+    `machine` is also unsigned, mutable metadata — a provenance hint, never an
+    audit anchor.
     """
     tag = os.environ.get("NOCKBRAIN_MACHINE", "")
     if tag not in KNOWN_MACHINES:
+        retired = RETIRED_MACHINES.get(tag)
+        why = f" — {retired}" if retired else ""
         raise ValueError(
-            f"NOCKBRAIN_MACHINE={tag!r} is not a registered machine "
+            f"NOCKBRAIN_MACHINE={tag!r} is not a registered machine{why} "
             f"(known: {sorted(KNOWN_MACHINES)}). Set it in the distiller's "
             "environment; add new machines to KNOWN_MACHINES via PR."
         )

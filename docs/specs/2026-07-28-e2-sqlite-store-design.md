@@ -5,6 +5,13 @@
 **Plan:** E2 of `2026-07-26-mira-brain-enhancement-plan.md` (v2), carrying E6's schema in the same migration per the decision log.
 **Builds:** Fable (base repo). **Operates/cutover:** Mira on fleet-02, post-command-center-refactor, fail-closed.
 
+> **⚠ Seat note (2026-08-31): every `fleet-02` in this doc means `kevins-linux`.**
+> The 2026-08-27 seat migration re-homed the resident agent off fleet-02, which
+> is now retired and no longer a valid `NOCKBRAIN_MACHINE` — it raises at mint.
+> P3–P5 are still undone, so §8, §9, §11 and §12 below are live instructions,
+> not history: run them on `kevins-linux`. Dated measurements are left as
+> recorded (§1's store size, §4's FTS5 check).
+
 ---
 
 ## 1. What this replaces

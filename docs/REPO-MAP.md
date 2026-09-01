@@ -17,6 +17,8 @@ JSON-path degradations; sidecar shape guards; dense `fuse` crash → BM25;
 health reports unreadable `facts.json` instead of crashing; `secure_write_json`
 is atomic (N10027); promotion apply is stage-verify-commit with `--strict`
 and a state-anchored chain (N10026).
+Contract updates 2026-08-31: `KNOWN_MACHINES` is a **mint-only** gate and the
+retired `fleet-02` seat no longer mints (§5, §8, §9).
 
 ---
 
@@ -204,7 +206,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 |---|---|
 | `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result` |
 | `refine-sessions.py` | events → v1-compatible facts + session notes. 1,500-char content cap; `tool_use.input`/`tool_result.content` can never mint facts; reuses extract-facts' classification rules |
-| `extract-facts.py` | Markdown transcripts → facts. Tagged (0.9 conf) + inferred (0.7–0.85) patterns; fleet-activity kinds dropped at classification (#76); `machine_tag()` enforces a **closed machine enum**. **Writes the live store directly** — `propose-facts.py` is the gated twin |
+| `extract-facts.py` | Markdown transcripts → facts. Tagged (0.9 conf) + inferred (0.7–0.85) patterns; fleet-activity kinds dropped at classification (#76); `machine_tag()` enforces a **closed machine enum, MINT-ONLY** (`KNOWN_MACHINES` = `mac-kevin`, `kevins-linux`; `fleet-02` retired at the 2026-08-27 seat migration and now raises). Retiring a name blocks new stamps only — facts already carrying a retired `machine` stay readable, verifiable and recallable, because `machine` is in neither attestation payload and no read path consults the enum. Never make it a read filter. **Writes the live store directly** — `propose-facts.py` is the gated twin |
 | `propose-facts.py` / `approve-proposals.py` | Same extraction into `proposed-facts.json`; approve releases to store (no re-sign), reject drops. Live store untouched until approval |
 | `ingest-curated-memory.py` | Dir of curated markdown → signed high-confidence facts; idempotent (drops+reingests `curated-*` slice). Bypasses the propose gate by design |
 
@@ -388,7 +390,8 @@ Env vars honored by recall (`budget-recall`): `NOCKBRAIN_SEMANTIC`,
 `NOCKBRAIN_MAX_PER_DATE`, `NOCKBRAIN_INSIGHT_LEAD`, `NOCKBRAIN_SIGNING_KEY`
 /`_PUB`, `NOCKBRAIN_UNTRUSTED_FACTOR`, `NOCKBRAIN_BULK_DATE_*`; dense/graph
 tuning `NOCKBRAIN_RRF_K`, `NOCKBRAIN_DENSE_TOP`, `NOCKBRAIN_RESERVED_SLOTS`,
-`NOCKBRAIN_GRAPH_WEIGHT` etc. Other: `NOCKBRAIN_MACHINE` (closed enum),
+`NOCKBRAIN_GRAPH_WEIGHT` etc. Other: `NOCKBRAIN_MACHINE` (closed enum, **mint-only** — read paths
+never consult it; retired names raise at mint),
 `NOCKBRAIN_EMBED_STUB` (CI), `NOCKBRAIN_EMBED_MODEL_DIR`, `NOCKCC_API_KEY`
 (fleet applier). The hook itself sets only `NOCKBRAIN_SEMANTIC`.
 
@@ -414,6 +417,11 @@ tuning `NOCKBRAIN_RRF_K`, `NOCKBRAIN_DENSE_TOP`, `NOCKBRAIN_RESERVED_SLOTS`,
   containing the secret is intentional and gitleaks-allowlisted).
 - `test_rebuild_store.py` — health-gate aborts, backup-before-swap, the
   never-shrink-on-merge guard.
+- `test_extract_facts.py::test_retired_machine_*` — both halves of the
+  machine-enum contract: a retired seat cannot MINT, and facts already stamped
+  with one stay `verify --strict`-green and recallable. The second test is what
+  stops a later PR turning the enum into a read filter and orphaning every
+  fact minted on a decommissioned seat.
 
 CI (`.github/workflows/ci.yml`): pytest → classifier smoke →
 `recall-eval.py --gate` → bandit (bin/ only) → gitleaks.

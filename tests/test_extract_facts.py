@@ -44,12 +44,12 @@ def test_machine_tag_enum_enforced(extract_facts, tmp_path, monkeypatch):
     # minted fact; unset or free-form host strings fail loudly at mint time.
     import pytest
 
-    monkeypatch.setenv("NOCKBRAIN_MACHINE", "fleet-02")
-    assert extract_facts.machine_tag() == "fleet-02"
+    monkeypatch.setenv("NOCKBRAIN_MACHINE", "kevins-linux")
+    assert extract_facts.machine_tag() == "kevins-linux"
     md = tmp_path / "2026-06-01.md"
     md.write_text("## Session 10:00\n- [DECISION] Kevin chose Postgres\n")
     facts = extract_facts.parse_file(md)
-    assert facts and all(f["machine"] == "fleet-02" for f in facts)
+    assert facts and all(f["machine"] == "kevins-linux" for f in facts)
 
     monkeypatch.setenv("NOCKBRAIN_MACHINE", "macbook")  # unregistered free-form
     with pytest.raises(ValueError, match="not a registered machine"):
@@ -57,6 +57,72 @@ def test_machine_tag_enum_enforced(extract_facts, tmp_path, monkeypatch):
     monkeypatch.delenv("NOCKBRAIN_MACHINE")
     with pytest.raises(ValueError, match="not a registered machine"):
         extract_facts.machine_tag()
+
+
+def test_retired_machine_cannot_mint(extract_facts, tmp_path, monkeypatch):
+    # fleet-02 was decommissioned at the 2026-08-27 seat migration but stayed
+    # in the enum, so the applier's own documented command still minted facts
+    # stamped with a dead seat's provenance and signed them into the live
+    # store — exactly the divergence the closed enum exists to prevent.
+    # Minting under a retired seat must now fail LOUDLY, before any store write.
+    import pytest
+
+    assert "fleet-02" not in extract_facts.KNOWN_MACHINES
+
+    monkeypatch.setenv("NOCKBRAIN_MACHINE", "fleet-02")
+    with pytest.raises(ValueError, match="not a registered machine") as exc:
+        extract_facts.machine_tag()
+    # The operator whose wrapper still exports it must be told why, not left
+    # to read it as a typo.
+    assert "retired" in str(exc.value)
+
+    md = tmp_path / "2026-06-01.md"
+    md.write_text("## Session 10:00\n- [DECISION] Kevin chose Postgres\n")
+    with pytest.raises(ValueError, match="not a registered machine"):
+        extract_facts.parse_file(md)
+
+
+def test_retired_machine_facts_stay_verifiable_and_recallable(
+        sign_lib, budget_recall, tmp_path, monkeypatch):
+    """The other half of the contract: retiring a machine is a MINT gate only.
+
+    Facts already stamped with a retired seat must stay signed-valid and
+    recallable forever — `machine` is in neither attestation payload and no
+    read path consults KNOWN_MACHINES. Without this test nothing stops a later
+    PR from turning the enum into a read filter and silently orphaning every
+    fact minted on fleet-02 before the migration.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    key_path, pub_path = tmp_path / "signing-key", tmp_path / "signing-key.pub"
+    key = sign_lib.load_or_create_key(key_path, pub_path)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(key_path))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_PUB", str(pub_path))
+
+    facts = [{
+        "id": "retired-1",
+        "kind": "decision",
+        "status": "current",
+        "confidence": 0.9,
+        "content": "Kevin chose Seatbelt over the preload shim for sandboxing",
+        "source_date": "2026-07-01",
+        "machine": "fleet-02",  # minted on the now-retired seat
+        "evidence": [{"event_id": "ev-1", "path": "session.jsonl", "line": 1}],
+    }]
+    sign_lib.sign_facts(facts, key)
+    store = tmp_path / "facts.json"
+    store.write_text(json.dumps(facts), encoding="utf-8")
+
+    spec = importlib.util.spec_from_file_location(
+        "verify_facts_cli_retired",
+        Path(__file__).resolve().parent.parent / "bin" / "verify-facts.py")
+    vf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vf)
+    assert vf.run(["--facts", str(store), "--pub", str(pub_path), "--strict"]) == 0
+
+    out = budget_recall.budget_recall("Seatbelt preload shim sandboxing", store)
+    assert "Seatbelt" in out
 
 
 def test_make_id_deterministic(extract_facts):
