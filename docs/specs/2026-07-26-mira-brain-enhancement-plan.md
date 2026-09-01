@@ -5,6 +5,13 @@
 **Scope:** `/home/nock/Dev/mira-brain` + `/home/nock/.nock-brain` on nock-fleet-02, plus the recall hooks in the crm-mira harness
 **Basis:** Live inspection of fleet-02 on 2026-07-26, compared against nock-brain `main` @ `d3995b2` and the mid-2026 agent-memory landscape
 
+> **⚠ Seat note (2026-08-31): every `fleet-02` in this doc means `kevins-linux`.**
+> The 2026-08-27 seat migration re-homed the resident agent; fleet-02 is retired
+> and no longer a valid `NOCKBRAIN_MACHINE` — it raises at mint. This plan is
+> still **Approved** with E3/E7/E5b outstanding, so its scope paths and the E3
+> CPU-measurement instruction target `kevins-linux`. The dated inspection
+> figures and decision-log rows below are left as recorded.
+
 ---
 
 ## Current-state snapshot (2026-07-26)
