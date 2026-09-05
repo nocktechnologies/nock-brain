@@ -236,7 +236,7 @@ def test_budget_recall_byte_corrupt_store_is_empty_not_crash(budget_recall, tmp_
     assert budget_recall.budget_recall("pricing", fp) == ""
 
 
-def test_insights_surface_first_and_dedup_their_sources(budget_recall, tmp_path):
+def test_insights_surface_first_without_assuming_legacy_coverage(budget_recall, tmp_path):
     f1 = fact("pricing tier correction one")
     f2 = fact("pricing tier correction two")
     f1["id"], f2["id"] = "f1", "f2"
@@ -256,9 +256,9 @@ def test_insights_surface_first_and_dedup_their_sources(budget_recall, tmp_path)
 
     out = budget_recall.budget_recall("pricing", ff, budget=1000, insights_file=inf)
     assert "Recurring correction" in out  # the synthesized insight is surfaced
-    # its source facts are deduped out (we show the synthesis, not its raw sources)
-    assert "correction one" not in out
-    assert "correction two" not in out
+    # Legacy source_ids are only lineage: retain detail alongside the insight.
+    assert "correction one" in out
+    assert "correction two" in out
 
 
 def test_recall_works_with_insights_but_no_facts(budget_recall, tmp_path):
@@ -604,3 +604,21 @@ def test_v2_fact_without_source_date_still_recalls(budget_recall, tmp_path):
     out = budget_recall.budget_recall("bounded memory build", facts_file)
     assert "bounded memory" in out
     assert "2026-08-04" in out
+
+
+def test_omitted_insight_cannot_hide_a_short_source(budget_recall, tmp_path):
+    source = dict(fact('pricing approved'), id='f1')
+    insight = dict(fact('pricing ' * 100, kind='insight'), id='ins1', source_ids=['f1'])
+    ff, inf = tmp_path / 'facts.json', tmp_path / 'insights.json'
+    ff.write_text(json.dumps([source])); inf.write_text(json.dumps([insight]))
+    selected = budget_recall.select_recall('pricing', ff, budget=35, insights_file=inf)
+    assert [f['id'] for f in selected['included']] == ['f1']
+
+
+def test_legacy_lineage_is_not_a_coverage_claim(budget_recall, tmp_path):
+    source = dict(fact('pricing approved'), id='f1')
+    insight = dict(fact('pricing lesson', kind='insight'), id='ins1', source_ids=['f1'])
+    ff, inf = tmp_path / 'facts.json', tmp_path / 'insights.json'
+    ff.write_text(json.dumps([source])); inf.write_text(json.dumps([insight]))
+    selected = budget_recall.select_recall('pricing', ff, budget=400, insights_file=inf)
+    assert {f['id'] for f in selected['included']} == {'ins1', 'f1'}

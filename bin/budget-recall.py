@@ -855,6 +855,47 @@ def _maybe_dense_fuse(all_facts: list[dict], seeds: list[dict], query: str,
         return seeds, frozenset()
 
 
+def _covered_sources(insight: dict, facts_by_id: dict, verify_key,
+                     query_terms: set[str]) -> set[str]:
+    """Only a verified, fully rendered, verbatim source replacement can dedup.
+
+    Legacy source_ids name lineage, not coverage. Abstractions and truncated
+    excerpts remain useful recall, but never erase the underlying detail.
+    """
+    if insight.get("kind") != "insight" or verify_key is None:
+        return set()
+    content = str(insight.get("content", ""))
+    if _relevant_excerpt(content, query_terms, max_chars=320) != content:
+        return set()
+    import _sign
+    if _sign.verify_fact(insight, verify_key) != _sign.VALID:
+        return set()
+    evidence = insight.get("evidence")
+    if not isinstance(evidence, list) or len(evidence) != 1:
+        return set()
+    lineage = evidence[0]
+    if not isinstance(lineage, dict) or lineage.get("schema") != "nockbrain-synthesis/v1":
+        return set()
+    inputs = lineage.get("inputs")
+    covered = lineage.get("covered_source_ids")
+    if not isinstance(inputs, list) or not isinstance(covered, list):
+        return set()
+    receipts = {entry.get("id"): entry for entry in inputs
+                if isinstance(entry, dict) and isinstance(entry.get("id"), str)}
+    normalized = " ".join(content.split())
+    result = set()
+    for fid in covered:
+        if not isinstance(fid, str) or fid not in receipts or fid not in facts_by_id:
+            continue
+        source = facts_by_id[fid]
+        text = " ".join(str(source.get("content", "")).split())
+        receipt = receipts[fid]
+        if (receipt.get("truncated") is False and text and text in normalized
+                and receipt.get("fact_hash") == _sign.canonical_fact_hash(source)):
+            result.add(fid)
+    return result
+
+
 def select_recall(query: str, facts_file: "Path | None",
                   budget: int = DEFAULT_BUDGET,
                   include_superseded: bool = False,
@@ -924,21 +965,18 @@ def select_recall(query: str, facts_file: "Path | None",
         if lead_cap > 0:
             insight_results = insight_results[:lead_cap]
 
-    # Consolidated insights lead; drop the raw facts an insight already covers so
-    # recall shows the synthesis, not the synthesis plus its own sources.
-    covered = {sid for ins in insight_results for sid in ins.get("source_ids", [])}
-    fact_results = [f for f in fact_results if f.get("id") not in covered]
+    # Keep source candidates until an actually included, complete insight proves
+    # coverage. A skipped/truncated insight must not remove raw BM25 answers.
+    covered: set[str] = set()
+    facts_by_id = {f.get("id"): f for f in fact_results if f.get("id")}
 
-    results = insight_results + fact_results
+    # Date diversity applies independently to the two tiers. A summary omitted
+    # for budget must never spend a raw fact's date slot and demote that answer.
+    date_cap = _resolve_max_per_date(max_per_date)
+    results = (_apply_date_diversity_cap(insight_results, date_cap)
+               + _apply_date_diversity_cap(fact_results, date_cap, exempt=reserved_ids))
     if not results:
         return None
-
-    # Diversity cap (post-scoring): keep any single source_date's import from
-    # crowding the top of the budget-bounded result. Applied after insight-lead
-    # ordering and source dedup, before budget truncation. Reserved dense
-    # slots are exempt (Phase 0: the cap demoted the best semantic hit).
-    results = _apply_date_diversity_cap(
-        results, _resolve_max_per_date(max_per_date), exempt=reserved_ids)
 
     header = f"Memory recall ({len(results)} matches, budget {budget} tokens):"
     tokens_used = estimate_tokens(header)
@@ -946,14 +984,19 @@ def select_recall(query: str, facts_file: "Path | None",
     truncated = False
 
     if not reserved_ids:
-        # Exact pre-semantic truncation: greedy in order, stop at overflow.
+        # Preserve raw-fact greedy truncation; omitted insights cannot block sources.
         for f in results:
+            if f.get("id") in covered and f.get("kind") != "insight":
+                continue
             fact_tokens = estimate_tokens(format_fact(f, query_terms))
             if tokens_used + fact_tokens > budget:
                 truncated = True
+                if f.get("kind") == "insight":
+                    continue  # a shorter source fact may still fit
                 break
             included.append(f)
             tokens_used += fact_tokens
+            covered.update(_covered_sources(f, facts_by_id, verify_key, query_terms))
     else:
         # Reserved slots are guaranteed: precommit their token cost, then fill
         # the remaining budget greedily. A reserved fact past the truncation
@@ -978,12 +1021,17 @@ def select_recall(query: str, facts_file: "Path | None",
                     included.append(f)
                     emitted.add(fid)
                 continue
+            if fid in covered and f.get("kind") != "insight":
+                continue
             fact_tokens = estimate_tokens(format_fact(f, query_terms))
             if tokens_used + fact_tokens > budget:
                 truncated = True
+                if f.get("kind") == "insight":
+                    continue
                 break
             included.append(f)
             tokens_used += fact_tokens
+            covered.update(_covered_sources(f, facts_by_id, verify_key, query_terms))
         if truncated:
             for f in committed:
                 if f.get("id") not in emitted:

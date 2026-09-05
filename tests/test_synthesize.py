@@ -230,7 +230,7 @@ def test_call_claude_swallows_missing_binary(synthesize, monkeypatch):
     def raise_oserror(*a, **k):
         raise OSError("no claude binary")
 
-    monkeypatch.setattr(synthesize.subprocess, "run", raise_oserror)
+    monkeypatch.setattr(synthesize.subprocess, "Popen", raise_oserror)
     assert synthesize._call_claude("hi", "haiku", 5) == ""
 
 
@@ -397,3 +397,153 @@ def test_shape_gate_rejects_curly_apostrophe_refusals(synthesize):
         "I’ll return the lesson once you share the facts with me here.") is False
     assert synthesize.is_valid_lesson(
         "I’m unable to access that repository from this seat right now.") is False
+
+
+def test_123_source_cluster_uses_25_recent_inputs_and_exact_lineage(synthesize):
+    from datetime import date, timedelta
+    facts = [fact(f'Confirm pricing tier before release number {i}', fid=f'f{i}',
+                  source_date=(date(2026, 1, 1) + timedelta(days=i)).isoformat())
+             for i in range(123)]
+    seen = []
+    def fake(inputs, heuristic):
+        seen.extend(inputs)
+        return 'Verify pricing before every release.'
+    insight = synthesize.synthesize(facts, synthesizer=fake)[0]
+    assert len(seen) == 25
+    assert seen[0]['id'] == 'f122'
+    assert insight['input_ids'] == [f['id'] for f in seen]
+    assert set(insight['source_ids']) == {f['id'] for f in facts}
+    assert insight['source_date'] == seen[0]['source_date']
+    assert insight['covered_source_ids'] == []  # a lesson is not an exhaustive substitute
+    assert insight['evidence'][0]['input_ids'] == insight['input_ids']
+    assert len(insight['evidence'][0]['inputs']) == 25
+
+
+def test_duplicate_source_events_do_not_inflate_recurrence(synthesize):
+    rows = [dict(fact(f'Confirm pricing tier before release variation {i}', fid=f'f{i}'),
+                 evidence=[{'event_id': 'same-event', 'path': 'session.jsonl', 'line': 42}])
+            for i in range(32)]
+    assert synthesize.synthesize(rows) == []
+    rows.append(dict(fact('Confirm pricing tier before release again', fid='next', source_date='2026-06-02'),
+                     evidence=[{'event_id': 'next-event'}]))
+    insight = synthesize.synthesize(rows)[0]
+    assert insight['recurrence'] == 2
+    assert len(insight['source_ids']) == 33
+    assert len(insight['input_ids']) == 2
+
+
+def test_exact_same_day_copies_without_anchor_are_one_occurrence(synthesize):
+    rows = [fact('Confirm pricing tier before release.', fid=f'f{i}') for i in range(32)]
+    assert synthesize.synthesize(rows) == []
+
+
+def test_partial_source_excerpt_never_claims_full_coverage(synthesize):
+    content = 'Confirm pricing before release. ' * 40
+    rows = [fact(content, fid=f'f{i}', source_date=f'2026-06-0{i+1}') for i in range(2)]
+    insight = synthesize.synthesize(rows, synthesizer=lambda inputs, h: inputs[0]['content'])[0]
+    assert insight['covered_source_ids'] == []
+    assert all(entry['truncated'] for entry in insight['evidence'][0]['inputs'])
+
+
+def test_recent_sampling_spreads_dates_deterministically(synthesize):
+    rows = [fact(f'pricing review occurrence {i}', fid=f'recent{i}', source_date='2026-06-04')
+            for i in range(30)]
+    rows += [fact(f'pricing review earlier {i}', fid=f'older{i}', source_date=f'2026-06-0{i}')
+             for i in range(1, 4)]
+    one = synthesize.synthesize(rows)[0]
+    two = synthesize.synthesize(list(reversed(rows)))[0]
+    assert one['input_ids'] == two['input_ids']
+    assert [entry['source_date'] for entry in one['evidence'][0]['inputs'][:4]] == [
+        '2026-06-04', '2026-06-03', '2026-06-02', '2026-06-01']
+    assert '33 distinct events; 25 sampled inputs' in one['content']
+
+
+def test_distinct_event_ids_with_overlapping_facts_count_once_each(synthesize):
+    first = fact('Confirm recurring pricing tier before release', fid='f1', confidence=0.7)
+    second = fact('Confirm recurring pricing tier before release again', fid='f2', confidence=0.9)
+    first['evidence'] = [{'event_id': 'event1'}, {'event_id': 'event2'}, {'event_id': 'event1'}]
+    second['evidence'] = [{'event_id': 'event2'}, {'event_id': 'event3'}]
+    insight = synthesize.synthesize([first, second])[0]
+    assert insight['recurrence'] == 3
+    assert insight['source_ids'] == ['f1', 'f2']
+    assert set(insight['input_ids']) == {'f1', 'f2'}
+    assert len(insight['input_ids']) == 2
+    assert insight['confidence'] == 0.8  # each representative fact caps quality once
+    assert {e['event_id']: e['source_ids'] for e in insight['evidence'][0]['events']} == {
+        'event1': ['f1'], 'event2': ['f1', 'f2'], 'event3': ['f2']}
+    synthesize.validate_insights([insight], [first, second])
+
+
+def test_one_fact_with_many_events_remains_one_input_and_one_confidence_vote(synthesize):
+    source = fact('Confirm recurring pricing tier before release', fid='summary', confidence=0.7)
+    source['evidence'] = [{'event_id': f'event{i}'} for i in range(40)]
+    seen = []
+    def capture(inputs, heuristic):
+        seen.extend(inputs)
+        return 'Confirm the pricing tier before each production release.'
+    insight = synthesize.synthesize([source], synthesizer=capture)[0]
+    assert insight['recurrence'] == 40
+    assert insight['source_ids'] == insight['input_ids'] == ['summary']
+    assert len(seen) == 1
+    assert insight['confidence'] == 0.7
+    assert insight['covered_source_ids'] == []
+    synthesize.validate_insights([insight], [source])
+
+
+def test_event_overlap_preserves_unique_bounded_recent_inputs(synthesize):
+    facts = []
+    for i in range(32):
+        item = fact(f'Confirm recurring pricing tier before release {i}', fid=f'f{i:02}', source_date=f'2026-06-{i % 28 + 1:02}')
+        item['evidence'] = [{'event_id': 'shared'}, {'event_id': f'unique{i}'}]
+        facts.append(item)
+    seen = []
+    insight = synthesize.synthesize(facts, synthesizer=lambda inputs, _: seen.extend(inputs) or '')[0]
+    assert insight['recurrence'] == 33
+    assert len(insight['source_ids']) == 32
+    assert len(insight['input_ids']) == len(set(insight['input_ids'])) == len(seen) == 25
+    assert insight['input_ids'] == synthesize.synthesize(list(reversed(facts)))[0]['input_ids']
+    synthesize.validate_insights([insight], facts)
+
+
+def test_event_ids_take_precedence_over_fallback_anchor_and_text_groups(synthesize):
+    first = fact('Confirm recurring pricing tier before release', fid='one')
+    second = dict(first, id='two')
+    first['evidence'] = [{'event_id': 'same', 'path': 'first.jsonl', 'line': 3}]
+    second['evidence'] = [{'event_id': 'same', 'path': 'copy.jsonl', 'line': 50}]
+    # Different source anchors do not inflate an explicitly shared event.
+    assert synthesize.synthesize([first, second]) == []
+    # With no event ID, this remains a separate fallback occurrence; its text
+    # cannot prove it belongs to the explicitly identified event.
+    third = dict(first, id='legacy', evidence=[])
+    insight = synthesize.synthesize([first, second, third])[0]
+    assert insight['recurrence'] == 2
+    assert {e['event_id'] for e in insight['evidence'][0]['events']} == {'same', None}
+    synthesize.validate_insights([insight], [first, second, third])
+
+
+def test_call_claude_timeout_kills_the_whole_process_group(synthesize, monkeypatch, tmp_path):
+    """Gander on #108: subprocess.run's timeout kills only the CLI; a helper
+    it spawned survived the heuristic fallback. The CLI now runs in its own
+    session and a timeout reaps the entire group."""
+    import os
+    import subprocess
+    import time
+    fake = tmp_path / "claude"
+    marker = tmp_path / "child.pid"
+    fake.write_text(
+        "#!/bin/sh\n"
+        f"sleep 30 &\necho $! > {marker}\nwait\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}")
+    assert synthesize._call_claude("hi", "haiku", 0.5) == ""
+    deadline = time.monotonic() + 5
+    child = int(marker.read_text().strip())
+    while time.monotonic() < deadline:
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(child)],
+                               capture_output=True, text=True).stdout.strip()
+        if not state or state.startswith("Z"):
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(child, 9)
+        raise AssertionError("grandchild survived the CLI timeout")

@@ -135,6 +135,39 @@ Generated local stores and derived artifacts are written with private permission
 
 `refine-sessions.py` consumes sanitized event JSONL, reuses the same classification rules as markdown extraction, writes v1-compatible `facts.json`, and emits markdown session notes with evidence anchors. Oversized fact content is capped at 1,500 characters with a `session_anchor` drill-back pointer so raw tool output cannot be amplified into review or vault artifacts. The output can be used immediately by `budget-recall.py`.
 
+### Verified synthesis publication
+
+`synthesize.py` always requires an existing signing key and a strictly verified
+source store, including when called with only `--llm`. `--sign` remains accepted
+for existing schedules. Keys use the shared environment overrides, otherwise
+`signing-key` and `signing-key.pub` beside the selected facts file; synthesis
+never creates a replacement key. Inspect invalid sources with `verify-facts.py`
+and resolve their provenance before retrying.
+
+The worker validates the generated source references, signs through the shared
+fact signer, verifies the serialized result, then replaces insights atomically.
+A key, validation, signing or write failure leaves the prior file intact and
+returns nonzero. Synthesis invocations share a persistent output lock and check
+that the original output identity still matches before replacement; a slower
+run refuses to overwrite an intervening publication, even from identical source
+facts. A source byte change observed immediately before replacement also
+aborts. Independent facts writers do not share this lock, so this source check
+is not a transaction with those writers. Other insight writers must use the
+same publication protocol to receive its concurrency guarantee.
+An unavailable model can still fall back to a validated, signed heuristic.
+
+Each distinct source event ID counts once, including several IDs cited by one
+fact and overlapping citations across facts. Signed evidence records each
+event's associated fact IDs. Anchors/text deduplication applies only without
+event IDs. Up to 25 distinct recent facts, spread across dates, feed synthesis;
+a fact citing many events is supplied once and contributes once to the mean
+representative-confidence ceiling. Signed evidence records exact bounded text
+hashes and keeps full cluster lineage separate. The recurrence count describes distinct
+source events; freshness describes the inputs actually used. A summary only
+suppresses a raw fact when the entire verified insight was included and it
+reproduces that complete source verbatim. Abstractions and legacy lineage keep
+raw detail available for recall.
+
 ### Review and exports
 
 `review-promotions.py` writes a human-gated review queue. Entries include proposed target, proposed text, confidence, risk, actions, and evidence. The command never modifies project rules, agent identity, hooks, or skills.

@@ -100,7 +100,14 @@ def test_stage1_store_writers_create_private_files(tmp_path):
         assert mode(next((vault / "sessions").glob("*.md"))) == 0o600
 
         insights = tmp_path / "store" / "insights.json"
-        run_python(["bin/synthesize.py", "--facts", str(facts), "--output", str(insights)])
+        # Publishing synthesis now requires an already signed source and key.
+        signing_env = {
+            "NOCKBRAIN_SIGNING_KEY": str(tmp_path / "store" / "signing-key"),
+            "NOCKBRAIN_SIGNING_PUB": str(tmp_path / "store" / "signing-key.pub"),
+        }
+        run_python(["bin/sign-facts.py", "--facts", str(facts)], env=signing_env)
+        run_python(["bin/synthesize.py", "--facts", str(facts), "--output", str(insights)],
+                   env=signing_env)
         assert mode(insights) == 0o600
 
         transcript_dir = tmp_path / "transcripts"

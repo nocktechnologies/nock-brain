@@ -203,3 +203,26 @@ sys.exit(1 if failures else 0)
         "bin/ module(s) failed to import under stock python3:\n"
         + result.stdout + result.stderr
     )
+
+
+@pytest.mark.skipif(not STOCK_PYTHON.exists(), reason='no stock Python on this machine')
+def test_insight_coverage_selection_executes_under_stock_python3():
+    """Exercise the changed hook branch, beyond importing its acknowledged closure."""
+    driver = '''
+import importlib.util, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+spec = importlib.util.spec_from_file_location('budget_recall', Path(sys.argv[1]) / 'budget-recall.py')
+recall = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(recall)
+common = dict(status='current', confidence=0.9, source_date='2026-06-01')
+source = dict(common, id='source', kind='decision', content='pricing approved')
+insight = dict(common, id='insight', kind='insight', content='pricing ' * 100, source_ids=['source'])
+recall._resolve_verify_key = lambda: (None, None)
+recall._load = lambda path, **kwargs: [source] if path.name == 'facts.json' else [insight]
+packet = recall.select_recall('pricing', Path('facts.json'), budget=35, insights_file=Path('insights.json'))
+assert [row['id'] for row in packet['included']] == ['source'], packet
+'''
+    result = subprocess.run([str(STOCK_PYTHON), '-c', driver, str(BIN)],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
