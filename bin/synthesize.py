@@ -34,6 +34,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess  # nosec B404 - only invokes the trusted local `claude` CLI, no shell
 import sys
 from collections import Counter
@@ -141,19 +142,47 @@ def _call_claude(prompt: str, model: str, timeout: float) -> str:
     command.
     """
     try:
-        proc = subprocess.run(  # nosec B603 B607 - fixed argv, no shell, trusted local CLI
+        proc = subprocess.Popen(  # nosec B603 B607 - fixed argv, no shell, trusted local CLI
             # N10052: never persist the one-shot session — a persisted judge
             # transcript lands under the active config dir's projects/ tree,
             # which rebuild-store scans by default, and the prompt template
             # gets minted back into the store as "facts".
             ["claude", "-p", "--model", model, "--no-session-persistence", prompt],
-            capture_output=True, text=True, timeout=timeout, check=False,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            # Own process group: on timeout the WHOLE tree dies, not just the
+            # CLI (Gander on #108: subprocess.run's timeout kills only the
+            # immediate child; helpers it spawned would outlive the fallback).
+            start_new_session=True,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
+        return ""
+    try:
+        stdout, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)
         return ""
     if proc.returncode != 0:
         return ""
-    return proc.stdout.strip()
+    return stdout.strip()
+
+
+def _kill_process_group(proc: "subprocess.Popen[str]") -> None:
+    """Terminate, then kill, then reap the CLI's whole process group."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        try:
+            proc.communicate(timeout=2)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+    try:
+        proc.kill()
+        proc.communicate(timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 # Chat-shaped LLM artifacts that must never enter the trusted recall surface.

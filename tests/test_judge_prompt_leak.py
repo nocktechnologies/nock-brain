@@ -92,14 +92,15 @@ def test_call_claude_disables_session_persistence(synthesize, monkeypatch):
 
     class _Proc:
         returncode = 0
-        stdout = "ok"
-        stderr = ""
 
-    def fake_run(argv, **kwargs):
+        def communicate(self, timeout=None):
+            return "ok", ""
+
+    def fake_popen(argv, **kwargs):
         seen["argv"] = argv
         return _Proc()
 
-    monkeypatch.setattr(synthesize.subprocess, "run", fake_run)
+    monkeypatch.setattr(synthesize.subprocess, "Popen", fake_popen)
     out = synthesize._call_claude("prompt text", "claude-haiku-4-5-20251001", 5)
     assert out == "ok"
     assert "--no-session-persistence" in seen["argv"]

@@ -230,7 +230,7 @@ def test_call_claude_swallows_missing_binary(synthesize, monkeypatch):
     def raise_oserror(*a, **k):
         raise OSError("no claude binary")
 
-    monkeypatch.setattr(synthesize.subprocess, "run", raise_oserror)
+    monkeypatch.setattr(synthesize.subprocess, "Popen", raise_oserror)
     assert synthesize._call_claude("hi", "haiku", 5) == ""
 
 
@@ -519,3 +519,31 @@ def test_event_ids_take_precedence_over_fallback_anchor_and_text_groups(synthesi
     assert insight['recurrence'] == 2
     assert {e['event_id'] for e in insight['evidence'][0]['events']} == {'same', None}
     synthesize.validate_insights([insight], [first, second, third])
+
+
+def test_call_claude_timeout_kills_the_whole_process_group(synthesize, monkeypatch, tmp_path):
+    """Gander on #108: subprocess.run's timeout kills only the CLI; a helper
+    it spawned survived the heuristic fallback. The CLI now runs in its own
+    session and a timeout reaps the entire group."""
+    import os
+    import subprocess
+    import time
+    fake = tmp_path / "claude"
+    marker = tmp_path / "child.pid"
+    fake.write_text(
+        "#!/bin/sh\n"
+        f"sleep 30 &\necho $! > {marker}\nwait\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}")
+    assert synthesize._call_claude("hi", "haiku", 0.5) == ""
+    deadline = time.monotonic() + 5
+    child = int(marker.read_text().strip())
+    while time.monotonic() < deadline:
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(child)],
+                               capture_output=True, text=True).stdout.strip()
+        if not state or state.startswith("Z"):
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(child, 9)
+        raise AssertionError("grandchild survived the CLI timeout")
