@@ -21,8 +21,11 @@ Contract updates 2026-08-31: `KNOWN_MACHINES` is a **mint-only** gate and the
 retired `fleet-02` seat no longer mints (§5, §8, §9).
 Contract updates 2026-09-05: synthesis publication always signs/verifies and
 fails closed without replacing the previous output; signed input/coverage
-lineage separates sampled text from event recurrence. Recall suppression is
-limited to fully included, verified, verbatim coverage (§5–6).
+lineage separates sampled text from event recurrence. Each distinct event ID
+retains its supporting fact IDs; input and confidence representatives stay
+unique by fact ID. Publication uses an output-scoped lock and stale-generation
+comparison, without claiming a transaction with independent fact writers.
+Recall suppression is limited to fully included, verified, verbatim coverage (§5–6).
 
 ---
 
@@ -61,6 +64,7 @@ else is derived or append-only sidecar.
 |---|---|
 | `facts.json` | **The store.** Authoritative fact list; default target of nearly every CLI |
 | `insights.json` | Synthesized recurring-fact insights (from `synthesize.py`); recall surfaces these first |
+| `.insights.json.synthesis.lock` | Persistent 0600 publication lock for the default insights output; never unlink while writers can run |
 | `events.jsonl` | Sanitized evidence events from raw JSONL ingest |
 | `sessions/` | Per-session markdown notes from `refine-sessions.py` |
 | `review/` | Human-gated queues: `promotion-candidates`, `dedup-candidates`, `contradiction-candidates` (each `.json` + `.md`) |
@@ -225,7 +229,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 **Consolidation / supersession**
 | Script | Notes |
 |---|---|
-| `synthesize.py` | Clusters recurring facts → `insights.json`. `--llm` = Haiku via local `claude -p` (subscription, not metered API); shape-gate rejects chat-shaped output; `_call_claude` passes `--no-session-persistence` so judge transcripts can never re-enter the distill (N10052), prompt built from `JUDGE_PROMPT_MARKERS[0]`; publication always requires an existing key and strictly verified source facts; `--sign` remains a compatibility spelling. `publish_insights` validates lineage, signs only via `_sign.sign_facts`, verifies serialized output, and atomically replaces it only if source bytes remain unchanged. Missing/corrupt keys, invalid source/output, signing failures, source changes and write failures return nonzero and preserve prior output. Optional model failure may still produce a verified heuristic |
+| `synthesize.py` | Clusters recurring facts → `insights.json`. `--llm` = Haiku via local `claude -p` (subscription, not metered API); shape-gate rejects chat-shaped output; `_call_claude` passes `--no-session-persistence` so judge transcripts can never re-enter the distill (N10052), prompt built from `JUDGE_PROMPT_MARKERS[0]`; publication always requires an existing key and strictly verified source facts; `--sign` remains a compatibility spelling. `publish_insights` validates lineage, signs only via `_sign.sign_facts`, verifies serialized output, and atomically replaces it only if its initial output identity still matches under the shared persistent output lock. It rechecks source bytes immediately before replacement. Missing/corrupt keys, invalid source/output, signing failures, stale generations, observed source changes and write failures return nonzero and preserve prior output. The source check is not a transaction with independent fact writers; other insight writers must share the lock/publication protocol to receive the concurrency guarantee. Optional model failure may still produce a verified heuristic |
 | `dedup-facts.py` | Near-identical extractions of one event → one canonical. Propose default; `--apply` marks losers superseded, signatures survive |
 | `consolidate-facts.py` | Cross-date near-dupes of durable kinds. Double-gated: `--execute --i-have-reviewed-the-manifest`, refuses on manifest drift. `correction` kind never touched. `--execute` sets `invalid_at` and mints signed revocation events (`record_supersessions`) — same contract as `dedup-facts` / `supersede-fact`. OPS RULE: re-run `sign-facts.py` after any execute |
 | `detect-contradictions.py` | Nightly stale-fact pass, propose-ONLY, never writes the store. Output actions are literal `supersede-fact.py` commands. `--llm` judge sees scrubbed content, prompt built from `JUDGE_PROMPT_MARKERS[1]` (N10052); failures degrade to borderline |
@@ -276,14 +280,20 @@ and records applied only after verification.
 
 **Synthesis evidence contract (`nockbrain-synthesis/v1`):**
 
-- `source_events` collapses stable event IDs/anchors, or identical text on the
-  same date/source when anchors are absent. It retains all original fact IDs;
-  distinct overlapping instructions are not assumed to be one event.
-- `representative_inputs` selects at most 25 events, newest date first and one
-  per date per round. Each supplied content is scrubbed, capped at 300 chars,
+- `source_events` counts each distinct scoped event ID, including multiple
+  citations in one fact. Overlapping citations associate their fact IDs with
+  each event rather than creating an event for the tuple. Only facts without
+  event IDs fall back to anchors, then identical text on the same date/source.
+  `event_lineage` records each event ID (null for fallback groups), its
+  representative, and all supporting fact IDs under signed evidence.
+- `representative_inputs` selects at most 25 distinct fact IDs, newest date
+  first and one per date per round. A multi-event fact is supplied only once;
+  overlapping events can select another distinct supporting fact. Each supplied content is scrubbed, capped at 300 chars,
   and recorded with original fact hash, exact supplied-text hash, length,
   truncation, date and source evidence. Selection and theme tie-breaking are
-  deterministic. Different agents/sources are clustered separately.
+  deterministic. Different agents/sources are clustered separately. Confidence
+  remains capped at 0.95 and the mean confidence of distinct event-representative
+  facts, counting each representative once even when it cites many events.
 - `source_ids` is full cluster lineage. `input_ids` names only supplied records;
   `recurrence` counts distinct events across the cluster, while `source_date`
   and `source_dates` describe actual sampled inputs. The heuristic labels the

@@ -89,3 +89,90 @@ def test_provenance_is_signature_bound(synthesize, sign_lib, tmp_path, monkeypat
     changed = copy.deepcopy(published)
     changed[0]['evidence'][0]['input_ids'].append('unseen-source')
     assert sign_lib.verify_facts(changed, key)['tampered'] == 1
+
+
+def test_slow_generation_cannot_replace_newer_output_from_same_source(synthesize, sign_lib, tmp_path, monkeypatch):
+    """Two independent loads of the module share the output publication lock."""
+    import concurrent.futures
+    import importlib.util
+    import threading
+
+    source, output, _, key, _ = prepared(synthesize, sign_lib, tmp_path, monkeypatch)
+    spec = importlib.util.spec_from_file_location('independent_synthesizer', synthesize.__file__)
+    newer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(newer)
+    started, resume = threading.Event(), threading.Event()
+
+    def slow(inputs, heuristic):
+        started.set()
+        assert resume.wait(5), 'newer generation did not complete'
+        return 'Older generation pricing lesson completed after the newer one.'
+
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        old = pool.submit(synthesize.publish_insights, source, output, synthesizer=slow)
+        try:
+            assert started.wait(5), 'older generation did not reach its input barrier'
+            newer.publish_insights(source, output, synthesizer=lambda *args: 'Newer generation pricing lesson must remain published.')
+            published = output.read_bytes()
+        finally:
+            resume.set()
+        with pytest.raises(ValueError, match='stale synthesis generation'):
+            old.result(timeout=5)
+    assert output.read_bytes() == published
+    assert sign_lib.verify_facts(json.loads(published), key)['valid'] == 1
+
+
+def test_first_publication_also_rejects_stale_generation(synthesize, sign_lib, tmp_path, monkeypatch):
+    source, output, _, _, _ = prepared(synthesize, sign_lib, tmp_path, monkeypatch)
+    output.unlink()
+    latest = []
+
+    def competing(inputs, heuristic):
+        # A reentrant independent publication finishes while this generation
+        # is still producing its content. Generation does not hold the lock.
+        synthesize.publish_insights(source, output)
+        latest.append(output.read_bytes())
+        return 'An older pricing lesson must not overwrite the first publication.'
+
+    with pytest.raises(ValueError, match='stale synthesis generation'):
+        synthesize.publish_insights(source, output, synthesizer=competing)
+    assert output.read_bytes() == latest[0]
+
+
+def test_publication_lock_is_shared_by_independent_processes(synthesize, sign_lib, tmp_path, monkeypatch):
+    import subprocess
+    source, output, _, _, _ = prepared(synthesize, sign_lib, tmp_path, monkeypatch)
+    driver = '''import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location("worker", sys.argv[1])
+worker = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(worker)
+print("started", flush=True)
+worker.publish_insights(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]))
+print("published", flush=True)
+'''
+    proc = None
+    try:
+        with synthesize._output_lock(output.resolve()):
+            proc = subprocess.Popen([sys.executable, '-c', driver, synthesize.__file__, str(source), str(output)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            assert proc.stdout.readline() == 'started\n'
+            with pytest.raises(subprocess.TimeoutExpired):
+                proc.wait(timeout=0.1)
+        stdout, stderr = proc.communicate(timeout=5)
+        assert proc.returncode == 0, stderr
+        assert stdout == 'published\n'
+    finally:
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            proc.communicate()
+    assert (output.parent / ('.' + output.name + '.synthesis.lock')).stat().st_mode & 0o777 == 0o600
+
+
+def test_byte_identical_output_replacement_is_still_a_new_generation(synthesize, sign_lib, tmp_path, monkeypatch):
+    source, output, before, _, _ = prepared(synthesize, sign_lib, tmp_path, monkeypatch)
+    def competing(inputs, heuristic):
+        synthesize.secure_replace_bytes(output, before)
+        return 'Pricing lessons from a stale generation must stay unpublished.'
+    with pytest.raises(ValueError, match='stale synthesis generation'):
+        synthesize.publish_insights(source, output, synthesizer=competing)
+    assert output.read_bytes() == before

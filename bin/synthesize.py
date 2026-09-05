@@ -29,12 +29,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
+import os
 import re
 import subprocess  # nosec B404 - only invokes the trusted local `claude` CLI, no shell
 import sys
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -45,7 +48,7 @@ if str(BIN_DIR) not in sys.path:
 from _scrub import JUDGE_PROMPT_MARKERS, scrub_secrets
 from _facts import fact_currently_valid, fact_source, fill_source_date, malformed_fact_reason
 from _sign import canonical_fact_hash, resolve_signing_key, sign_facts, verify_facts
-from _store import secure_replace_bytes
+from _store import secure_mkdir, secure_replace_bytes
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 DEFAULT_OUTPUT = Path.home() / ".nock-brain" / "insights.json"
@@ -229,12 +232,12 @@ def _normalized_text(text: str) -> str:
     return " ".join(text.split())
 
 
-def source_events(cluster: list[dict]) -> list[list[dict]]:
-    """One occurrence per source event, retaining every original fact ID.
+def source_events(cluster: list[dict]) -> list[dict]:
+    """Distinct scoped events, with every supporting fact ID associated to each.
 
-    Stable event IDs/anchors take precedence. For legacy facts without anchors,
-    only identical text on the same date/source is deduplicated; lexical overlap
-    alone cannot establish that two instructions were one event.
+    A fact citing several event IDs supports each of those events; overlapping
+    citations do not create another occurrence. Only facts with no event IDs
+    fall back to location anchors or identical text on the same date/source.
     """
     groups = {}
     for fact in cluster:
@@ -244,28 +247,45 @@ def source_events(cluster: list[dict]) -> list[list[dict]]:
         locations = sorted({(str(a["path"]), str(a["line"])) for a in anchors
                             if isinstance(a, dict) and a.get("path") and a.get("line")})
         if events:
-            identity = ("event", tuple(events))
+            identities = [("event", event) for event in events]
         elif locations:
-            identity = ("anchor", tuple(locations))
+            identities = [("anchor", tuple(locations))]
         else:
-            identity = ("text", str(fact.get("source_date", "")),
-                        _normalized_text(fact.get("content", "")))
-        key = (fact_source(fact), fact.get("kind"), identity)
-        groups.setdefault(key, []).append(fact)
-    # Prefer the most recent/highest-confidence complete record for an event.
-    for group in groups.values():
-        group.sort(key=lambda f: (str(f.get("source_date", "")),
-                                 member_confidence(f), str(f.get("id", ""))), reverse=True)
-    return sorted(groups.values(), key=lambda g: (str(g[0].get("source_date", "")),
-                                                  str(g[0].get("id", ""))), reverse=True)
+            identities = [("text", str(fact.get("source_date", "")),
+                           _normalized_text(fact.get("content", "")))]
+        for identity in identities:
+            key = (fact_source(fact), fact.get("kind"), identity)
+            groups.setdefault(key, {})[fact["id"]] = fact
+    result = []
+    for key, members in groups.items():
+        ordered = sorted(members.values(), key=lambda f: (
+            str(f.get("source_date", "")), member_confidence(f), str(f["id"])), reverse=True)
+        result.append({"event_id": key[2][1] if key[2][0] == "event" else None,
+                       "facts": ordered})
+    return sorted(result, key=lambda e: (str(e["facts"][0].get("source_date", "")),
+                                        str(e["facts"][0]["id"]), e["event_id"] or ""), reverse=True)
 
 
-def representative_inputs(events: list[list[dict]]) -> list[dict]:
-    """Recent events first, one per date per round, up to the fixed input cap."""
+def event_lineage(events: list[dict]) -> list[dict]:
+    """Signed event-to-fact associations; fallback groups have no event ID."""
+    return [{"event_id": event["event_id"],
+             "representative_id": event["facts"][0]["id"],
+             "source_ids": sorted(f["id"] for f in event["facts"])} for event in events]
+
+
+def representative_inputs(events: list[dict]) -> list[dict]:
+    """Distinct recent facts, one per date per round, up to the fixed input cap.
+
+    A fact spanning many events is supplied once. When it already represents
+    another event, prefer that event's next distinct supporting fact.
+    """
     by_date = {}
-    for group in events:
-        fact = group[0]
-        by_date.setdefault(str(fact.get("source_date", "")), []).append(fact)
+    seen = set()
+    for event in events:
+        fact = next((f for f in event["facts"] if f["id"] not in seen), None)
+        if fact is not None:
+            seen.add(fact["id"])
+            by_date.setdefault(str(fact.get("source_date", "")), []).append(fact)
     selected = []
     round_index = 0
     while len(selected) < MAX_INPUTS:
@@ -325,8 +345,12 @@ def synthesize_cluster(cluster: list[dict], synthesizer=None) -> dict:
     covered = [f["id"] for f, receipt in zip(selected, input_receipts)
                if not receipt["truncated"] and _normalized_text(f["content"])
                and _normalized_text(f["content"]) in _normalized_text(content)]
+    # Several citations from one fact establish recurrence, not independent
+    # confidence votes. Cap quality by distinct representative facts once each.
+    representatives = {e["facts"][0]["id"]: e["facts"][0] for e in events}
     confidence = round(min(0.95, 0.7 + 0.05 * n,
-                           sum(member_confidence(g[0]) for g in events) / n), 2)
+                           sum(member_confidence(f) for f in representatives.values())
+                           / len(representatives)), 2)
     lineage = {
         "schema": SYNTHESIS_SCHEMA, "source_ids": source_ids,
         "input_ids": input_ids, "covered_source_ids": covered,
@@ -334,8 +358,7 @@ def synthesize_cluster(cluster: list[dict], synthesizer=None) -> dict:
         "lineage_source_date": max(str(f.get("source_date", "")) for f in cluster),
         "recurrence": n, "source_row_count": len(cluster),
         "source": fact_source(selected[0]), "inputs": input_receipts,
-        "events": [{"representative_id": g[0]["id"],
-                    "source_ids": sorted({f["id"] for f in g})} for g in events],
+        "events": event_lineage(events),
     }
     return {
         "id": insight_id(kind, theme, source_ids), "kind": "insight",
@@ -450,8 +473,7 @@ def validate_insights(insights: list[dict], facts: list[dict]) -> None:
         if lineage["source_dates"] != dates or lineage["source_date"] != (dates[-1] if dates else ""):
             raise ValueError("synthesis freshness differs from supplied inputs")
         groups = source_events([by_id[fid] for fid in source_ids])
-        expected_events = [{"representative_id": g[0]["id"],
-                            "source_ids": sorted({f["id"] for f in g})} for g in groups]
+        expected_events = event_lineage(groups)
         if (lineage["recurrence"] != len(groups) or lineage.get("events") != expected_events
                 or lineage.get("source_row_count") != len(source_ids)):
             raise ValueError("synthesis recurrence differs from source events")
@@ -459,16 +481,48 @@ def validate_insights(insights: list[dict], facts: list[dict]) -> None:
             raise ValueError("synthesis lineage freshness differs from sources")
 
 
+@contextmanager
+def _output_lock(output: Path):
+    """All invocations share this persistent lock; never unlink its inode."""
+    secure_mkdir(output.parent)
+    lock_path = output.with_name("." + output.name + ".synthesis.lock")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _output_identity(output: Path):
+    """Identify the opened artifact, including same-byte replacement (or absence)."""
+    try:
+        with output.open("rb") as handle:
+            raw = handle.read()
+            stat = os.fstat(handle.fileno())
+    except FileNotFoundError:
+        return None
+    return (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size,
+            hashlib.sha256(raw).digest())
+
+
 def publish_insights(facts_path: Path, output: Path, *, threshold=DEFAULT_THRESHOLD,
                      min_cluster=DEFAULT_MIN_CLUSTER, kinds=None, synthesizer=None,
                      llm_top=None, confidence_floor=DEFAULT_CONFIDENCE_FLOOR) -> tuple[list[dict], int]:
     """Build, validate, sign and verify before one atomic replacement.
 
-    A source change during model work rejects publication. No key is created;
-    a missing key, invalid source, failed signature or write preserves output.
+    Competing publications compare output identity under the same persistent
+    lock; a slow stale generation cannot replace an intervening publication.
+    The source is rechecked immediately before replacement, but independent
+    facts writers do not share this lock: this is not a transaction with them.
+    No key is created; failures preserve the prior output.
     """
-    if facts_path.resolve() == output.resolve():
+    output = output.resolve()
+    if facts_path.resolve() == output:
         raise ValueError("synthesis output cannot replace its source facts")
+    with _output_lock(output):
+        original_output = _output_identity(output)
     raw = facts_path.read_bytes()
     facts = json.loads(raw)
     if not isinstance(facts, list):
@@ -499,8 +553,11 @@ def publish_insights(facts_path: Path, output: Path, *, threshold=DEFAULT_THRESH
         raise ValueError("signing changed the insight set")
     if verify_facts(staged, key)["valid"] != len(staged):
         raise ValueError("signed synthesis failed strict verification")
-    if not secure_replace_bytes(output, serialized, before_replace=lambda: facts_path.read_bytes() == raw):
-        raise ValueError("source facts changed during synthesis; prior synthesis preserved")
+    with _output_lock(output):
+        if _output_identity(output) != original_output:
+            raise ValueError("stale synthesis generation: output changed; newer synthesis preserved")
+        if not secure_replace_bytes(output, serialized, before_replace=lambda: facts_path.read_bytes() == raw):
+            raise ValueError("source facts changed during synthesis; prior synthesis preserved")
     return staged, len(facts)
 
 

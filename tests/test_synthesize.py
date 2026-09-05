@@ -456,3 +456,66 @@ def test_recent_sampling_spreads_dates_deterministically(synthesize):
     assert [entry['source_date'] for entry in one['evidence'][0]['inputs'][:4]] == [
         '2026-06-04', '2026-06-03', '2026-06-02', '2026-06-01']
     assert '33 distinct events; 25 sampled inputs' in one['content']
+
+
+def test_distinct_event_ids_with_overlapping_facts_count_once_each(synthesize):
+    first = fact('Confirm recurring pricing tier before release', fid='f1', confidence=0.7)
+    second = fact('Confirm recurring pricing tier before release again', fid='f2', confidence=0.9)
+    first['evidence'] = [{'event_id': 'event1'}, {'event_id': 'event2'}, {'event_id': 'event1'}]
+    second['evidence'] = [{'event_id': 'event2'}, {'event_id': 'event3'}]
+    insight = synthesize.synthesize([first, second])[0]
+    assert insight['recurrence'] == 3
+    assert insight['source_ids'] == ['f1', 'f2']
+    assert set(insight['input_ids']) == {'f1', 'f2'}
+    assert len(insight['input_ids']) == 2
+    assert insight['confidence'] == 0.8  # each representative fact caps quality once
+    assert {e['event_id']: e['source_ids'] for e in insight['evidence'][0]['events']} == {
+        'event1': ['f1'], 'event2': ['f1', 'f2'], 'event3': ['f2']}
+    synthesize.validate_insights([insight], [first, second])
+
+
+def test_one_fact_with_many_events_remains_one_input_and_one_confidence_vote(synthesize):
+    source = fact('Confirm recurring pricing tier before release', fid='summary', confidence=0.7)
+    source['evidence'] = [{'event_id': f'event{i}'} for i in range(40)]
+    seen = []
+    def capture(inputs, heuristic):
+        seen.extend(inputs)
+        return 'Confirm the pricing tier before each production release.'
+    insight = synthesize.synthesize([source], synthesizer=capture)[0]
+    assert insight['recurrence'] == 40
+    assert insight['source_ids'] == insight['input_ids'] == ['summary']
+    assert len(seen) == 1
+    assert insight['confidence'] == 0.7
+    assert insight['covered_source_ids'] == []
+    synthesize.validate_insights([insight], [source])
+
+
+def test_event_overlap_preserves_unique_bounded_recent_inputs(synthesize):
+    facts = []
+    for i in range(32):
+        item = fact(f'Confirm recurring pricing tier before release {i}', fid=f'f{i:02}', source_date=f'2026-06-{i % 28 + 1:02}')
+        item['evidence'] = [{'event_id': 'shared'}, {'event_id': f'unique{i}'}]
+        facts.append(item)
+    seen = []
+    insight = synthesize.synthesize(facts, synthesizer=lambda inputs, _: seen.extend(inputs) or '')[0]
+    assert insight['recurrence'] == 33
+    assert len(insight['source_ids']) == 32
+    assert len(insight['input_ids']) == len(set(insight['input_ids'])) == len(seen) == 25
+    assert insight['input_ids'] == synthesize.synthesize(list(reversed(facts)))[0]['input_ids']
+    synthesize.validate_insights([insight], facts)
+
+
+def test_event_ids_take_precedence_over_fallback_anchor_and_text_groups(synthesize):
+    first = fact('Confirm recurring pricing tier before release', fid='one')
+    second = dict(first, id='two')
+    first['evidence'] = [{'event_id': 'same', 'path': 'first.jsonl', 'line': 3}]
+    second['evidence'] = [{'event_id': 'same', 'path': 'copy.jsonl', 'line': 50}]
+    # Different source anchors do not inflate an explicitly shared event.
+    assert synthesize.synthesize([first, second]) == []
+    # With no event ID, this remains a separate fallback occurrence; its text
+    # cannot prove it belongs to the explicitly identified event.
+    third = dict(first, id='legacy', evidence=[])
+    insight = synthesize.synthesize([first, second, third])[0]
+    assert insight['recurrence'] == 2
+    assert {e['event_id'] for e in insight['evidence'][0]['events']} == {'same', None}
+    synthesize.validate_insights([insight], [first, second, third])
