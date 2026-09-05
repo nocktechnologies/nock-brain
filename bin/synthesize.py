@@ -12,8 +12,9 @@ v1 is heuristic and dependency-free (no model, no network) to keep nock-brain a
 clean stdlib-only install. The synthesis step is isolated behind
 `synthesize_cluster()` so an LLM-backed synthesizer can drop in as an opt-in
 upgrade without touching the clustering or I/O. `--llm` turns on the opt-in
-Haiku-distill: it enriches only the insight prose; identity/provenance fields
-stay heuristic and deterministic.
+Haiku-distill: it enriches the insight prose from bounded, recorded inputs.
+Publication always validates and signs the result before atomic replacement;
+the source store must already verify under its existing signing key.
 
 Usage:
     python3 synthesize.py                          # defaults: ~/.nock-brain/{facts,insights}.json
@@ -42,7 +43,9 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from _scrub import JUDGE_PROMPT_MARKERS, scrub_secrets
-from _store import secure_mkdir, secure_write_json
+from _facts import fact_currently_valid, fact_source, fill_source_date, malformed_fact_reason
+from _sign import canonical_fact_hash, resolve_signing_key, sign_facts, verify_facts
+from _store import secure_replace_bytes
 
 DEFAULT_FACTS = Path.home() / ".nock-brain" / "facts.json"
 DEFAULT_OUTPUT = Path.home() / ".nock-brain" / "insights.json"
@@ -62,6 +65,9 @@ DEFAULT_LLM_TIMEOUT = 60.0  # seconds per cluster before falling back to heurist
 # long tail stays heuristic. Keeps the full insight set complete while capping
 # calls (the store has ~270 clusters — re-distilling all nightly is wasteful).
 DEFAULT_LLM_TOP = 40
+MAX_INPUTS = 25
+MAX_INPUT_CHARS = 300
+SYNTHESIS_SCHEMA = "nockbrain-synthesis/v1"
 
 STOPWORDS = {
     "the", "a", "an", "and", "or", "but", "to", "of", "in", "on", "for", "with",
@@ -114,7 +120,7 @@ def cluster_theme(cluster: list[dict], top: int = 5) -> str:
     for f in cluster:
         counts.update(tokenize(f.get("content", "")))
     # Terms shared by the most members read as the theme.
-    return ", ".join(term for term, _ in counts.most_common(top))
+    return ", ".join(sorted(counts, key=lambda term: (-counts[term], term))[:top])
 
 
 def insight_id(kind: str, theme: str, source_ids: list[str]) -> str:
@@ -192,11 +198,10 @@ def make_claude_synthesizer(model: str = DEFAULT_LLM_MODEL,
                             timeout: float = DEFAULT_LLM_TIMEOUT):
     """Build an opt-in LLM synthesizer for :func:`synthesize_cluster`.
 
-    The returned callable ``(cluster, heuristic_content) -> str`` reads a cluster
-    of recurring facts and returns ONE consolidated lesson sentence — enriching
-    only the insight's prose. It returns ``""`` on any failure (empty, too-short,
+    The returned callable ``(inputs, heuristic_content) -> str`` reads the
+    bounded, recorded inputs and returns ONE consolidated lesson sentence. It returns ``""`` on any failure (empty, too-short,
     or errored call) so ``synthesize_cluster`` owns the single fallback path.
-    Identity and provenance fields are never touched by the LLM.
+    Input receipts and conservative coverage are computed outside the model.
     """
     def _synth(cluster: list[dict], heuristic_content: str) -> str:
         # Re-scrub before the content leaves the store: facts are scrubbed at
@@ -204,7 +209,8 @@ def make_claude_synthesizer(model: str = DEFAULT_LLM_MODEL,
         # BEFORE truncation so a secret straddling the 300-char cut cannot
         # survive as a recognizable fragment.
         members = "\n".join(
-            f"- {scrub_secrets(f.get('content', ''))[0][:300]}" for f in cluster[:25]
+            f"- {scrub_secrets(f.get('content', ''))[0][:MAX_INPUT_CHARS]}"
+            for f in cluster[:MAX_INPUTS]
         )
         prompt = (
             JUDGE_PROMPT_MARKERS[0] + " "
@@ -219,67 +225,126 @@ def make_claude_synthesizer(model: str = DEFAULT_LLM_MODEL,
     return _synth
 
 
-def synthesize_cluster(cluster: list[dict], synthesizer=None) -> dict:
-    """Turn a cluster of recurring same-kind facts into one consolidated insight.
+def _normalized_text(text: str) -> str:
+    return " ".join(text.split())
 
-    The heuristic version (default, ``synthesizer=None``) summarizes by recurrence
-    + shared theme + the most recent member. Passing an opt-in ``synthesizer``
-    callable ``(cluster, heuristic_content) -> str`` enriches ONLY the
-    human-readable ``content``; every identity/provenance field stays heuristic
-    and deterministic, so an LLM can never change an insight's identity or corrupt
-    the store. Any synthesizer failure (exception or empty result) falls back to
-    the heuristic content.
+
+def source_events(cluster: list[dict]) -> list[list[dict]]:
+    """One occurrence per source event, retaining every original fact ID.
+
+    Stable event IDs/anchors take precedence. For legacy facts without anchors,
+    only identical text on the same date/source is deduplicated; lexical overlap
+    alone cannot establish that two instructions were one event.
     """
-    kind = cluster[0].get("kind", "fact")
-    members = sorted(cluster, key=lambda f: f.get("source_date", ""))
-    dates = [f.get("source_date", "") for f in members if f.get("source_date")]
-    theme = cluster_theme(cluster)
-    latest = members[-1].get("content", "")
-    n = len(cluster)
-    source_ids = [f.get("id", "") for f in cluster if f.get("id")]
+    groups = {}
+    for fact in cluster:
+        anchors = fact.get("evidence", [])
+        events = sorted({str(a["event_id"]) for a in anchors
+                         if isinstance(a, dict) and a.get("event_id")})
+        locations = sorted({(str(a["path"]), str(a["line"])) for a in anchors
+                            if isinstance(a, dict) and a.get("path") and a.get("line")})
+        if events:
+            identity = ("event", tuple(events))
+        elif locations:
+            identity = ("anchor", tuple(locations))
+        else:
+            identity = ("text", str(fact.get("source_date", "")),
+                        _normalized_text(fact.get("content", "")))
+        key = (fact_source(fact), fact.get("kind"), identity)
+        groups.setdefault(key, []).append(fact)
+    # Prefer the most recent/highest-confidence complete record for an event.
+    for group in groups.values():
+        group.sort(key=lambda f: (str(f.get("source_date", "")),
+                                 member_confidence(f), str(f.get("id", ""))), reverse=True)
+    return sorted(groups.values(), key=lambda g: (str(g[0].get("source_date", "")),
+                                                  str(g[0].get("id", ""))), reverse=True)
 
+
+def representative_inputs(events: list[list[dict]]) -> list[dict]:
+    """Recent events first, one per date per round, up to the fixed input cap."""
+    by_date = {}
+    for group in events:
+        fact = group[0]
+        by_date.setdefault(str(fact.get("source_date", "")), []).append(fact)
+    selected = []
+    round_index = 0
+    while len(selected) < MAX_INPUTS:
+        row = [by_date[d][round_index] for d in sorted(by_date, reverse=True)
+               if round_index < len(by_date[d])]
+        if not row:
+            break
+        selected.extend(row[:MAX_INPUTS - len(selected)])
+        round_index += 1
+    return selected
+
+
+def synthesize_cluster(cluster: list[dict], synthesizer=None) -> dict:
+    """Summarize bounded source events; lineage never implies full coverage."""
+    events = source_events(cluster)
+    selected = representative_inputs(events)
+    # The exact bounded, scrubbed text passed to any synthesizer is also what
+    # the heuristic sees. Hash both this text and the original signed source.
+    inputs = []
+    input_receipts = []
+    for fact in selected:
+        clean = scrub_secrets(fact.get("content", ""))[0]
+        text = clean[:MAX_INPUT_CHARS]
+        inputs.append({**fact, "content": text})
+        input_receipts.append({
+            "id": fact["id"], "source_date": fact.get("source_date", ""),
+            "fact_hash": canonical_fact_hash(fact),
+            "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "chars": len(text), "truncated": len(clean) > MAX_INPUT_CHARS,
+            "evidence": fact.get("evidence", []),
+        })
+    kind = selected[0].get("kind", "fact")
+    dates = sorted(f.get("source_date", "") for f in selected if f.get("source_date"))
+    source_ids = sorted({f["id"] for f in cluster})
+    input_ids = [f["id"] for f in selected]
+    theme = cluster_theme(inputs)
+    latest = max(inputs, key=lambda f: (f.get("source_date", ""), f["id"]))
+    n = len(events)
     date_range = ""
     if dates:
         date_range = dates[0] if dates[0] == dates[-1] else f"{dates[0]}..{dates[-1]}"
-
-    heuristic_content = (
-        f"Recurring {kind} (seen {n}x{', ' + date_range if date_range else ''}): "
-        f"{theme}. Most recent: {latest[:160]}"
-    )
-
-    content = heuristic_content
+    content = (f"Recurring {kind} ({n} distinct events; {len(inputs)} sampled inputs"
+               f"{', ' + date_range if date_range else ''}): "
+               f"{theme}. Most recent: {latest['content'][:160]}")
     synthesized_by = "heuristic"
     if synthesizer is not None:
         try:
-            enriched = synthesizer(cluster, heuristic_content)
-        except Exception:  # nosec B110 - synthesis must never break the pipeline
+            enriched = synthesizer(inputs, content)
+        except Exception:  # nosec B110 - optional enrichment falls back to signed heuristic
             enriched = None
-        if isinstance(enriched, str) and enriched.strip():
+        if isinstance(enriched, str) and is_valid_lesson(enriched):
             content = enriched.strip()
             synthesized_by = "llm"
 
+    # A one-sentence abstraction is not an exhaustive replacement for 25 facts.
+    # Only an untruncated, verbatim source included in the output is covered.
+    covered = [f["id"] for f, receipt in zip(selected, input_receipts)
+               if not receipt["truncated"] and _normalized_text(f["content"])
+               and _normalized_text(f["content"]) in _normalized_text(content)]
+    confidence = round(min(0.95, 0.7 + 0.05 * n,
+                           sum(member_confidence(g[0]) for g in events) / n), 2)
+    lineage = {
+        "schema": SYNTHESIS_SCHEMA, "source_ids": source_ids,
+        "input_ids": input_ids, "covered_source_ids": covered,
+        "source_date": dates[-1] if dates else "", "source_dates": dates,
+        "lineage_source_date": max(str(f.get("source_date", "")) for f in cluster),
+        "recurrence": n, "source_row_count": len(cluster),
+        "source": fact_source(selected[0]), "inputs": input_receipts,
+        "events": [{"representative_id": g[0]["id"],
+                    "source_ids": sorted({f["id"] for f in g})} for g in events],
+    }
     return {
-        "id": insight_id(kind, theme, source_ids),
-        "kind": "insight",
-        "tier": "synthesized",
-        "of_kind": kind,
-        "recurrence": n,
-        "theme": theme,
-        "content": content,
-        # which path wrote `content` — heuristic (deterministic) or llm (enriched).
-        "synthesized_by": synthesized_by,
-        "status": "current",
-        # Recurrence grows confidence, but member quality caps it: an insight
-        # can never be more confident than the average fact it was minted from
-        # (six 0.55-confidence sightings are not one 0.95-confidence lesson).
-        "confidence": round(
-            min(0.95, 0.7 + 0.05 * n, sum(member_confidence(f) for f in cluster) / n), 2
-        ),
-        # source_date (latest member) keeps insights first-class for the recall
-        # formatter/search, which key off source_date; source_dates keeps the span.
-        "source_date": dates[-1] if dates else "",
-        "source_ids": source_ids,
-        "source_dates": dates,
+        "id": insight_id(kind, theme, source_ids), "kind": "insight",
+        "tier": "synthesized", "of_kind": kind, "recurrence": n,
+        "theme": theme, "content": content, "synthesized_by": synthesized_by,
+        "status": "current", "confidence": confidence,
+        "source": lineage["source"], "source_date": lineage["source_date"],
+        "source_ids": source_ids, "source_dates": dates, "input_ids": input_ids,
+        "covered_source_ids": covered, "evidence": [lineage],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -291,21 +356,23 @@ def synthesize(
     confidence_floor: float = DEFAULT_CONFIDENCE_FLOOR,
 ) -> list[dict]:
     """Consolidate current facts into insights. Only clusters with at least
-    min_cluster members (a genuine recurrence) become insights. Facts below
+    min_cluster distinct source events become insights. Repeated extraction
+    rows remain lineage, but do not raise recurrence or confidence. Facts below
     ``confidence_floor`` never enter clustering (pass ``0.0`` to include all).
     An optional ``synthesizer`` callable enriches each insight's prose (see
     :func:`synthesize_cluster`); ``None`` (default) uses the heuristic. When a
     synthesizer is given, ``llm_top`` bounds enrichment to the N strongest
     recurrences (the highest-value lessons); the long tail stays heuristic.
     ``llm_top=None`` enriches every cluster."""
-    active = [f for f in facts if f.get("status", "current") != "superseded"]
+    active = [f for f in facts if f.get("status", "current") != "superseded"
+              and fact_currently_valid(f)]
     active = [f for f in active if member_confidence(f) >= confidence_floor]
     if kinds:
         active = [f for f in active if f.get("kind") in kinds]
 
-    by_kind: dict[str, list[dict]] = {}
+    by_kind: dict[tuple[str, str], list[dict]] = {}
     for f in active:
-        by_kind.setdefault(f.get("kind", "fact"), []).append(f)
+        by_kind.setdefault((f.get("kind", "fact"), fact_source(f)), []).append(f)
 
     # Collect every qualifying cluster, then rank strongest-first so LLM
     # enrichment targets the top recurrences within a bounded call budget.
@@ -313,9 +380,9 @@ def synthesize(
         cluster
         for kind_facts in by_kind.values()
         for cluster in cluster_kind(kind_facts, threshold)
-        if len(cluster) >= min_cluster
+        if len(source_events(cluster)) >= min_cluster
     ]
-    clusters.sort(key=len, reverse=True)
+    clusters.sort(key=lambda cluster: len(source_events(cluster)), reverse=True)
 
     insights = []
     for rank, cluster in enumerate(clusters):
@@ -326,25 +393,118 @@ def synthesize(
     return insights
 
 
-def _sign_insights(insights: list[dict]) -> "list[dict] | None":
-    """Attach an attestation to each insight using the store's key.
-
-    Reuses the fact-signing machinery: the signature covers id + kind +
-    content (canonical_fact_core), so a tampered insight fails verify exactly
-    like a tampered fact. Returns None when no key is available (caller keeps
-    the unsigned insights and warns) so signing never blocks synthesis."""
-    import os
-    from _sign import DEFAULT_KEY_PATH, DEFAULT_PUB_PATH, load_or_create_key, sign_facts
-    key_path = Path(os.environ.get("NOCKBRAIN_SIGNING_KEY", DEFAULT_KEY_PATH))
-    pub_path = Path(os.environ.get("NOCKBRAIN_SIGNING_PUB", DEFAULT_PUB_PATH))
-    try:
-        key = load_or_create_key(key_path, pub_path, create=False)
-    except (FileNotFoundError, RuntimeError, ValueError, KeyError, OSError):
-        return None
-    return sign_facts(insights, key)
+def _sign_insights(insights: list[dict], *, key=None) -> "list[dict] | None":
+    """Sign through the shared v1/v2 router; publication treats None as fatal."""
+    key = key or resolve_signing_key()
+    return sign_facts(insights, key) if key is not None else None
 
 
-def main():
+def validate_insights(insights: list[dict], facts: list[dict]) -> None:
+    """Check generated lineage before signing and again after serialization."""
+    if not isinstance(insights, list):
+        raise ValueError("synthesis must be a list")
+    by_id = {f["id"]: f for f in facts}
+    seen = set()
+    for insight in insights:
+        if (not isinstance(insight, dict) or malformed_fact_reason(insight)
+                or insight.get("kind") != "insight" or not insight.get("content")
+                or insight.get("id") in seen):
+            raise ValueError("malformed or duplicate insight")
+        seen.add(insight["id"])
+        evidence = insight.get("evidence")
+        if not isinstance(evidence, list) or len(evidence) != 1:
+            raise ValueError("missing synthesis lineage")
+        lineage = evidence[0]
+        if not isinstance(lineage, dict) or lineage.get("schema") != SYNTHESIS_SCHEMA:
+            raise ValueError("invalid synthesis lineage schema")
+        for field in ("source_ids", "input_ids", "covered_source_ids", "source_dates",
+                      "source_date", "source", "recurrence"):
+            if insight.get(field) != lineage.get(field):
+                raise ValueError("synthesis lineage differs: " + field)
+        source_ids = lineage["source_ids"]
+        input_ids = lineage["input_ids"]
+        covered = lineage["covered_source_ids"]
+        if (not isinstance(source_ids, list) or not source_ids
+                or len(source_ids) != len(set(source_ids)) or not set(source_ids) <= by_id.keys()
+                or not isinstance(input_ids, list) or not 0 < len(input_ids) <= MAX_INPUTS
+                or len(input_ids) != len(set(input_ids)) or not set(input_ids) <= set(source_ids)
+                or not isinstance(covered, list) or not set(covered) <= set(input_ids)):
+            raise ValueError("invalid synthesis source coverage")
+        inputs = lineage.get("inputs", [])
+        if [entry.get("id") for entry in inputs] != input_ids:
+            raise ValueError("synthesis inputs differ from their receipt")
+        for entry in inputs:
+            fact = by_id[entry["id"]]
+            text = scrub_secrets(fact["content"])[0][:MAX_INPUT_CHARS]
+            if (entry.get("fact_hash") != canonical_fact_hash(fact)
+                    or entry.get("text_sha256") != hashlib.sha256(text.encode()).hexdigest()
+                    or entry.get("source_date") != fact["source_date"]
+                    or entry.get("evidence") != fact["evidence"]
+                    or entry.get("chars") != len(text)
+                    or entry.get("truncated") != (len(scrub_secrets(fact["content"])[0]) > MAX_INPUT_CHARS)):
+                raise ValueError("synthesis source input changed")
+            if entry["id"] in covered and (entry["truncated"] or
+                    _normalized_text(fact["content"]) not in _normalized_text(insight["content"])):
+                raise ValueError("source is not fully covered by the synthesis")
+        dates = sorted(by_id[fid]["source_date"] for fid in input_ids if by_id[fid]["source_date"])
+        if lineage["source_dates"] != dates or lineage["source_date"] != (dates[-1] if dates else ""):
+            raise ValueError("synthesis freshness differs from supplied inputs")
+        groups = source_events([by_id[fid] for fid in source_ids])
+        expected_events = [{"representative_id": g[0]["id"],
+                            "source_ids": sorted({f["id"] for f in g})} for g in groups]
+        if (lineage["recurrence"] != len(groups) or lineage.get("events") != expected_events
+                or lineage.get("source_row_count") != len(source_ids)):
+            raise ValueError("synthesis recurrence differs from source events")
+        if lineage.get("lineage_source_date") != max(str(by_id[fid].get("source_date", "")) for fid in source_ids):
+            raise ValueError("synthesis lineage freshness differs from sources")
+
+
+def publish_insights(facts_path: Path, output: Path, *, threshold=DEFAULT_THRESHOLD,
+                     min_cluster=DEFAULT_MIN_CLUSTER, kinds=None, synthesizer=None,
+                     llm_top=None, confidence_floor=DEFAULT_CONFIDENCE_FLOOR) -> tuple[list[dict], int]:
+    """Build, validate, sign and verify before one atomic replacement.
+
+    A source change during model work rejects publication. No key is created;
+    a missing key, invalid source, failed signature or write preserves output.
+    """
+    if facts_path.resolve() == output.resolve():
+        raise ValueError("synthesis output cannot replace its source facts")
+    raw = facts_path.read_bytes()
+    facts = json.loads(raw)
+    if not isinstance(facts, list):
+        raise ValueError("source facts must be a list")
+    for fact in facts:
+        fill_source_date(fact)
+        if (malformed_fact_reason(fact) or not isinstance(fact.get("id"), str)
+                or not fact["id"] or not isinstance(fact.get("content"), str)):
+            raise ValueError("malformed source fact")
+    if len({f["id"] for f in facts}) != len(facts):
+        raise ValueError("duplicate source fact IDs")
+    key = resolve_signing_key(store_dir=facts_path.parent)
+    if key is None:
+        raise ValueError("signing key unavailable; prior synthesis preserved")
+    if verify_facts(facts, key)["valid"] != len(facts):
+        raise ValueError("source facts failed strict verification")
+    insights = synthesize(facts, threshold, min_cluster, kinds, synthesizer,
+                          llm_top, confidence_floor=confidence_floor)
+    validate_insights(insights, facts)
+    expected_ids = [insight["id"] for insight in insights]
+    signed = _sign_insights(insights, key=key)
+    if signed is None:
+        raise ValueError("synthesis signing failed")
+    serialized = json.dumps(signed, indent=2, ensure_ascii=False, allow_nan=False).encode()
+    staged = json.loads(serialized)
+    validate_insights(staged, facts)
+    if [insight["id"] for insight in staged] != expected_ids:
+        raise ValueError("signing changed the insight set")
+    if verify_facts(staged, key)["valid"] != len(staged):
+        raise ValueError("signed synthesis failed strict verification")
+    if not secure_replace_bytes(output, serialized, before_replace=lambda: facts_path.read_bytes() == raw):
+        raise ValueError("source facts changed during synthesis; prior synthesis preserved")
+    return staged, len(facts)
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Synthesize facts into insights")
     parser.add_argument("--facts", type=Path, default=DEFAULT_FACTS)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
@@ -373,42 +533,29 @@ def main():
                              f"the rest stay heuristic (default: {DEFAULT_LLM_TOP}, "
                              "0 = no cap)")
     parser.add_argument("--sign", action="store_true",
-                        help="Attach a signed attestation to each insight "
-                             "(same key + machinery as facts) so the recall "
-                             "surface is fully attested, not just the facts.")
-    args = parser.parse_args()
+                        help="Compatibility flag: publication always requires signing and verification.")
+    args = parser.parse_args(argv)
 
-    if not args.facts.exists():
-        print(f"No fact store at {args.facts}. Run extract-facts.py first.", file=sys.stderr)
-        sys.exit(1)
-
-    facts = json.loads(args.facts.read_text())
     kinds = {k.strip() for k in args.kinds.split(",")} if args.kinds else None
-    synthesizer = (make_claude_synthesizer(args.model, args.llm_timeout)
-                   if args.llm else None)
+    synthesizer = make_claude_synthesizer(args.model, args.llm_timeout) if args.llm else None
     llm_top = args.llm_top if args.llm_top and args.llm_top > 0 else None
-    insights = synthesize(facts, args.threshold, args.min_cluster, kinds,
-                          synthesizer, llm_top,
-                          confidence_floor=args.confidence_floor)
-
-    if args.sign:
-        signed = _sign_insights(insights)
-        if signed is None:
-            print("synthesize: --sign requested but no signing key available; "
-                  "writing UNSIGNED insights", file=sys.stderr)
-        else:
-            insights = signed
-
-    secure_mkdir(args.output.parent)
-    secure_write_json(args.output, insights, indent=2, default=str)
+    try:
+        insights, fact_count = publish_insights(
+            args.facts, args.output, threshold=args.threshold, min_cluster=args.min_cluster,
+            kinds=kinds, synthesizer=synthesizer, llm_top=llm_top,
+            confidence_floor=args.confidence_floor)
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError) as exc:
+        print(f"synthesize: publication failed: {exc}", file=sys.stderr)
+        return 1
 
     mode = f"LLM ({args.model})" if args.llm else "heuristic"
     llm_n = sum(1 for i in insights if i.get("synthesized_by") == "llm")
-    print(f"Synthesized {len(insights)} insight(s) from {len(facts)} fact(s) "
+    print(f"Synthesized {len(insights)} insight(s) from {fact_count} fact(s) "
           f"[{mode}; {llm_n} LLM-enriched].")
     for ins in insights[:10]:
         print(f"  [{ins['recurrence']}x] {ins['of_kind']}: {ins['theme']}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

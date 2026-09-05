@@ -397,3 +397,62 @@ def test_shape_gate_rejects_curly_apostrophe_refusals(synthesize):
         "I’ll return the lesson once you share the facts with me here.") is False
     assert synthesize.is_valid_lesson(
         "I’m unable to access that repository from this seat right now.") is False
+
+
+def test_123_source_cluster_uses_25_recent_inputs_and_exact_lineage(synthesize):
+    from datetime import date, timedelta
+    facts = [fact(f'Confirm pricing tier before release number {i}', fid=f'f{i}',
+                  source_date=(date(2026, 1, 1) + timedelta(days=i)).isoformat())
+             for i in range(123)]
+    seen = []
+    def fake(inputs, heuristic):
+        seen.extend(inputs)
+        return 'Verify pricing before every release.'
+    insight = synthesize.synthesize(facts, synthesizer=fake)[0]
+    assert len(seen) == 25
+    assert seen[0]['id'] == 'f122'
+    assert insight['input_ids'] == [f['id'] for f in seen]
+    assert set(insight['source_ids']) == {f['id'] for f in facts}
+    assert insight['source_date'] == seen[0]['source_date']
+    assert insight['covered_source_ids'] == []  # a lesson is not an exhaustive substitute
+    assert insight['evidence'][0]['input_ids'] == insight['input_ids']
+    assert len(insight['evidence'][0]['inputs']) == 25
+
+
+def test_duplicate_source_events_do_not_inflate_recurrence(synthesize):
+    rows = [dict(fact(f'Confirm pricing tier before release variation {i}', fid=f'f{i}'),
+                 evidence=[{'event_id': 'same-event', 'path': 'session.jsonl', 'line': 42}])
+            for i in range(32)]
+    assert synthesize.synthesize(rows) == []
+    rows.append(dict(fact('Confirm pricing tier before release again', fid='next', source_date='2026-06-02'),
+                     evidence=[{'event_id': 'next-event'}]))
+    insight = synthesize.synthesize(rows)[0]
+    assert insight['recurrence'] == 2
+    assert len(insight['source_ids']) == 33
+    assert len(insight['input_ids']) == 2
+
+
+def test_exact_same_day_copies_without_anchor_are_one_occurrence(synthesize):
+    rows = [fact('Confirm pricing tier before release.', fid=f'f{i}') for i in range(32)]
+    assert synthesize.synthesize(rows) == []
+
+
+def test_partial_source_excerpt_never_claims_full_coverage(synthesize):
+    content = 'Confirm pricing before release. ' * 40
+    rows = [fact(content, fid=f'f{i}', source_date=f'2026-06-0{i+1}') for i in range(2)]
+    insight = synthesize.synthesize(rows, synthesizer=lambda inputs, h: inputs[0]['content'])[0]
+    assert insight['covered_source_ids'] == []
+    assert all(entry['truncated'] for entry in insight['evidence'][0]['inputs'])
+
+
+def test_recent_sampling_spreads_dates_deterministically(synthesize):
+    rows = [fact(f'pricing review occurrence {i}', fid=f'recent{i}', source_date='2026-06-04')
+            for i in range(30)]
+    rows += [fact(f'pricing review earlier {i}', fid=f'older{i}', source_date=f'2026-06-0{i}')
+             for i in range(1, 4)]
+    one = synthesize.synthesize(rows)[0]
+    two = synthesize.synthesize(list(reversed(rows)))[0]
+    assert one['input_ids'] == two['input_ids']
+    assert [entry['source_date'] for entry in one['evidence'][0]['inputs'][:4]] == [
+        '2026-06-04', '2026-06-03', '2026-06-02', '2026-06-01']
+    assert '33 distinct events; 25 sampled inputs' in one['content']
