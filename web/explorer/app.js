@@ -293,12 +293,15 @@
       if (epoch !== state.epoch || request !== state.refreshRequest) return;
       state.offset = 0;
       renderSummary(summary);
+      clearDetail();
       await loadRecords();
     } catch (error) {
       if (epoch !== state.epoch || request !== state.refreshRequest) return;
-      renderNotices(`Refresh failed: ${error.message}`);
       if (state.summary) await loadRecords();
       else renderListState('Refresh failed. Try again.');
+      if (epoch !== state.epoch || request !== state.refreshRequest) return;
+      clearDetail('Refresh failed. Select a memory from the previous snapshot to inspect its detail.');
+      renderNotices(`Refresh failed: ${error.message}`);
       setStatus('Refresh failed; the displayed capture time has not advanced.');
     } finally {
       if (request === state.refreshRequest) $('refresh').disabled = false;
@@ -368,6 +371,12 @@
     }
   }
 
+  function invalidatePreview() {
+    state.previewRequest += 1;
+    clear($('preview-result'));
+    $('preview-result').append(textNode('p', 'Prompt or budget changed. Run a new BM25 preview for these settings.', 'empty-state'));
+  }
+
   function activateTab(which, focus = false) {
     state.tab = which;
     for (const name of ['memories', 'preview']) {
@@ -398,6 +407,8 @@
   $('next-page').addEventListener('click', () => { if (state.offset + state.limit < state.total) { state.offset += state.limit; clearDetail(); loadRecords(); } });
   $('refresh').addEventListener('click', refresh);
   $('preview-form').addEventListener('submit', preview);
+  $('prompt').addEventListener('input', invalidatePreview);
+  $('budget').addEventListener('input', invalidatePreview);
 
   if (token) loadSummary();
   else {
