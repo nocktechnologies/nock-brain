@@ -29,6 +29,9 @@ Recall suppression is limited to fully included, verified, verbatim coverage (§
 Contract updates 2026-09-26: optional read-only Memory Explorer snapshots an
 explicit JSON store or synthetic demo, exposes a capability-protected loopback
 API, and runs production BM25 preview in isolated scratch space (§12).
+Contract updates 2026-09-26: explicit customer identity, selected-file import,
+digest-bound proposal review and additive publication are isolated from fleet
+and Explorer writes (§13).
 
 ---
 
@@ -489,6 +492,7 @@ CI (`.github/workflows/ci.yml`): pytest → classifier smoke →
 | `evals/README.md` + `recall-gold-v1.json` (CI) + `curated-recall-suite.json` (Phase-2/offline) | Gold is a reconstruction of a lost n=90 set; queries must stay hand-authored |
 | `tracking/nockcc-nocks.md` | ⚠ Stale: stops at 2026-06-12 (N8054); covers nothing from #63–#83 |
 | `memory-explorer.md` | Local read-only Explorer launch, isolation and verification limits, snapshot behavior, and BM25 preview semantics |
+| `customer-setup.md` | Fresh customer identity, explicit selected sources, full proposal review, apply and Explorer walkthrough; limits and release gaps |
 
 ---
 
@@ -596,3 +600,50 @@ Source references are untrusted text, never browser links or fetched paths.
 The service limits each input file to 32 MiB, the snapshot to 64 MiB, request
 bodies to 16 KiB, preview queries to 2,000 characters, and previews to five
 seconds; failures are visible rather than silently truncated.
+
+---
+
+## 13. Explicit customer bootstrap and reviewed import
+
+`bin/consumer-brain.py` owns the `init`, `propose`, `review`, and `apply` CLI.
+Every operation requires `--store` with an explicit absolute destination;
+`propose` requires `--format markdown|claude-jsonl` and repeated `--source`
+paths; `review` and `apply` require a full SHA-256 `--proposal` digest. With
+no subcommand, it prints help without store access. Output containing source
+or path data is ASCII JSON; review prints the complete proposal. Errors are
+concise and do not echo raw inputs. This CLI neither installs a hook nor reads
+default home or fleet sources. Explorer (§12) remains the read-only recall UI.
+
+`bin/_consumer_store.py` owns `ConsumerError`, `init_store(Path)`, and the
+locked `ConsumerStore(Path)` context manager. Its read-only `path`, `manifest`,
+`facts`, and `generation` observations are defensive; `save_proposal`,
+`read_proposal`, and `apply_proposal` implement digest-bound review and signed
+additive publication. `read_regular` is the bounded no-follow reader and
+`canonical_bytes` provides strict deterministic ASCII JSON. `init_store`
+creates a fresh 0700 directory only, with a local identity and keypair, empty
+`facts.json`, and private proposals directory. Existing destinations are never
+adopted. Existing facts must be valid signed local v1 customer facts; foreign,
+unsigned, malformed, or tampered records fail closed. Proposals bind store
+UUID, key ID and facts generation. Apply rejects stale generations, signs new
+facts through `_sign.sign_facts`, verifies before atomic replacement, and
+skips existing IDs without editing their signatures or evidence. A customer
+lock and pre-replacement byte check coordinate these writers; unrelated
+legacy writers have no transaction guarantee and are unsupported. SQLite
+cutover and nonempty lifecycle sidecars are refused.
+
+`bin/_consumer_import.py` owns `collect_candidates(sources, format, manifest)`.
+It reads only selected regular source files and returns candidates, source
+receipts, and statistics without writing facts. Limits are 16 files, 8 MiB
+each, 32 MiB total, at most 1,000 candidates and 1,500 characters per
+candidate. It reuses the existing classifier, authority rules, scrubber and
+JSONL privacy fences while keeping customer construction separate from fleet
+machine minting. Markdown accepts curated `- ` bullets. JSONL preserves
+user/assistant roles; assistant authority and tool payloads cannot mint
+customer decision/directive/correction facts. IDs cover the full sanitized
+content and kind plus customer UUID. The selected source hash, sanitized path
+and event anchor are signed evidence. Overlong candidates are counted and
+skipped; source or proposal limit violations fail visibly. Source files are
+never rewritten. The fleet mint gate, default extraction paths, recall hook,
+and Explorer's read-only service contract remain unchanged. Correction,
+forgetting, standalone injection, packaging and real customer evaluation are
+future milestones.

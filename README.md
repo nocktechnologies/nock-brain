@@ -17,14 +17,35 @@ Most Claude Code sessions start from zero. nock-brain fixes that.
 7. **Recall** — Ranks with **BM25** (IDF-weighted token matching with length normalization) and retrieves the most relevant items within a configurable token budget — **synthesized insights first**, then raw facts — so memory enhances without overwhelming the context window. With the optional **semantic tier** enabled, BM25 is RRF-fused with cosine similarity over locally computed embeddings, so a paraphrase ("payment processing") finds the fact it shares no words with ("Stripe webhook") — and recall silently degrades to flat BM25 whenever the tier can't run.
 8. **Inject** — A Claude Code hook that chains the steps transparently. Relevant context appears as system messages when needed.
 
-## Install
+## Try an explicit customer Brain
+
+The reviewed customer workflow is an **evaluation milestone**. Choose a fresh
+destination and specific source files; no home transcript discovery, hook
+installation, or Claude Code settings change occurs. From this repository:
+
+```bash
+python3 bin/consumer-brain.py init --store "$PWD/customer-brain"
+python3 bin/consumer-brain.py propose --store "$PWD/customer-brain" --format markdown --source "$PWD/examples/customer-notes.md"
+```
+
+The proposal output gives a digest and review command. Read the full review
+before using its apply command, then inspect the store with
+`python3 bin/explore-memory.py --store "$PWD/customer-brain"`. The example
+notes are fictitious. See the [customer setup guide](docs/customer-setup.md)
+for the complete walkthrough, limits, backups, and release gaps. Explorer's
+BM25 preview is the current recall UI for this workflow; it does not inject
+memories into an agent.
+
+## Legacy installer
 
 ```bash
 git clone https://github.com/nocktechnologies/nock-brain.git
 cd nock-brain && bash install.sh
 ```
 
-The installer:
+This older installer automatically discovers local transcript sources and
+changes Claude Code settings to install the hook. It has different behavior
+from the explicit customer workflow above. The installer:
 - Creates `~/.nock-brain/` for fact storage
 - Finds transcript sources (memsearch plugin or local files)
 - Extracts facts from existing transcripts
