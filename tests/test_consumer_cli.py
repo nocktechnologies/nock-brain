@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 from urllib.parse import urlsplit
@@ -124,3 +125,34 @@ def test_safe_output_invalid_paths_and_key_mismatch(tmp_path):
     (store / "signing-key.pub").write_bytes((other / "signing-key.pub").read_bytes())
     assert "keys" in payload(run(tmp_path, "apply", "--store", store,
                                  "--proposal", proposed["proposal"]), code=2)["error"]
+
+
+def test_printed_commands_work_outside_checkout(tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    store = tmp_path / "brain; $(touch escaped)"
+    source = tmp_path / "notes.md"
+    source.write_text("- [DECISION] Deliver the fictional report on Friday.\n")
+    environment = env(tmp_path)
+
+    def invoke(args):
+        return subprocess.run(args, cwd=elsewhere, env=environment, text=True,
+                              capture_output=True, timeout=10)
+
+    payload(invoke([sys.executable, str(CLI), "init", "--store", str(store)]))
+    proposed = payload(invoke([sys.executable, str(CLI), "propose", "--store", str(store),
+                               "--format", "markdown", "--source", str(source)]))
+    assert json.loads((store / "facts.json").read_text()) == []
+
+    review_args = shlex.split(proposed["review_command"])
+    assert review_args[:2] == [sys.executable, str(CLI.resolve())]
+    reviewed = payload(invoke(review_args))
+    assert reviewed["review"]["candidates"][0]["content"] == (
+        "[DECISION] Deliver the fictional report on Friday.")
+    assert json.loads((store / "facts.json").read_text()) == []
+
+    apply_args = shlex.split(reviewed["apply_command"])
+    assert apply_args[:2] == [sys.executable, str(CLI.resolve())]
+    assert payload(invoke(apply_args)) == {"added": 1, "skipped": 0, "total": 1}
+    assert len(json.loads((store / "facts.json").read_text())) == 1
+    assert not (elsewhere / "escaped").exists()

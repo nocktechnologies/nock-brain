@@ -48,7 +48,7 @@ def _safe_path(value: str) -> Path:
 
 
 def _command(mode: str, store: str, digest: str) -> str:
-    args = ["python3", "bin/consumer-brain.py", mode, "--store", store,
+    args = [sys.executable, str(Path(__file__).resolve()), mode, "--store", store,
             "--proposal", digest]
     return " ".join(shlex.quote(arg) for arg in args)
 
