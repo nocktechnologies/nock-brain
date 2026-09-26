@@ -86,7 +86,9 @@
     state.summary = summary;
     $('store-label').textContent = summary.mode === 'demo' ? `Synthetic demo · ${readable(summary.store)}` : readable(summary.store);
     const counts = summary.counts || {};
-    $('store-state').textContent = `${label(summary.state || 'unknown')} · ${Number(counts.facts) || 0} facts, ${Number(counts.insights) || 0} insights`;
+    const factCount = Number(counts.facts) || 0;
+    const insightCount = Number(counts.insights) || 0;
+    $('store-state').textContent = `${label(summary.state || 'unknown')} · ${factCount} ${factCount === 1 ? 'fact' : 'facts'}, ${insightCount} ${insightCount === 1 ? 'insight' : 'insights'}`;
     $('capture-time').textContent = showTime(summary.captured_at);
     const verification = summary.verification || {};
     const verificationCounts = verification.counts || {};
