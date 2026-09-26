@@ -170,3 +170,44 @@ brief includes this pointer). Read CLAUDE.md and REPO-MAP before code.
   runs full pytest, classifier/recall gates, stock 3.9 floor, no-dependency
   synthetic smoke, Bandit/gitleaks, independent final review, and records
   verified results in this plan. Do not merge/push/deploy.
+
+## Delivery validation — 2026-09-26
+
+The customer-bootstrap increment is complete on the existing isolated
+`codex/brain-consumer-explorer` branch. Final runtime code is `7bebfc8`.
+The approved light Explorer remains unchanged.
+
+- Full suite: `python3 -m pytest -q` — **913 passed**, 22.14 seconds.
+  This includes the real stock Python 3.9 all-bin import checks.
+- Classifier smoke: **10/10**. Existing recall regression gate: **PASS**,
+  36/36 fixture identities and 196/196 valid fixture attestations. These are
+  regression results, not a customer conversation-quality evaluation.
+- Bandit 1.8.6 on `bin/`: no findings. Existing annotation-parser warnings
+  remain in unchanged legacy code. A fresh scan of all three customer modules
+  after the final key fix is also clean and warning-free.
+- Gitleaks on the committed `git archive` at `7bebfc8`: no leaks. This checks
+  the current tracked code snapshot, not repository history or private stores.
+- Fresh no-pip virtual environment using stock Python 3.9.6, without
+  `cryptography`: two new stores produced distinct identities/keys; explicit
+  Markdown and Claude JSONL imports produced three verified facts; review
+  left facts unchanged; repeat imports were idempotent; adding facts retained
+  older signatures; selected sources and an unrelated synthetic home remained
+  byte/mtime/mode-identical. Explorer verified all three records and the
+  production BM25 preview returned two matching records.
+- Both real Ed25519 and HMAC key construction have targeted coverage, including
+  unavailable cryptography, key mismatch, strict malformed JSON, and file
+  swaps between capture and key construction. Keys are constructed only from
+  validated captured bytes; existing fleet key loaders are unchanged.
+- Independent task reviews and the final broad customer-increment review
+  passed after fixes. Review regressions cover mutable observation isolation,
+  strict attestation metadata, ambiguous tool-result messages, hard-linked
+  sources, lexical path drift, and follow-up commands run outside the checkout.
+- `git diff --check` is clean. No live fleet data, keys, settings, hooks or
+  private store were used. Changes are committed locally; no release,
+  installation, merge, push, or deployment was performed.
+
+The milestone is an independently usable evaluation flow: initialize, select
+sources, propose, review, accept, and inspect/preview recall. It is not yet a
+stable customer distribution. Packaged onboarding, standalone automatic
+capture/injection, correction and forgetting, real customer extraction/recall
+evaluation, and release/privacy review remain before selling it as such.
