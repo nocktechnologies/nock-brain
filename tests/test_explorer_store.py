@@ -279,3 +279,54 @@ def test_repeated_capture_drift_keeps_previous_generation(tmp_path, monkeypatch)
             store.refresh()
         assert store.summary() == previous
         assert store.snapshot_dir.exists()
+
+
+def test_hostile_tmp_environment_never_places_scratch_in_source(tmp_path, monkeypatch):
+    root, _ = make_store(tmp_path, [fact("one")], key=False)
+    before = tree_state(root)
+    for variable in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(variable, str(root))
+    with ExplorerStore(root) as store:
+        assert not store.snapshot_dir.is_relative_to(root)
+        assert store.list_records()["total"] == 1
+    assert tree_state(root) == before
+
+
+def test_scratch_base_falls_back_outside_selected_source(tmp_path, monkeypatch):
+    root, _ = make_store(tmp_path, [fact("one")], key=False)
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    monkeypatch.setattr(explorer_module, "_TEMP_BASES", (root, alternate))
+    before = tree_state(root)
+    with ExplorerStore(root) as store:
+        assert store.snapshot_dir.is_relative_to(alternate)
+    assert tree_state(root) == before
+
+
+def test_no_safe_scratch_base_fails_before_writing_source(tmp_path, monkeypatch):
+    root, _ = make_store(tmp_path, [fact("one")], key=False)
+    nested = root / "nested"
+    nested.mkdir()
+    monkeypatch.setattr(explorer_module, "_TEMP_BASES", (root, nested))
+    before = tree_state(root)
+    with pytest.raises(ExplorerError, match="safe temporary directory"):
+        ExplorerStore(root)
+    assert tree_state(root) == before
+
+
+def test_sqlite_marker_created_midcapture_refuses_stale_json(tmp_path, monkeypatch):
+    root, _ = make_store(tmp_path, [fact("one")], key=False)
+    with ExplorerStore(root) as store:
+        previous = store.summary()
+        original = explorer_module._read_one
+
+        def add_marker(path, before, private_path=None):
+            data = original(path, before, private_path)
+            if path.name == "facts.json":
+                (root / "store-v2").write_text("")
+            return data
+
+        monkeypatch.setattr(explorer_module, "_read_one", add_marker)
+        with pytest.raises(ExplorerError, match="SQLite"):
+            store.refresh()
+        assert store.summary() == previous

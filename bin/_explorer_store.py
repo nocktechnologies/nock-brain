@@ -25,6 +25,7 @@ from _store import secure_replace_bytes, secure_write_json
 FILE_LIMIT = 32 * 1024 * 1024
 TOTAL_LIMIT = 64 * 1024 * 1024
 INPUTS = ("facts.json", "insights.json", "revocations.jsonl", "signing-key.pub")
+_TEMP_BASES = (Path("/tmp"), Path("/var/tmp"))
 DETAIL_FIELDS = (
     "source_date", "source_time", "valid_at", "invalid_at", "valid_from",
     "valid_to", "confidence", "evidence", "source", "parents", "parent_fact_ids",
@@ -103,14 +104,28 @@ def _read_one(path: Path, before, private_path=None):
         os.close(fd)
 
 
-def _capture(paths, private_path):
+def _sqlite_marker_present(path):
+    try:
+        path.lstat()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise ExplorerError("The selected store could not be inspected.") from None
+
+
+def _capture(paths, private_path, marker_path):
     for attempt in range(2):
         try:
+            if _sqlite_marker_present(marker_path):
+                raise ExplorerError("SQLite stores are unsupported by Memory Explorer.")
             before = {name: _stamp(path) for name, path in paths.items()}
             if sum(stamp[2] for stamp in before.values() if stamp) > TOTAL_LIMIT:
                 raise ExplorerError("Selected inputs exceed the 64 MiB snapshot limit.")
             data = {name: _read_one(path, before[name], private_path if name == "signing-key.pub" else None)
                     for name, path in paths.items()}
+            if _sqlite_marker_present(marker_path):
+                raise ExplorerError("SQLite stores are unsupported by Memory Explorer.")
             if any(_stamp(path) != before[name] for name, path in paths.items()):
                 raise _Drift()
             return data
@@ -212,6 +227,27 @@ def _finite_float(value):
     return number
 
 
+def _scratch_root(selected_store):
+    """Create scratch outside the selected source, ignoring TMPDIR/TEMP/TMP."""
+    source = Path(os.path.realpath(os.path.abspath(selected_store))) if selected_store is not None else None
+    for candidate in _TEMP_BASES:
+        base = Path(os.path.realpath(candidate))
+        if source is not None and (base == source or base.is_relative_to(source)):
+            continue
+        if not base.is_dir():
+            continue
+        root = None
+        try:
+            root = Path(tempfile.mkdtemp(prefix="nock-explorer-", dir=base))
+            os.chmod(root, 0o700)
+            return root
+        except OSError:
+            if root is not None:
+                shutil.rmtree(root, ignore_errors=True)
+            continue
+    raise ExplorerError("No safe temporary directory is available.")
+
+
 class ExplorerStore:
     def __init__(self, store: Path | None = None, *, demo: bool = False,
                  verify_key: Path | None = None):
@@ -222,8 +258,7 @@ class ExplorerStore:
         self._demo = demo
         self._store = Path(store) if store is not None else None
         self._verify_key = Path(verify_key) if verify_key is not None else None
-        self._root = Path(tempfile.mkdtemp(prefix="nock-explorer-"))
-        os.chmod(self._root, 0o700)
+        self._root = _scratch_root(self._store)
         self.snapshot_dir = self._root
         self.snapshot_id = ""
         self._summary = {}
@@ -258,14 +293,7 @@ class ExplorerStore:
             raise ExplorerError("The selected store could not be inspected.") from None
         if rst is not None and not stat.S_ISDIR(rst.st_mode):
             raise ExplorerError("The selected store must be a regular directory.")
-        try:
-            (root / "store-v2").lstat()
-            has_sqlite_marker = True
-        except FileNotFoundError:
-            has_sqlite_marker = False
-        except OSError:
-            raise ExplorerError("The selected store could not be inspected.") from None
-        if has_sqlite_marker:
+        if _sqlite_marker_present(root / "store-v2"):
             raise ExplorerError("SQLite stores are unsupported by Memory Explorer.")
         key_path = self._verify_key or (root / "signing-key.pub")
         private = root / "signing-key"
@@ -281,7 +309,7 @@ class ExplorerStore:
                 "revocations.jsonl": root / "revocations.jsonl", "signing-key.pub": key_path}
 
     def refresh(self) -> dict:
-        data = _capture(self._paths(), self._store / "signing-key")
+        data = _capture(self._paths(), self._store / "signing-key", self._store / "store-v2")
         generation = self._root / ("generation-" + uuid.uuid4().hex)
         generation.mkdir(mode=0o700)
         try:
@@ -298,6 +326,8 @@ class ExplorerStore:
                             contents = b"{}"
                     secure_replace_bytes(generation / name, contents)
             summary, records, details = self._build(generation, data)
+            if _sqlite_marker_present(self._store / "store-v2"):
+                raise ExplorerError("SQLite stores are unsupported by Memory Explorer.")
         except BaseException:
             shutil.rmtree(generation, ignore_errors=True)
             raise
