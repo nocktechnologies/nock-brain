@@ -64,31 +64,31 @@ cannot bypass the fleet mint gate; no claims of comprehensive extraction.
 brief includes this pointer). Read CLAUDE.md and REPO-MAP before code.
 **Own only:** `bin/_consumer_store.py`, `tests/test_consumer_store.py`.
 
-- [ ] Implement the exact shared API. Explicit absolute paths only, no defaults
+- [x] Implement the exact shared API. Explicit absolute paths only, no defaults
   or environment store/key resolution. Init uses exclusive directory creation,
   creates empty `facts.json`, new explicit-path keypair and proposals directory,
   and writes the manifest last. Refuse all existing targets (including dangling
   symlinks) before writing. Parent must exist. Never clean unknown paths.
-- [ ] Opening requires a valid canonical UUID manifest and matching local
+- [x] Opening requires a valid canonical UUID manifest and matching local
   signing and verification keys. Refuse a symlink store/owned files, special
   files, hard-linked owned files, unsafe group/world permissions, SQLite marker,
   and nonempty revocations/tombstones. Do not recurse into arbitrary files.
   Bounded regular reads check descriptor identity/stat before and after. Use a
   persistent 0600 flock lock; do not unlink it. Hold it until context exit.
-- [ ] Load existing facts strictly; reject duplicates, malformed/unsigned/
+- [x] Load existing facts strictly; reject duplicates, malformed/unsigned/
   tampered/foreign facts. Verify existing signatures, key identity, and signed
   evidence store ownership. Do not repair or re-sign previous records.
-- [ ] Save immutable digest-addressed proposals, validate schema and candidate
+- [x] Save immutable digest-addressed proposals, validate schema and candidate
   identity/content/evidence/limits with allowlisted fields. Source text is
   untrusted data. Reject NaN/Infinity and malformed shapes. Bind proposal to
   key/store/current facts generation; never accept an arbitrary proposal path.
-- [ ] Apply refuses changed digest or stale generation; skip already-existing
+- [x] Apply refuses changed digest or stale generation; skip already-existing
   candidate IDs, sign new facts only through `_sign.sign_facts`, verify the
   complete merged list, then atomic 0600 replacement after rechecking captured
   facts/key/manifest/lifecycle marker state. Failure must retain facts bytes.
   Return `{added, skipped, total}`. Applying an already consumed proposal may
   return a stale-proposal error; repeated propose/apply must be idempotent.
-- [ ] Test fresh distinct stores, existing/symlink/incomplete targets, bad
+- [x] Test fresh distinct stores, existing/symlink/incomplete targets, bad
   key/facts, environment/home isolation, proposal tampering/stale base,
   duplicate IDs, unchanged old attestations, publication failure and special
   files, signature verification, limits. Synthetic inputs only. Run focused
@@ -99,19 +99,19 @@ brief includes this pointer). Read CLAUDE.md and REPO-MAP before code.
 **Read first:** spec and Shared contract above; CLAUDE.md and REPO-MAP.
 **Own only:** `bin/_consumer_import.py`, `tests/test_consumer_import.py`.
 
-- [ ] Implement `collect_candidates` exactly, using Task 1 helpers. Source
+- [x] Implement `collect_candidates` exactly, using Task 1 helpers. Source
   selection is explicit absolute files only, no glob/directory traversal.
   Reject duplicates, symlinks/special files, denylisted source paths (reuse
   ingest-jsonl default denylist), signing-key filenames, `.ssh` and `.gnupg`
   components. Check lexical and resolved paths so parent aliases cannot
   bypass the denylist. Capture bounded immutable bytes with total bound and drift
   check; source bytes/modes/mtimes must stay unchanged.
-- [ ] Load existing hyphen modules by explicit sibling file path. Reuse
+- [x] Load existing hyphen modules by explicit sibling file path. Reuse
   `classify_bullet`, `authority_fact_allowed`, `extract_metadata` where needed,
   `_scrub.scrub_secrets/is_structural_noise`, and JSONL `line_events`. Do not
   invoke their CLIs, default path discovery, or `machine_tag`. Do not modify
   fleet extraction APIs. Use a small customer constructor from shared schema.
-- [ ] Markdown is explicitly customer-curated notes: only `- ` bullets,
+- [x] Markdown is explicitly customer-curated notes: only `- ` bullets,
   actor=user, scrub first then structural/classification/authority filters.
   JSONL parses each nonempty line strictly to an object, preserves roles,
   denies sidechains and paired private tool results through `line_events`,
@@ -120,20 +120,20 @@ brief includes this pointer). Read CLAUDE.md and REPO-MAP before code.
   role must agree with its user/assistant outer type; a mismatched role must
   not upgrade assistant prose to user authority. Unknown valid event
   types may be skipped. Avoid unsafe coercion of malformed content to prose.
-- [ ] Full sanitized content IDs, signed source hash/customer receipts as in
+- [x] Full sanitized content IDs, signed source hash/customer receipts as in
   Shared contract. Whitelist and scrub path/session metadata (prefer deriving
   event IDs from source hash + line + part index, omit unneeded raw metadata).
   Source dates validate ISO date, else use UTC file mtime. Keep role for
   authority checks; assistant cannot mint decision/directive authority.
   Overlong messages counted/skipped; bounded candidates, dedup exact full
   content/kind only, retain evidence within batch, preserve repeatability.
-- [ ] Test tagged and inferred notes, customer first-person decisions,
+- [x] Test tagged and inferred notes, customer first-person decisions,
   assistant authority excluded, tool/sidechain/private payload exclusion,
   scrubbing content and metadata, malformed JSONL/shapes/non-finite numbers,
   source limits/denylists/drift/special files, complete-content ID distinctions
   past 200 chars, duplicate evidence and stable repeated extraction. Test with
   absent/hostile fleet identity and signing env. No real source data.
-- [ ] Run focused tests, self-review and commit only owned files.
+- [x] Run focused tests, self-review and commit only owned files.
 
 ### Task 3: Customer CLI, guide and end-to-end verification
 
@@ -142,31 +142,31 @@ brief includes this pointer). Read CLAUDE.md and REPO-MAP before code.
 `docs/customer-setup.md`, `docs/REPO-MAP.md`, `README.md`,
 `docs/memory-explorer.md`, `examples/customer-notes.md`.
 
-- [ ] CLI `main(argv=None)->int`: subcommands init/propose/review/apply as
+- [x] CLI `main(argv=None)->int`: subcommands init/propose/review/apply as
   specified. Every command requires `--store`; propose requires `--format`
   and one or more repeated `--source`. Review/apply require a full digest.
   Invoking with no subcommand prints help and
   returns zero before filesystem/store access. Parse errors return nonzero.
   All actual operations consume the shared APIs with no fallback/defaults.
-- [ ] Init reports new identity and next steps without key material. Propose
+- [x] Init reports new identity and next steps without key material. Propose
   prints count/digest and exact review command; review emits complete escaped
   ASCII JSON with stats/provenance and explains apply command. Apply reports
   added/skipped/total. Paths and source content cannot inject ANSI/terminal
   controls or shell commands into output. Use JSON output for untrusted values
   and shlex.quote for rendered command args. Errors are concise, safe, nonzero.
   Suppress Python bytecode writing before sibling imports. No browser writes.
-- [ ] Add a small synthetic notes example and documented walkthrough: fresh
+- [x] Add a small synthetic notes example and documented walkthrough: fresh
   destination, selected sources only, review entire proposal, apply digest,
   Explorer launch. Explain algorithm/fallback, private key backup, limits,
   stale re-proposal, heuristic extraction/overlong skips, duplicates/evidence,
   unsupported concurrent legacy writers and correction semantics. Label as
   an evaluation milestone, not a ready customer release. Document REPO-MAP
   module/API contracts and unchanged fleet/Explorer boundaries.
-- [ ] Test subprocess CLI no-mode and bad args without home data touched,
+- [x] Test subprocess CLI no-mode and bad args without home data touched,
   full init/propose/review/apply/Explorer synthetic flow under hostile env,
   no fact writes before apply, safe escaping, key mismatch and stale proposal
   failures, idempotent second import, and source sentinels unchanged.
-- [ ] Run focused tests, self-review and commit only owned files. Controller
+- [x] Run focused tests, self-review and commit only owned files. Controller
   runs full pytest, classifier/recall gates, stock 3.9 floor, no-dependency
   synthetic smoke, Bandit/gitleaks, independent final review, and records
   verified results in this plan. Do not merge/push/deploy.

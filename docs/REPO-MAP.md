@@ -632,14 +632,17 @@ legacy writers have no transaction guarantee and are unsupported. SQLite
 cutover and nonempty lifecycle sidecars are refused.
 
 `bin/_consumer_import.py` owns `collect_candidates(sources, format, manifest)`.
-It reads only selected regular source files and returns candidates, source
+It reads only selected single-link regular source files and returns candidates, source
 receipts, and statistics without writing facts. Limits are 16 files, 8 MiB
 each, 32 MiB total, at most 1,000 candidates and 1,500 characters per
 candidate. It reuses the existing classifier, authority rules, scrubber and
 JSONL privacy fences while keeping customer construction separate from fleet
 machine minting. Markdown accepts curated `- ` bullets. JSONL preserves
-user/assistant roles; assistant authority and tool payloads cannot mint
-customer decision/directive/correction facts. IDs cover the full sanitized
+user/assistant roles; assistant text cannot mint decision/directive/correction
+authority. Tool payloads and mixed tool-result envelopes contribute no candidate
+text. Lexical and resolved source paths must pass privacy checks, and the
+selected file's identity must remain stable through resolution and capture.
+IDs cover the full sanitized
 content and kind plus customer UUID. The selected source hash, sanitized path
 and event anchor are signed evidence. Overlong candidates are counted and
 skipped; source or proposal limit violations fail visibly. Source files are

@@ -4,6 +4,7 @@ This is an **evaluation milestone**, not a ready customer release. It creates
 one fresh, private identity and imports only files you select. It does not
 discover home data, install a hook, change Claude Code settings, call a model,
 or connect to the fleet. Memory Explorer is the available recall interface.
+The setup command currently targets macOS and Linux.
 
 From the repository root, choose a **new absolute destination** whose parent
 already exists, outside your source-code checkout. The destination itself
@@ -51,7 +52,9 @@ Markdown accepts curated `- ` bullet lines. Use `[DECISION]`, `[DIRECTIVE]`,
 or `[CORRECTION]` tags for first-person customer notes: the existing heuristic
 classifier does not infer an untagged “I decided…” as a decision. The
 `claude-jsonl` format accepts selected Claude Code JSONL files, retains
-conversation roles, and applies the existing privacy fences. Assistant text
+conversation roles, and applies the existing privacy fences. Messages that
+mix text with tool results are skipped because their human authorship is
+ambiguous. Assistant text
 cannot mint decision, directive, or correction authority. Tool payloads are
 not candidate facts. The extraction is heuristic and can miss useful facts;
 overlong candidate messages are skipped and counted rather than truncated.
@@ -69,6 +72,8 @@ Proposals bind the store UUID, signing key, and `facts.json` generation. If a
 proposal is stale after an import, run `propose` again and review its new
 digest. The old digest cannot be applied. Back up the whole private store,
 including **both** `signing-key` and `signing-key.pub`, with owner-only access.
+New stores use Ed25519 when `cryptography` is already installed, otherwise
+the engine's dependency-free HMAC-SHA256 fallback.
 The HMAC fallback contains shared secret material in the `.pub` file too.
 Losing or mixing either key can make the store unusable; the CLI will not
 replace it silently. Customer writers share a lock, but mixing legacy writers
