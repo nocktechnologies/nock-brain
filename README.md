@@ -24,13 +24,13 @@ destination and specific source files; no home transcript discovery, hook
 installation, or Claude Code settings change occurs. From this repository:
 
 ```bash
-python3 bin/consumer-brain.py init --store "$PWD/customer-brain"
-python3 bin/consumer-brain.py propose --store "$PWD/customer-brain" --format markdown --source "$PWD/examples/customer-notes.md"
+python3 bin/consumer-brain.py init --store "$HOME/customer-brain"
+python3 bin/consumer-brain.py propose --store "$HOME/customer-brain" --format markdown --source "$PWD/examples/customer-notes.md"
 ```
 
 The proposal output gives a digest and review command. Read the full review
 before using its apply command, then inspect the store with
-`python3 bin/explore-memory.py --store "$PWD/customer-brain"`. The example
+`python3 bin/explore-memory.py --store "$HOME/customer-brain"`. The example
 notes are fictitious. See the [customer setup guide](docs/customer-setup.md)
 for the complete walkthrough, limits, backups, and release gaps. Explorer's
 BM25 preview is the current recall UI for this workflow; it does not inject

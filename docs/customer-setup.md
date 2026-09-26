@@ -6,11 +6,12 @@ discover home data, install a hook, change Claude Code settings, call a model,
 or connect to the fleet. Memory Explorer is the available recall interface.
 
 From the repository root, choose a **new absolute destination** whose parent
-already exists. The destination itself must not exist. This example source is
+already exists, outside your source-code checkout. The destination itself
+must not exist. This example source is
 fictitious; replace it with your own selected, ordinary single-link file.
 
 ```sh
-STORE="$PWD/customer-brain"
+STORE="$HOME/customer-brain"
 SOURCE="$PWD/examples/customer-notes.md"
 python3 bin/consumer-brain.py init --store "$STORE"
 python3 bin/consumer-brain.py propose --store "$STORE" --format markdown --source "$SOURCE"
@@ -18,8 +19,10 @@ python3 bin/consumer-brain.py propose --store "$STORE" --format markdown --sourc
 
 `init` prints the new store UUID and algorithm, never private key bytes.
 `propose` prints a candidate count, full SHA-256 proposal digest, statistics,
-and an exact review command as a JSON string. Copy the command's value (without
-the JSON quotes), or supply the digest yourself:
+and an exact review command as a JSON string. The simplest way to run review
+is to use the command below with the printed digest. If using the command
+value from JSON, decode it first; removing the outer quotes alone does not
+decode escapes in unusual paths:
 
 ```sh
 python3 bin/consumer-brain.py review --store "$STORE" --proposal FULL_DIGEST
