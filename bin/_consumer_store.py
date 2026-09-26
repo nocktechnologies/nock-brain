@@ -243,6 +243,45 @@ def _timestamp(value: Any) -> bool:
         return False
 
 
+def _captured_keys(private_bytes: bytes, public_bytes: bytes, manifest: dict):
+    """Construct both key views from bounded, no-follow captured bytes only."""
+    private = _json(private_bytes)
+    public = _json(public_bytes)
+    algorithm = manifest["algorithm"]
+    key_id = manifest["key_id"]
+    if algorithm == _sign.ALG_ED25519:
+        private_fields = {"alg", "key_id", "private_key"}
+        public_fields = {"alg", "key_id", "public_key"}
+        material_fields = ((private, "private_key"), (public, "public_key"))
+    else:
+        private_fields = public_fields = {"alg", "key_id", "secret"}
+        material_fields = ((private, "secret"), (public, "secret"))
+    if (not isinstance(private, dict) or not isinstance(public, dict) or
+            set(private) != private_fields or set(public) != public_fields or
+            not isinstance(key_id, str) or
+            not re.fullmatch(re.escape(algorithm) + r":[0-9a-f]{16}", key_id) or
+            private["alg"] != algorithm or public["alg"] != algorithm or
+            private["key_id"] != key_id or public["key_id"] != key_id or
+            any(not isinstance(doc[field], str) or
+                not _DIGEST.fullmatch(doc[field]) for doc, field in material_fields)):
+        raise ConsumerError("invalid customer signing keys")
+    if algorithm == _sign.ALG_ED25519 and not _sign._HAVE_CRYPTOGRAPHY:
+        raise ConsumerError("Ed25519 customer key requires cryptography")
+    signing_key = _sign._load_key_from_doc(private)
+    if algorithm == _sign.ALG_ED25519:
+        verifier = _sign.SigningKey(
+            _sign.ALG_ED25519,
+            ed_public=_sign.Ed25519PublicKey.from_public_bytes(bytes.fromhex(public["public_key"])))
+    else:
+        verifier = _sign.SigningKey(_sign.ALG_HMAC,
+                                    hmac_secret=bytes.fromhex(public["secret"]))
+    challenge = b"nockbrain-customer-key-match"
+    if (signing_key.key_id != key_id or verifier.key_id != key_id or
+            not verifier.verify_bytes(challenge, signing_key.sign_bytes(challenge))):
+        raise ConsumerError("customer signing keys do not match")
+    return signing_key
+
+
 class ConsumerStore:
     """One locked customer JSON store; all paths are explicit and local."""
 
@@ -331,14 +370,8 @@ class ConsumerStore:
             raise ConsumerError("invalid customer manifest")
         self._manifest = manifest
         try:
-            self._key = _sign.load_or_create_key(self.path / "signing-key",
-                                                  self.path / "signing-key.pub", create=False)
-            verifier = _sign.load_public_key(self.path / "signing-key.pub")
-            challenge = b"nockbrain-customer-key-match"
-            if (self._key.key_id != manifest["key_id"] or verifier.key_id != manifest["key_id"] or
-                    self._key.alg != manifest["algorithm"] or verifier.alg != manifest["algorithm"] or
-                    not verifier.verify_bytes(challenge, self._key.sign_bytes(challenge))):
-                raise ConsumerError("customer signing keys do not match")
+            self._key = _captured_keys(self._captured["signing-key"],
+                                       self._captured["signing-key.pub"], manifest)
         except ConsumerError:
             raise
         except Exception as exc:
@@ -347,6 +380,8 @@ class ConsumerStore:
         if not isinstance(facts, list):
             raise ConsumerError("facts must be an array")
         self._validate_facts(facts, require_attestation=True)
+        if self._capture() != self._captured:
+            raise ConsumerError("customer store changed during opening")
         self._facts = facts
         self._generation = hashlib.sha256(self._captured["facts.json"]).hexdigest()
 

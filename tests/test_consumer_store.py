@@ -368,3 +368,102 @@ def test_malformed_v1_attestation_metadata_fails_closed(tmp_path, change):
     with pytest.raises(cs.ConsumerError):
         with cs.ConsumerStore(path):
             pass
+
+
+@pytest.mark.parametrize("key_name", ["signing-key", "signing-key.pub"])
+@pytest.mark.parametrize("bad_document", [
+    lambda data: data.rstrip()[:-1] + b', "extra": NaN}',
+    lambda data: data.rstrip()[:-1] + b', "extra": 1e999}',
+    lambda data: data.rstrip()[:-1] + b', "alg": "hmac-sha256"}',
+    lambda data: b'{"alg":',
+])
+def test_captured_key_json_is_strict(tmp_path, key_name, bad_document):
+    path = tmp_path / "store"
+    cs.init_store(path)
+    key_path = path / key_name
+    key_path.write_bytes(bad_document(key_path.read_bytes()))
+    with pytest.raises(cs.ConsumerError):
+        with cs.ConsumerStore(path):
+            pass
+
+
+@pytest.mark.parametrize("key_name", ["signing-key", "signing-key.pub"])
+def test_captured_key_document_shape_and_material_length(tmp_path, key_name):
+    path = tmp_path / "store"
+    cs.init_store(path)
+    key_path = path / key_name
+    original = key_path.read_bytes()
+    doc = json.loads(original)
+    material_field = next(field for field in ("private_key", "public_key", "secret") if field in doc)
+    for mutation in ({"extra": "ignored"}, {material_field: "00"}, {"key_id": "foreign"}):
+        key_path.write_bytes(cs.canonical_bytes(dict(doc, **mutation)))
+        with pytest.raises(cs.ConsumerError):
+            with cs.ConsumerStore(path):
+                pass
+    key_path.write_bytes(original)
+    with cs.ConsumerStore(path):
+        pass
+
+
+@pytest.mark.parametrize("algorithm", ["ed25519", "hmac-sha256"])
+def test_both_key_algorithms_construct_from_capture_and_reject_mismatch(tmp_path, monkeypatch, algorithm):
+    if algorithm == "ed25519" and not _sign._HAVE_CRYPTOGRAPHY:
+        pytest.skip("cryptography unavailable")
+    with monkeypatch.context() as patch:
+        patch.setattr(_sign, "_HAVE_CRYPTOGRAPHY", algorithm == "ed25519")
+        path = tmp_path / "store"
+        other = tmp_path / "other"
+        manifest = cs.init_store(path)
+        cs.init_store(other)
+        assert manifest["algorithm"] == algorithm
+        with cs.ConsumerStore(path) as store:
+            digest = proposal(store, [candidate(manifest)])
+            assert store.apply_proposal(digest)["added"] == 1
+        public_path = path / "signing-key.pub"
+        public_doc = json.loads((other / "signing-key.pub").read_bytes())
+        public_doc["key_id"] = manifest["key_id"]
+        public_path.write_bytes(cs.canonical_bytes(public_doc))
+        with pytest.raises(cs.ConsumerError):
+            with cs.ConsumerStore(path):
+                pass
+
+
+@pytest.mark.parametrize("key_name", ["signing-key", "signing-key.pub"])
+def test_key_leaf_swap_after_capture_never_reopens_outside_path(tmp_path, monkeypatch, key_name):
+    path = tmp_path / "store"
+    cs.init_store(path)
+    key_path = path / key_name
+    outside = tmp_path / "outside-key-copy"
+    outside.write_bytes(key_path.read_bytes() + b" " * (cs.SMALL_LIMIT + 1))
+    original_capture = cs.ConsumerStore._capture
+    calls = 0
+
+    def capture_then_swap(store):
+        nonlocal calls
+        captured = original_capture(store)
+        calls += 1
+        if calls == 1:
+            key_path.unlink()
+            key_path.symlink_to(outside)
+        return captured
+
+    monkeypatch.setattr(cs.ConsumerStore, "_capture", capture_then_swap)
+    monkeypatch.setattr(_sign, "load_or_create_key", lambda *_a, **_k: pytest.fail("legacy private loader reopened path"))
+    monkeypatch.setattr(_sign, "load_public_key", lambda *_a, **_k: pytest.fail("legacy public loader reopened path"))
+    with pytest.raises(cs.ConsumerError):
+        with cs.ConsumerStore(path):
+            pass
+    assert (path / "facts.json").read_bytes() == b"[]\n"
+
+
+def test_existing_ed25519_key_fails_without_cryptography(tmp_path, monkeypatch):
+    if not _sign._HAVE_CRYPTOGRAPHY:
+        pytest.skip("cryptography unavailable")
+    path = tmp_path / "store"
+    cs.init_store(path)
+    before = (path / "signing-key").read_bytes()
+    monkeypatch.setattr(_sign, "_HAVE_CRYPTOGRAPHY", False)
+    with pytest.raises(cs.ConsumerError, match="requires cryptography"):
+        with cs.ConsumerStore(path):
+            pass
+    assert (path / "signing-key").read_bytes() == before
