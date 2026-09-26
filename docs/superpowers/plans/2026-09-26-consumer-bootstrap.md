@@ -103,7 +103,8 @@ brief includes this pointer). Read CLAUDE.md and REPO-MAP before code.
   selection is explicit absolute files only, no glob/directory traversal.
   Reject duplicates, symlinks/special files, denylisted source paths (reuse
   ingest-jsonl default denylist), signing-key filenames, `.ssh` and `.gnupg`
-  components. Capture bounded immutable bytes with total bound and drift
+  components. Check lexical and resolved paths so parent aliases cannot
+  bypass the denylist. Capture bounded immutable bytes with total bound and drift
   check; source bytes/modes/mtimes must stay unchanged.
 - [ ] Load existing hyphen modules by explicit sibling file path. Reuse
   `classify_bullet`, `authority_fact_allowed`, `extract_metadata` where needed,
@@ -115,7 +116,9 @@ brief includes this pointer). Read CLAUDE.md and REPO-MAP before code.
   JSONL parses each nonempty line strictly to an object, preserves roles,
   denies sidechains and paired private tool results through `line_events`,
   and NEVER mints facts from tool surfaces. Fail malformed JSON/root/parts
-  safely rather than silently importing a partial file. Unknown valid event
+  safely rather than silently importing a partial file. A supplied message
+  role must agree with its user/assistant outer type; a mismatched role must
+  not upgrade assistant prose to user authority. Unknown valid event
   types may be skipped. Avoid unsafe coercion of malformed content to prose.
 - [ ] Full sanitized content IDs, signed source hash/customer receipts as in
   Shared contract. Whitelist and scrub path/session metadata (prefer deriving
