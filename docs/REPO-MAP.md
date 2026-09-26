@@ -26,6 +26,9 @@ retains its supporting fact IDs; input and confidence representatives stay
 unique by fact ID. Publication uses an output-scoped lock and stale-generation
 comparison, without claiming a transaction with independent fact writers.
 Recall suppression is limited to fully included, verified, verbatim coverage (§5–6).
+Contract updates 2026-09-26: optional read-only Memory Explorer snapshots an
+explicit JSON store or synthetic demo, exposes a capability-protected loopback
+API, and runs production BM25 preview in isolated scratch space (§12).
 
 ---
 
@@ -485,6 +488,7 @@ CI (`.github/workflows/ci.yml`): pytest → classifier smoke →
 | `rebuild-store.md` | The nightly orchestrator; motivated by the store silently rotting to a stale snapshot |
 | `evals/README.md` + `recall-gold-v1.json` (CI) + `curated-recall-suite.json` (Phase-2/offline) | Gold is a reconstruction of a lost n=90 set; queries must stay hand-authored |
 | `tracking/nockcc-nocks.md` | ⚠ Stale: stops at 2026-06-12 (N8054); covers nothing from #63–#83 |
+| `memory-explorer.md` | Local read-only Explorer launch, isolation and verification limits, snapshot behavior, and BM25 preview semantics |
 
 ---
 
@@ -535,3 +539,59 @@ Found in the 2026-08-23 full sweep; triaged with the operator (bus msgs
 duplicate `projection_lib` conftest fixture (#85) · `consolidate-may19.py`
 deleted (#85) · CI now exercises the real 3.9 floor via the `floor` job and
 `NOCKBRAIN_FLOOR_PYTHON` (#85) · dangling `reports/` paths reworded (#86).
+
+---
+
+## 12. Optional Memory Explorer
+
+`bin/explore-memory.py` is an independently launched, read-only local service.
+No mode prints usage before store access. `--demo` builds fictitious records in
+owner-only scratch; `--store` chooses one directory explicitly. These modes
+are mutually exclusive. `--verify-key` overrides the selected
+`signing-key.pub`; `--open` opens the printed local URL. The viewer accepts
+only the authoritative JSON backend and refuses a selected SQLite cutover.
+It does not install a hook or alter the recall path in §6.
+
+`bin/_explorer_store.py` owns `ExplorerStore` and `ExplorerError`: bounded,
+drift-checked copies of the selected `facts.json`, `insights.json`,
+`revocations.jsonl`, and public verification material; parsed records;
+verification and lifecycle annotations; stable per-snapshot handles; and
+scratch cleanup. It never reads the selected private signing key or follows
+evidence references. `refresh()` changes snapshot generation only after a
+successful capture. The summary distinguishes `missing`, `empty`,
+`unreadable`, and `readable`, with explicit notices. A browser record handle is
+only meaningful together with its `snapshot_id`.
+
+`bin/_explorer_preview.py` owns `run_preview(snapshot_dir, query, budget=800)`.
+It launches a bounded child over completed scratch inputs, clears inherited
+Brain/Python configuration, and uses the production classifier,
+`budget-recall.select_recall`, and production formatting. The displayed
+settings are BM25-only (semantic and graph off), max four per date, default
+budget 800, no agent scope, and non-strict verification. Classifier eligibility
+is reported separately from matching results. The response is a selection
+preview, not an injection receipt or history.
+
+The service binds `127.0.0.1` on an allocated port. Fixed bundled assets live
+under `web/explorer/`; it is not a general file server. Data routes require a
+per-launch Bearer capability, and browser requests face exact Host/Origin
+checks, no CORS, and no-store responses. The launch URL carries the capability
+in a fragment; `app.js` removes it from the address bar and retains it only in
+tab memory. Browser reloads require reopening the printed launch URL.
+
+| Route | Contract |
+|---|---|
+| `GET /api/summary` | `{snapshot_id, captured_at, mode, store, state, counts, kinds, verification, files, notices}` |
+| `GET /api/records` | Search/filter/page by `query`, `kind`, `lifecycle`, `collection`, `offset`, `limit`; returns `{snapshot_id, items, total, offset, limit}`. Default 50, maximum 100. |
+| `GET /api/record?handle=…&snapshot_id=…` | Complete allowlisted detail, evidence as text, and available supersession links. A stale generation is HTTP 409. |
+| `POST /api/refresh` | Empty JSON object; returns the new summary after recapture. |
+| `POST /api/preview` | `{query, budget, snapshot_id}`; returns classifier, fixed settings, selected items, rendered text, approximate token cost, and notices. |
+
+The list includes `facts` and `insights` records, each with a stable handle,
+kind, lifecycle (`current`, `superseded`, `inactive`, `revoked`, `invalid`),
+source date, stored confidence score, and verification label. Current is the
+default filter; `all` explicitly includes historical records. Details retain
+complete content while excluding arbitrary private fields and key material.
+Source references are untrusted text, never browser links or fetched paths.
+The service limits each input file to 32 MiB, the snapshot to 64 MiB, request
+bodies to 16 KiB, preview queries to 2,000 characters, and previews to five
+seconds; failures are visible rather than silently truncated.
