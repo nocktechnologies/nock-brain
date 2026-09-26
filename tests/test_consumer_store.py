@@ -1,0 +1,312 @@
+"""Synthetic customer-store boundary and publication tests."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
+import _consumer_store as cs
+import _sign
+
+
+def candidate(manifest, content="A chosen fact", *, kind="decision"):
+    store_id = manifest["store_id"]
+    source_hash = hashlib.sha256(b"synthetic input").hexdigest()
+    return {
+        "id": "customer-" + hashlib.sha256(cs.canonical_bytes([store_id, kind, content])).hexdigest(),
+        "kind": kind,
+        "content": content,
+        "confidence": 0.9,
+        "scope": "global",
+        "status": "current",
+        "source": "customer:" + store_id,
+        "source_file": "notes.md",
+        "source_date": "2026-09-26",
+        "created_at": "2026-09-26T12:00:00+00:00",
+        "subject": "customer",
+        "evidence": [{"store_id": store_id, "key_id": manifest["key_id"],
+                      "sha256": source_hash, "path": "notes.md", "line": 1,
+                      "event_id": source_hash + ":1"}],
+    }
+
+
+def proposal(store, candidates):
+    return store.save_proposal(candidates,
+                               [{"path": "notes.md", "sha256": hashlib.sha256(b"synthetic input").hexdigest(),
+                                 "format": "markdown"}],
+                               {"files": 1, "candidates": len(candidates), "overlong_skipped": 0})
+
+
+def test_fresh_distinct_stores_and_existing_destinations(tmp_path):
+    first = tmp_path / "one"
+    second = tmp_path / "two"
+    a = cs.init_store(first)
+    b = cs.init_store(second)
+    assert a["store_id"] != b["store_id"]
+    assert a["key_id"] != b["key_id"]
+    for path in (first, second):
+        assert path.stat().st_mode & 0o077 == 0
+        assert (path / "facts.json").stat().st_mode & 0o077 == 0
+        with cs.ConsumerStore(path) as store:
+            assert store.facts == []
+    with pytest.raises(cs.ConsumerError):
+        cs.init_store(first)
+    dangling = tmp_path / "dangling"
+    dangling.symlink_to(tmp_path / "missing")
+    with pytest.raises(cs.ConsumerError):
+        cs.init_store(dangling)
+    incomplete = tmp_path / "incomplete"
+    incomplete.mkdir(mode=0o700)
+    with pytest.raises(cs.ConsumerError):
+        cs.ConsumerStore(incomplete).__enter__()
+
+
+def test_proposal_apply_signatures_old_attestations_and_idempotency(tmp_path):
+    path = tmp_path / "store"
+    manifest = cs.init_store(path)
+    with cs.ConsumerStore(path) as store:
+        one = candidate(manifest)
+        digest = proposal(store, [one])
+        assert store.read_proposal(digest)["candidates"] == [one]
+        assert store.apply_proposal(digest) == {"added": 1, "skipped": 0, "total": 1}
+        old = json.loads((path / "facts.json").read_text())[0]
+        assert _sign.verify_fact(old, store._key) == _sign.VALID
+        assert old["attestation"]["key_id"] == manifest["key_id"]
+        with pytest.raises(cs.ConsumerError, match="stale"):
+            store.apply_proposal(digest)
+        second = candidate(manifest, "A second fact")
+        digest2 = proposal(store, [one, second])
+        assert store.apply_proposal(digest2) == {"added": 1, "skipped": 1, "total": 2}
+        assert store.facts[0] == old
+        digest3 = proposal(store, [one, second])
+        assert store.apply_proposal(digest3) == {"added": 0, "skipped": 2, "total": 2}
+        assert store.facts[0] == old
+
+
+def test_tampered_proposal_stale_generation_and_failure_preserve_facts(tmp_path, monkeypatch):
+    path = tmp_path / "store"
+    manifest = cs.init_store(path)
+    with cs.ConsumerStore(path) as store:
+        digest = proposal(store, [candidate(manifest)])
+        proposal_path = path / "proposals" / (digest + ".json")
+        proposal_path.write_bytes(proposal_path.read_bytes() + b" ")
+        with pytest.raises(cs.ConsumerError, match="digest"):
+            store.apply_proposal(digest)
+        proposal_path.write_bytes(cs.canonical_bytes({"broken": True}))
+        with pytest.raises(cs.ConsumerError):
+            store.read_proposal(digest)
+        proposal_path.unlink()
+        digest = proposal(store, [candidate(manifest)])
+        before = (path / "facts.json").read_bytes()
+        def fail(*_args, **_kwargs):
+            raise OSError("synthetic failure")
+        monkeypatch.setattr(cs, "secure_replace_bytes", fail)
+        with pytest.raises(cs.ConsumerError, match="publication"):
+            store.apply_proposal(digest)
+        assert (path / "facts.json").read_bytes() == before
+    with cs.ConsumerStore(path) as store:
+        digest = proposal(store, [candidate(manifest)])
+        (path / "facts.json").write_bytes(b"[] ")
+        with pytest.raises(cs.ConsumerError, match="changed"):
+            store.apply_proposal(digest)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda fact: fact.update(content="changed"),
+    lambda fact: fact.update(source="mira"),
+    lambda fact: fact["evidence"][0].update(store_id="foreign"),
+    lambda fact: fact.update(confidence=float("nan")),
+    lambda fact: fact.update(machine="mac-kevin"),
+    lambda fact: fact.update(id="customer-wrong"),
+])
+def test_invalid_candidates_fail_closed(tmp_path, mutation):
+    path = tmp_path / "store"
+    manifest = cs.init_store(path)
+    with cs.ConsumerStore(path) as store:
+        fact = candidate(manifest)
+        mutation(fact)
+        with pytest.raises(cs.ConsumerError):
+            proposal(store, [fact])
+        with pytest.raises(cs.ConsumerError, match="duplicate"):
+            proposal(store, [candidate(manifest), candidate(manifest)])
+
+
+def test_invalid_owned_files_keys_lifecycle_and_symlinks(tmp_path):
+    path = tmp_path / "store"
+    manifest = cs.init_store(path)
+    with cs.ConsumerStore(path) as store:
+        digest = proposal(store, [candidate(manifest)])
+        store.apply_proposal(digest)
+    facts = path / "facts.json"
+    good = facts.read_bytes()
+    tampered = json.loads(good)
+    tampered[0]["content"] = "poison"
+    facts.write_text(json.dumps(tampered))
+    with pytest.raises(cs.ConsumerError):
+        with cs.ConsumerStore(path):
+            pass
+    facts.write_bytes(good)
+    lifecycle = path / "revocations.jsonl"
+    lifecycle.write_text("event\n")
+    lifecycle.chmod(0o600)
+    with pytest.raises(cs.ConsumerError):
+        with cs.ConsumerStore(path):
+            pass
+    lifecycle.unlink()
+    marker = path / "store-v2"
+    marker.write_bytes(b"")
+    with pytest.raises(cs.ConsumerError):
+        with cs.ConsumerStore(path):
+            pass
+    marker.unlink()
+    pub = path / "signing-key.pub"
+    original = pub.read_bytes()
+    pub.write_bytes((tmp_path / "store" / "signing-key").read_bytes())
+    with pytest.raises(cs.ConsumerError):
+        with cs.ConsumerStore(path):
+            pass
+    pub.write_bytes(original)
+    facts.chmod(0o644)
+    with pytest.raises(cs.ConsumerError):
+        with cs.ConsumerStore(path):
+            pass
+    facts.chmod(0o600)
+    hardlink = tmp_path / "other-link"
+    os.link(facts, hardlink)
+    with pytest.raises(cs.ConsumerError):
+        with cs.ConsumerStore(path):
+            pass
+    hardlink.unlink()
+    facts.unlink()
+    facts.symlink_to(tmp_path / "missing")
+    with pytest.raises(cs.ConsumerError):
+        with cs.ConsumerStore(path):
+            pass
+
+
+def test_read_regular_special_and_limit_and_environment_isolation(tmp_path, monkeypatch):
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+    with pytest.raises(cs.ConsumerError):
+        cs.read_regular(fifo, 10)
+    source = tmp_path / "notes"
+    source.write_bytes(b"abc")
+    source.chmod(0o644)
+    assert cs.read_regular(source, 3) == b"abc"
+    with pytest.raises(cs.ConsumerError):
+        cs.read_regular(source, 2)
+    path = tmp_path / "store"
+    manifest = cs.init_store(path)
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY", str(source))
+    monkeypatch.setenv("NOCKBRAIN_SIGNING_KEY_PUB", str(source))
+    monkeypatch.setenv("NOCKBRAIN_STORE", "sqlite")
+    monkeypatch.setenv("HOME", str(tmp_path / "unrelated-home"))
+    with cs.ConsumerStore(path) as store:
+        digest = proposal(store, [candidate(manifest)])
+        assert store.apply_proposal(digest)["added"] == 1
+    assert source.read_bytes() == b"abc"
+
+
+def test_proposal_and_fact_limits(tmp_path):
+    path = tmp_path / "store"
+    manifest = cs.init_store(path)
+    with cs.ConsumerStore(path) as store:
+        with pytest.raises(cs.ConsumerError):
+            proposal(store, [candidate(manifest, "x" * 1501)])
+        with pytest.raises(cs.ConsumerError):
+            proposal(store, [candidate(manifest, str(i)) for i in range(1001)])
+        with pytest.raises(cs.ConsumerError):
+            store.read_proposal("../facts.json")
+
+
+def test_provenance_binding_and_immutable_proposal_files(tmp_path):
+    path = tmp_path / "store"
+    manifest = cs.init_store(path)
+    with cs.ConsumerStore(path) as store:
+        fact = candidate(manifest)
+        fact["evidence"][0]["sha256"] = "a" * 64
+        with pytest.raises(cs.ConsumerError, match="source receipt"):
+            proposal(store, [fact])
+        digest = proposal(store, [candidate(manifest)])
+        proposal_path = path / "proposals" / (digest + ".json")
+        original = proposal_path.read_bytes()
+        assert proposal(store, [candidate(manifest)]) == digest
+        assert proposal_path.read_bytes() == original
+        hardlink = tmp_path / "linked-proposal"
+        os.link(proposal_path, hardlink)
+        with pytest.raises(cs.ConsumerError, match="unsafe"):
+            store.read_proposal(digest)
+        hardlink.unlink()
+        proposal_path.unlink()
+        proposal_path.symlink_to(tmp_path / "missing")
+        with pytest.raises(cs.ConsumerError):
+            store.read_proposal(digest)
+
+
+def test_publication_skip_and_manifest_failure_preserve_authoritative_bytes(tmp_path, monkeypatch):
+    path = tmp_path / "store"
+    manifest = cs.init_store(path)
+    with cs.ConsumerStore(path) as store:
+        digest = proposal(store, [candidate(manifest)])
+        before = (path / "facts.json").read_bytes()
+        monkeypatch.setattr(cs, "secure_replace_bytes", lambda *_args, **_kwargs: False)
+        with pytest.raises(cs.ConsumerError):
+            store.apply_proposal(digest)
+        assert (path / "facts.json").read_bytes() == before
+    manifest_path = path / "customer.json"
+    altered = dict(manifest, key_id="foreign-key")
+    manifest_path.write_bytes(cs.canonical_bytes(altered))
+    with pytest.raises(cs.ConsumerError):
+        with cs.ConsumerStore(path):
+            pass
+
+
+def test_lock_is_persistent_and_private(tmp_path):
+    path = tmp_path / "store"
+    cs.init_store(path)
+    with cs.ConsumerStore(path):
+        lock = path / ".customer.lock"
+        inode = lock.stat().st_ino
+        assert lock.stat().st_mode & 0o077 == 0
+    assert lock.stat().st_ino == inode
+    with cs.ConsumerStore(path):
+        assert lock.stat().st_ino == inode
+
+
+def test_absolute_sanitized_source_and_multiline_control_content(tmp_path):
+    path = tmp_path / "store"
+    manifest = cs.init_store(path)
+    text = "Decision line one\nline two\twith escape \x1b[31m"
+    fact = candidate(manifest, text)
+    selected = str(tmp_path / "chosen-notes.md")
+    fact["source_file"] = "chosen-notes.md"
+    fact["evidence"][0]["path"] = selected
+    receipt = {"path": selected, "sha256": fact["evidence"][0]["sha256"],
+               "format": "markdown"}
+    with cs.ConsumerStore(path) as store:
+        digest = store.save_proposal([fact], [receipt],
+                                     {"files": 1, "candidates": 1, "overlong_skipped": 0})
+        assert store.read_proposal(digest)["candidates"][0]["content"] == text
+        assert store.apply_proposal(digest)["added"] == 1
+
+
+def test_malformed_json_and_collection_fields_raise_consumer_error(tmp_path):
+    for data in (b'{"number":1e999}', b'{"number":NaN}', b'{"x":1,"x":2}'):
+        with pytest.raises(cs.ConsumerError):
+            cs._json(data)
+    path = tmp_path / "store"
+    manifest = cs.init_store(path)
+    with cs.ConsumerStore(path) as store:
+        bad_source = {"path": "/tmp/notes.md", "sha256": "a" * 64, "format": []}
+        with pytest.raises(cs.ConsumerError):
+            store.save_proposal([], [bad_source],
+                                {"files": 1, "candidates": 0, "overlong_skipped": 0})
+    (path / "customer.json").write_bytes(cs.canonical_bytes(dict(manifest, algorithm=[])))
+    with pytest.raises(cs.ConsumerError):
+        with cs.ConsumerStore(path):
+            pass
