@@ -310,3 +310,61 @@ def test_malformed_json_and_collection_fields_raise_consumer_error(tmp_path):
     with pytest.raises(cs.ConsumerError):
         with cs.ConsumerStore(path):
             pass
+
+
+def test_public_observations_cannot_change_additive_base_or_identity(tmp_path):
+    path = tmp_path / "store"
+    manifest = cs.init_store(path)
+    with cs.ConsumerStore(path) as store:
+        first = candidate(manifest, "first fact")
+        store.apply_proposal(proposal(store, [first]))
+        old = store.facts[0]
+        generation = store.generation
+
+        store.facts.clear()
+        store.facts[0]["content"] = "poison"
+        store.facts[0]["evidence"][0]["store_id"] = "foreign"
+        store.manifest["store_id"] = "00000000-0000-0000-0000-000000000000"
+        with pytest.raises(AttributeError):
+            store.generation = "0" * 64
+        with pytest.raises(AttributeError):
+            store.manifest = {}
+        with pytest.raises(AttributeError):
+            store.facts = []
+        with pytest.raises(AttributeError):
+            store.path = tmp_path / "other-store"
+
+        assert store.facts == [old]
+        assert store.manifest == manifest
+        assert store.generation == generation
+        second = candidate(manifest, "second fact")
+        assert store.apply_proposal(proposal(store, [second])) == {
+            "added": 1, "skipped": 0, "total": 2}
+        assert store.facts[0] == old
+    with cs.ConsumerStore(path) as reopened:
+        assert len(reopened.facts) == 2
+        assert reopened.facts[0] == old
+        assert reopened.manifest == manifest
+
+
+@pytest.mark.parametrize("change", [
+    lambda att: att.update(fact_id="customer-wrong"),
+    lambda att: att.update(signed_at="bogus"),
+    lambda att: att.update(canonical_fact_hash="abc"),
+    lambda att: att.update(source_hash=7),
+    lambda att: att.update(signature="f"),
+    lambda att: att.update(parent_fact_ids=["foreign-parent"]),
+    lambda att: att.update(extra="unsigned metadata"),
+])
+def test_malformed_v1_attestation_metadata_fails_closed(tmp_path, change):
+    path = tmp_path / "store"
+    manifest = cs.init_store(path)
+    with cs.ConsumerStore(path) as store:
+        store.apply_proposal(proposal(store, [candidate(manifest)]))
+    facts_path = path / "facts.json"
+    facts = json.loads(facts_path.read_bytes())
+    change(facts[0]["attestation"])
+    facts_path.write_bytes(cs.canonical_bytes(facts))
+    with pytest.raises(cs.ConsumerError):
+        with cs.ConsumerStore(path):
+            pass

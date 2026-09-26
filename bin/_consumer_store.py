@@ -11,6 +11,7 @@ import stat
 import sys
 import tempfile
 import uuid
+from copy import deepcopy
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,11 +36,16 @@ SOURCE_LIMIT = 8 * 1024 * 1024
 MAX_SOURCES = 16
 MAX_CANDIDATES = 1000
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_HEX128 = re.compile(r"[0-9a-f]{128}\Z")
 _CANDIDATE_FIELDS = frozenset({
     "id", "kind", "content", "confidence", "scope", "status", "source",
     "source_file", "source_date", "created_at", "subject", "evidence",
 })
 _EVIDENCE_FIELDS = frozenset({"store_id", "key_id", "sha256", "path", "line", "event_id"})
+_ATTESTATION_FIELDS = frozenset({
+    "fact_id", "canonical_fact_hash", "source_hash", "alg", "key_id",
+    "signature", "parent_fact_ids", "signed_at",
+})
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -241,13 +247,31 @@ class ConsumerStore:
     """One locked customer JSON store; all paths are explicit and local."""
 
     def __init__(self, path: Path):
-        self.path = _absolute(path)
-        self.manifest: dict = {}
-        self.facts: list[dict] = []
-        self.generation = ""
+        self._path = _absolute(path)
+        self._manifest: dict = {}
+        self._facts: list[dict] = []
+        self._generation = ""
         self._lock_fd: int | None = None
         self._key = None
         self._captured: dict[str, bytes | None] = {}
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @property
+    def manifest(self) -> dict:
+        """A copy of the verified customer identity for callers to inspect."""
+        return deepcopy(self._manifest)
+
+    @property
+    def facts(self) -> list[dict]:
+        """A copy of the verified authoritative records for callers to inspect."""
+        return deepcopy(self._facts)
+
+    @property
+    def generation(self) -> str:
+        return self._generation
 
     def __enter__(self) -> "ConsumerStore":
         _safe_dir(self.path)
@@ -305,7 +329,7 @@ class ConsumerStore:
                 manifest["algorithm"] not in {_sign.ALG_ED25519, _sign.ALG_HMAC} or
                 not _timestamp(manifest["created_at"])):
             raise ConsumerError("invalid customer manifest")
-        self.manifest = manifest
+        self._manifest = manifest
         try:
             self._key = _sign.load_or_create_key(self.path / "signing-key",
                                                   self.path / "signing-key.pub", create=False)
@@ -323,8 +347,8 @@ class ConsumerStore:
         if not isinstance(facts, list):
             raise ConsumerError("facts must be an array")
         self._validate_facts(facts, require_attestation=True)
-        self.facts = facts
-        self.generation = hashlib.sha256(self._captured["facts.json"]).hexdigest()
+        self._facts = facts
+        self._generation = hashlib.sha256(self._captured["facts.json"]).hexdigest()
 
     def _validate_facts(self, facts: list, *, require_attestation: bool) -> None:
         if not isinstance(facts, list):
@@ -348,14 +372,14 @@ class ConsumerStore:
                 not _text(fact["subject"], 256) or not _safe_path(fact["source_file"]) or
                 not _date(fact["source_date"]) or not _timestamp(fact["created_at"]) or
                 fact["scope"] != "global" or fact["status"] != "current" or
-                fact["source"] != "customer:" + self.manifest["store_id"] or
+                fact["source"] != "customer:" + self._manifest["store_id"] or
                 isinstance(fact["confidence"], bool) or
                 not isinstance(fact["confidence"], (int, float)) or
                 not 0 <= fact["confidence"] <= 1 or
                 not math.isfinite(fact["confidence"])):
             raise ConsumerError("invalid customer fact value")
         expected_id = "customer-" + hashlib.sha256(canonical_bytes([
-            self.manifest["store_id"], fact["kind"], fact["content"]])).hexdigest()
+            self._manifest["store_id"], fact["kind"], fact["content"]])).hexdigest()
         if fact["id"] != expected_id:
             raise ConsumerError("customer fact ID mismatch")
         evidence = fact["evidence"]
@@ -363,8 +387,8 @@ class ConsumerStore:
             raise ConsumerError("invalid customer evidence")
         for entry in evidence:
             if (not isinstance(entry, dict) or set(entry) != _EVIDENCE_FIELDS or
-                    entry["store_id"] != self.manifest["store_id"] or
-                    entry["key_id"] != self.manifest["key_id"] or
+                    entry["store_id"] != self._manifest["store_id"] or
+                    entry["key_id"] != self._manifest["key_id"] or
                     not isinstance(entry["sha256"], str) or not _DIGEST.fullmatch(entry["sha256"]) or
                     not _safe_path(entry["path"]) or
                     not isinstance(entry["line"], int) or isinstance(entry["line"], bool) or
@@ -372,9 +396,21 @@ class ConsumerStore:
                 raise ConsumerError("invalid customer evidence")
         if signed:
             att = fact["attestation"]
-            if (not isinstance(att, dict) or att.get("key_id") != self.manifest["key_id"] or
-                    att.get("alg") != self.manifest["algorithm"]):
-                raise ConsumerError("foreign customer attestation")
+            signature_pattern = (_HEX128 if self._manifest["algorithm"] == _sign.ALG_ED25519
+                                 else _DIGEST)
+            if (not isinstance(att, dict) or set(att) != _ATTESTATION_FIELDS or
+                    att["fact_id"] != fact["id"] or
+                    not isinstance(att["canonical_fact_hash"], str) or
+                    not _DIGEST.fullmatch(att["canonical_fact_hash"]) or
+                    not isinstance(att["source_hash"], str) or
+                    not _DIGEST.fullmatch(att["source_hash"]) or
+                    att["key_id"] != self._manifest["key_id"] or
+                    att["alg"] != self._manifest["algorithm"] or
+                    not isinstance(att["signature"], str) or
+                    not signature_pattern.fullmatch(att["signature"]) or
+                    att["parent_fact_ids"] != [] or
+                    not _timestamp(att["signed_at"])):
+                raise ConsumerError("invalid customer attestation")
 
     @staticmethod
     def _check_receipts(candidates: list, sources: list) -> None:
@@ -408,8 +444,8 @@ class ConsumerStore:
 
     def save_proposal(self, candidates: list, sources: list, stats: dict) -> str:
         self._validate_proposal_inputs(candidates, sources, stats)
-        proposal = {"schema": PROPOSAL_SCHEMA, "store_id": self.manifest["store_id"],
-                    "key_id": self.manifest["key_id"], "generation": self.generation,
+        proposal = {"schema": PROPOSAL_SCHEMA, "store_id": self._manifest["store_id"],
+                    "key_id": self._manifest["key_id"], "generation": self._generation,
                     "candidates": candidates, "sources": sources, "stats": stats}
         data = canonical_bytes(proposal)
         if len(data) > FACT_LIMIT:
@@ -445,8 +481,8 @@ class ConsumerStore:
         if (not isinstance(proposal, dict) or set(proposal) !=
                 {"schema", "store_id", "key_id", "generation", "candidates", "sources", "stats"} or
                 proposal["schema"] != PROPOSAL_SCHEMA or
-                proposal["store_id"] != self.manifest["store_id"] or
-                proposal["key_id"] != self.manifest["key_id"] or
+                proposal["store_id"] != self._manifest["store_id"] or
+                proposal["key_id"] != self._manifest["key_id"] or
                 not isinstance(proposal["generation"], str) or
                 not _DIGEST.fullmatch(proposal["generation"])):
             raise ConsumerError("invalid proposal envelope")
@@ -455,9 +491,9 @@ class ConsumerStore:
 
     def apply_proposal(self, digest: str) -> dict:
         proposal = self.read_proposal(digest)
-        if proposal["generation"] != self.generation:
+        if proposal["generation"] != self._generation:
             raise ConsumerError("stale proposal")
-        seen = {fact["id"] for fact in self.facts}
+        seen = {fact["id"] for fact in self._facts}
         new = []
         skipped = 0
         for candidate in proposal["candidates"]:
@@ -468,7 +504,7 @@ class ConsumerStore:
                 seen.add(candidate["id"])
         if new:
             _sign.sign_facts(new, self._key)
-        merged = self.facts + new
+        merged = self._facts + new
         self._validate_facts(merged, require_attestation=True)
         if self._capture() != self._captured:
             raise ConsumerError("customer store changed during publication")
@@ -484,7 +520,7 @@ class ConsumerStore:
                     raise ConsumerError("customer store changed during publication")
             except Exception as exc:
                 raise ConsumerError("customer publication failed") from exc
-            self.facts = merged
+            self._facts = merged
             self._captured["facts.json"] = output
-            self.generation = hashlib.sha256(output).hexdigest()
+            self._generation = hashlib.sha256(output).hexdigest()
         return {"added": len(new), "skipped": skipped, "total": len(merged)}
