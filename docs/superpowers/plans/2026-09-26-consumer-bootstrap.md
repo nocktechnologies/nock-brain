@@ -34,7 +34,8 @@ or file mtime, not wall-clock proposal time.
 
 Customer facts: ordinary v1 records with complete-content hash ID prefixed
 `customer-`, kind, content, confidence, scope=global, status=current,
-source_file, source_date, created_at, subject. No `machine` or reserved v2
+source_file, source_date, created_at, subject, source=`customer:<store_id>`.
+Explicit source avoids the legacy engine's default agent owner. No `machine` or reserved v2
 fields. Signed `evidence` entries include customer `store_id`, `key_id`,
 source `sha256`, sanitized path, line, and source-based event identity.
 ID = `customer-` + SHA256(canonical_bytes([store_id, kind, content])).
