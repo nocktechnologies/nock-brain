@@ -203,6 +203,23 @@ def test_default_public_key_hardlink_to_private_is_refused(tmp_path):
         ExplorerStore(root)
 
 
+def test_public_key_swapped_to_private_inode_before_read_is_refused(tmp_path, monkeypatch):
+    root, _ = make_store(tmp_path, [fact("one")], key=True)
+    private = root / "signing-key"
+    private.write_text("PRIVATE SENTINEL")
+    original = explorer_module._read_one
+
+    def swap_key(path, before, private_path=None):
+        if path.name == "signing-key.pub":
+            path.unlink()
+            os.link(private, path)
+        return original(path, before, private_path)
+
+    monkeypatch.setattr(explorer_module, "_read_one", swap_key)
+    with pytest.raises(ExplorerError, match="private signing key"):
+        ExplorerStore(root)
+
+
 @pytest.mark.parametrize("number", ["NaN", "1e400"])
 def test_nonfinite_json_is_unreadable_not_healthy_empty(tmp_path, number):
     root, _ = make_store(tmp_path, key=False)
@@ -226,9 +243,9 @@ def test_capture_retries_once_on_generation_drift(tmp_path, monkeypatch):
     original = explorer_module._read_one
     calls = 0
 
-    def replace_once(path, before):
+    def replace_once(path, before, private_path=None):
         nonlocal calls
-        data = original(path, before)
+        data = original(path, before, private_path)
         if path.name == "facts.json":
             calls += 1
             if calls == 1:
@@ -249,8 +266,8 @@ def test_repeated_capture_drift_keeps_previous_generation(tmp_path, monkeypatch)
         previous = store.summary()
         original = explorer_module._read_one
 
-        def replace_every_time(path, before):
-            data = original(path, before)
+        def replace_every_time(path, before, private_path=None):
+            data = original(path, before, private_path)
             if path.name == "facts.json":
                 replacement = path.with_suffix(".next")
                 replacement.write_text(json.dumps([fact("moving"), fact("another")]))

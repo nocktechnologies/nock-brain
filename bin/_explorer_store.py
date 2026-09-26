@@ -54,7 +54,17 @@ def _stamp(path: Path):
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_mode)
 
 
-def _read_one(path: Path, before):
+def _private_inode(path: Path):
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise ExplorerError("The selected store could not be inspected.") from None
+    return (st.st_dev, st.st_ino) if stat.S_ISREG(st.st_mode) else None
+
+
+def _read_one(path: Path, before, private_path=None):
     if before is None:
         return None
     if before[2] > FILE_LIMIT:
@@ -70,6 +80,8 @@ def _read_one(path: Path, before):
         fst = os.fstat(fd)
         if not stat.S_ISREG(fst.st_mode):
             raise ExplorerError("A selected input is a symlink or special file.")
+        if private_path is not None and (fst.st_dev, fst.st_ino) == _private_inode(private_path):
+            raise ExplorerError("A private signing key cannot be used for verification.")
         if (fst.st_dev, fst.st_ino, fst.st_size, fst.st_mtime_ns, fst.st_mode) != before:
             raise _Drift()
         pieces = []
@@ -91,13 +103,14 @@ def _read_one(path: Path, before):
         os.close(fd)
 
 
-def _capture(paths):
+def _capture(paths, private_path):
     for attempt in range(2):
         try:
             before = {name: _stamp(path) for name, path in paths.items()}
             if sum(stamp[2] for stamp in before.values() if stamp) > TOTAL_LIMIT:
                 raise ExplorerError("Selected inputs exceed the 64 MiB snapshot limit.")
-            data = {name: _read_one(path, before[name]) for name, path in paths.items()}
+            data = {name: _read_one(path, before[name], private_path if name == "signing-key.pub" else None)
+                    for name, path in paths.items()}
             if any(_stamp(path) != before[name] for name, path in paths.items()):
                 raise _Drift()
             return data
@@ -261,20 +274,14 @@ class ExplorerStore:
         candidate_stamp = _stamp(key_path)
         # Inspect only metadata here. The private file may itself be a
         # symlink; it is never an input and must never be opened.
-        try:
-            private_info = private.lstat()
-            private_stamp = (private_info.st_dev, private_info.st_ino) if stat.S_ISREG(private_info.st_mode) else None
-        except FileNotFoundError:
-            private_stamp = None
-        except OSError:
-            raise ExplorerError("The selected store could not be inspected.") from None
+        private_stamp = _private_inode(private)
         if candidate_stamp and private_stamp and candidate_stamp[:2] == private_stamp:
             raise ExplorerError("A private signing key cannot be used for verification.")
         return {"facts.json": root / "facts.json", "insights.json": root / "insights.json",
                 "revocations.jsonl": root / "revocations.jsonl", "signing-key.pub": key_path}
 
     def refresh(self) -> dict:
-        data = _capture(self._paths())
+        data = _capture(self._paths(), self._store / "signing-key")
         generation = self._root / ("generation-" + uuid.uuid4().hex)
         generation.mkdir(mode=0o700)
         try:
