@@ -79,6 +79,25 @@ def test_jsonl_roles_tool_surfaces_sidechains_and_private_pair(tmp_path, manifes
     assert all("private" not in item["content"] for item in candidates)
 
 
+def test_text_in_tool_result_envelopes_never_mints_authority(tmp_path, manifest):
+    path = _jsonl(
+        tmp_path / "session.jsonl",
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "denied", "name": "Read", "input": {"path": "/x/.env"}}]}},
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "denied", "content": "private"},
+            {"type": "text", "text": "[DECISION] I chose the denied result."}]}},
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": "[DECISION] I chose the ordinary result."},
+            {"type": "tool_result", "tool_use_id": "ordinary", "content": "ordinary"}]}},
+        _message("user", "[DECISION] I chose the standalone note."),
+    )
+    candidates, _, stats = ci.collect_candidates([path], "claude-jsonl", manifest)
+    assert [item["content"] for item in candidates] == ["[DECISION] I chose the standalone note."]
+    assert stats["denied_paths"] == 1 and stats["denied_results"] == 1
+    assert stats["events_written"] >= 3
+
+
 @pytest.mark.parametrize("bad", [
     "{", "[]", "null", "NaN", '{"type":"user","message":{"role":"user","content":[1]}}',
     '{"type":"user","message":{"role":"user","content":[{"type":"text","text":{"x":1}}]}}',
@@ -161,6 +180,57 @@ def test_source_selection_denials_aliases_and_duplicates(tmp_path, manifest):
     os.link(good, hardlink)
     with pytest.raises(cs.ConsumerError):
         ci.collect_candidates([good, hardlink], "markdown", manifest)
+
+
+def test_single_hard_link_to_internal_file_is_denied(tmp_path, manifest):
+    internal = tmp_path / "customer" / "facts.json"
+    link = tmp_path / "selected.md"
+    os.link(internal, link)
+    with pytest.raises(cs.ConsumerError, match="unsafe regular file"):
+        ci.collect_candidates([link], "markdown", manifest)
+
+
+def test_leaf_swap_during_resolution_fails_before_read(tmp_path, manifest, monkeypatch):
+    selected = _write(tmp_path / "selected.md", "- [DECISION] I chose A.\n")
+    target = _write(tmp_path / "target.md", "- [DECISION] I chose B.\n")
+    real_resolve = Path.resolve
+
+    def swapping_resolve(self, *args, **kwargs):
+        if self == selected:
+            selected.unlink()
+            selected.symlink_to(target)
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", swapping_resolve)
+    monkeypatch.setattr(ci, "read_regular", lambda *_args: pytest.fail("target was read"))
+    with pytest.raises(cs.ConsumerError, match="source changed"):
+        ci.collect_candidates([selected], "markdown", manifest)
+
+
+def test_leaf_swap_after_capture_is_detected(tmp_path, manifest, monkeypatch):
+    selected = _write(tmp_path / "selected.md", "- [DECISION] I chose A.\n")
+    target = _write(tmp_path / "target.md", "- [DECISION] I chose B.\n")
+    original = ci.read_regular
+
+    def swapping_read(path, limit):
+        data = original(path, limit)
+        selected.unlink()
+        selected.symlink_to(target)
+        return data
+
+    monkeypatch.setattr(ci, "read_regular", swapping_read)
+    with pytest.raises(cs.ConsumerError, match="source changed"):
+        ci.collect_candidates([selected], "markdown", manifest)
+
+
+def test_stable_parent_alias_is_allowed(tmp_path, manifest):
+    real_dir = tmp_path / "real"
+    source = _write(real_dir / "notes.md", "- [DECISION] I chose A.\n")
+    alias_dir = tmp_path / "alias"
+    alias_dir.symlink_to(real_dir, target_is_directory=True)
+    candidates, receipts, _ = ci.collect_candidates([alias_dir / "notes.md"], "markdown", manifest)
+    assert len(candidates) == 1
+    assert receipts[0]["path"] == str(source)
 
 
 def test_source_limits_special_files_and_drift(tmp_path, manifest, monkeypatch):

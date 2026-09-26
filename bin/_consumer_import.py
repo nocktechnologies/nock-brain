@@ -33,15 +33,36 @@ _extract = _sibling("_consumer_extract_facts", "extract-facts.py")
 _ingest = _sibling("_consumer_ingest_jsonl", "ingest-jsonl.py")
 
 
-def _safe_source(path: Path) -> Path:
+def _source_stamp(info: Any) -> tuple[int, ...]:
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_uid)
+
+
+def _selected_regular(path: Path, stamp: tuple[int, ...]) -> None:
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise ConsumerError("source changed during selection") from exc
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
+            _source_stamp(info) != stamp):
+        raise ConsumerError("source changed during selection")
+
+
+def _safe_source(path: Path) -> tuple[Path, tuple[int, ...]]:
     if not path.is_absolute():
         raise ConsumerError("source path must be absolute")
     try:
-        if stat.S_ISLNK(path.lstat().st_mode):
-            raise ConsumerError("source symlink is denied")
+        selected = path.lstat()
+        if not stat.S_ISREG(selected.st_mode) or selected.st_nlink != 1:
+            raise ConsumerError("unsafe regular file")
         resolved = path.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
         raise ConsumerError("source path cannot be resolved") from exc
+    stamp = _source_stamp(selected)
+    # Resolve may cross a stable parent alias, but must never exchange the
+    # explicitly selected leaf (including a symlink swapped in mid-resolution).
+    _selected_regular(path, stamp)
+    _selected_regular(resolved, stamp)
     for candidate in (path, resolved):
         value = str(candidate)
         parts = candidate.parts
@@ -54,7 +75,7 @@ def _safe_source(path: Path) -> Path:
                 or candidate.name.casefold().startswith("signing-key")
                 or _ingest._matches_any(value, _ingest.DEFAULT_PATH_DENYLIST)):
             raise ConsumerError("source path is denied")
-    return resolved
+    return resolved, stamp
 
 
 def _mtime_timestamp(mtime_ns: int) -> str:
@@ -125,11 +146,11 @@ def _append(candidates: list[dict], by_id: dict[str, dict], manifest: dict,
     by_id[candidate["id"]] = candidate
 
 
-def _valid_message(raw: dict) -> list[int]:
+def _valid_message(raw: dict) -> tuple[list[int], bool]:
     """Validate text surfaces before line_events can coerce malformed shapes."""
     line_type = raw.get("type")
     if line_type not in {"user", "assistant"}:
-        return []
+        return [], False
     message = raw.get("message")
     if not isinstance(message, dict):
         raise ConsumerError("invalid JSONL message")
@@ -138,10 +159,11 @@ def _valid_message(raw: dict) -> list[int]:
         raise ConsumerError("JSONL message role mismatch")
     content = message.get("content")
     if isinstance(content, str):
-        return [0] if content else []
+        return ([0] if content else []), False
     if not isinstance(content, list):
         raise ConsumerError("invalid JSONL content")
     text_indices = []
+    has_tool_result = False
     for index, part in enumerate(content):
         if not isinstance(part, dict):
             raise ConsumerError("invalid JSONL content part")
@@ -159,9 +181,10 @@ def _valid_message(raw: dict) -> list[int]:
                     not isinstance(part.get("input", {}), dict)):
                 raise ConsumerError("invalid JSONL tool use")
         elif part_type == "tool_result":
+            has_tool_result = True
             if not isinstance(part.get("tool_use_id", ""), str):
                 raise ConsumerError("invalid JSONL tool result")
-    return text_indices
+    return text_indices, has_tool_result
 
 
 def collect_candidates(sources: list[Path], format: str, manifest: dict) -> tuple[list[dict], list[dict], dict]:
@@ -184,11 +207,13 @@ def collect_candidates(sources: list[Path], format: str, manifest: dict) -> tupl
     seen_files: set[tuple[int, int]] = set()
     total = 0
     for source in sources:
-        path = _safe_source(Path(source))
+        selected_path = Path(source)
+        path, selected_stamp = _safe_source(selected_path)
         try:
+            _selected_regular(selected_path, selected_stamp)
             before = path.lstat()
-            if not stat.S_ISREG(before.st_mode):
-                raise ConsumerError("unsafe regular file")
+            if _source_stamp(before) != selected_stamp:
+                raise ConsumerError("source changed during selection")
             if path in seen_paths or (before.st_dev, before.st_ino) in seen_files:
                 raise ConsumerError("duplicate source file")
             if before.st_size > SOURCE_LIMIT or total + before.st_size > TOTAL_SOURCE_LIMIT:
@@ -197,8 +222,8 @@ def collect_candidates(sources: list[Path], format: str, manifest: dict) -> tupl
             after = path.lstat()
         except OSError as exc:
             raise ConsumerError("cannot read source file") from exc
-        if (before.st_mtime_ns != after.st_mtime_ns or before.st_ctime_ns != after.st_ctime_ns
-                or before.st_ino != after.st_ino or before.st_dev != after.st_dev):
+        _selected_regular(selected_path, selected_stamp)
+        if _source_stamp(after) != selected_stamp:
             raise ConsumerError("source changed during read")
         seen_paths.add(path)
         seen_files.add((before.st_dev, before.st_ino))
@@ -239,7 +264,7 @@ def collect_candidates(sources: list[Path], format: str, manifest: dict) -> tupl
                     raise ConsumerError("invalid JSONL event type")
                 if "isSidechain" in raw and not isinstance(raw["isSidechain"], bool):
                     raise ConsumerError("invalid JSONL sidechain flag")
-                text_indices = _valid_message(raw)
+                text_indices, has_tool_result = _valid_message(raw)
                 events = _ingest.line_events(raw, path, line_number, stats,
                                              include_sidechain=False,
                                              denied_tool_use_ids=denied_tool_ids)
@@ -248,6 +273,8 @@ def collect_candidates(sources: list[Path], format: str, manifest: dict) -> tupl
                                and event["kind"] == "message"]
                 if len(text_events) != (0 if raw.get("isSidechain") else len(text_indices)):
                     raise ConsumerError("invalid JSONL text events")
+                if has_tool_result:
+                    continue
                 timestamp = _source_timestamp(raw.get("timestamp"), fallback)
                 for part_index, event in zip(text_indices, text_events):
                     _append(candidates, by_id, manifest, event["content"],
