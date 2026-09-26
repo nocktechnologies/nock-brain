@@ -98,7 +98,7 @@ class ExplorerHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _json(self, status: int, body: dict) -> None:
-        data = json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        data = json.dumps(body, ensure_ascii=True, allow_nan=False).encode("utf-8")
         self._headers(status, "application/json; charset=utf-8", len(data))
         self.wfile.write(data)
 
@@ -254,6 +254,9 @@ class ExplorerHandler(BaseHTTPRequestHandler):
                         raise ExplorerError("Preview request is invalid.")
                     if body["snapshot_id"] != self.server.store.snapshot_id:
                         self._error(409, "Snapshot is stale; refresh the page.")
+                        return
+                    if self.server.store.summary().get("state") == "unreadable":
+                        self._error(503, "Preview snapshot is unreadable.")
                         return
                     result = run_preview(self.server.store.snapshot_dir,
                                          body["query"], body["budget"])

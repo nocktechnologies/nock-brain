@@ -159,6 +159,31 @@ def test_failed_refresh_keeps_previous_snapshot(service, monkeypatch):
     assert status == 200
 
 
+def test_http_refuses_preview_for_unreadable_snapshot(tmp_path, monkeypatch):
+    source = tmp_path / "selected"
+    source.mkdir()
+    (source / "facts.json").write_text('[{"confidence":1e400}]')
+    with ExplorerStore(store=source) as store:
+        assert store.summary()["state"] == "unreadable"
+        server = explorer.create_server(store)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            def should_not_run(*_args, **_kwargs):
+                raise AssertionError("unreadable snapshot must not reach child")
+
+            monkeypatch.setattr(explorer, "run_preview", should_not_run)
+            status, _, body = json_request(server, "POST", "/api/preview", body={
+                "query": "what did we decide", "budget": 800,
+                "snapshot_id": store.snapshot_id,
+            })
+            assert status == 503 and body == {"error": "Preview snapshot is unreadable."}
+        finally:
+            server.shutdown()
+            thread.join(timeout=3)
+            server.server_close()
+
+
 def test_slow_socket_does_not_block_other_requests(service):
     server, _ = service
     slow = socket.create_connection(("127.0.0.1", server.server_port), timeout=3)
@@ -256,6 +281,28 @@ def test_private_fields_do_not_enter_http(tmp_path):
                 assert status == 200 and marker.encode() not in data
             status, _, detail = json_request(server, "GET", "/api/record?handle=facts:0&snapshot_id=" + store.snapshot_id)
             assert detail["content"] == fact["content"]
+        finally:
+            server.shutdown()
+            thread.join(timeout=3)
+            server.server_close()
+
+
+def test_http_json_handles_escaped_surrogate_content(tmp_path):
+    source = tmp_path / "selected"
+    source.mkdir()
+    content = "Friday delivery \ud800 is synthetic."
+    fact = {"id": "surrogate", "kind": "decision", "status": "current",
+            "confidence": 0.9, "content": content, "source_date": "2026-09-20"}
+    (source / "facts.json").write_text(json.dumps([fact]))
+    with ExplorerStore(store=source) as store:
+        server = explorer.create_server(store)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, _, listed = json_request(server, "GET", "/api/records")
+            assert status == 200 and listed["items"][0]["content"] == content
+            status, _, detail = json_request(server, "GET", "/api/record?handle=facts:0&snapshot_id=" + store.snapshot_id)
+            assert status == 200 and detail["content"] == content
         finally:
             server.shutdown()
             thread.join(timeout=3)

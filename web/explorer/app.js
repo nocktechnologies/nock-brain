@@ -97,6 +97,12 @@
     clear($('kind'));
     $('kind').append(new Option('All kinds', ''));
     for (const kind of summary.kinds || []) $('kind').append(new Option(kind, kind));
+    const unreadable = summary.state === 'unreadable';
+    $('preview-form').querySelector('button[type="submit"]').disabled = unreadable;
+    if (unreadable) {
+      clear($('preview-result'));
+      $('preview-result').append(textNode('p', 'Recall preview is unavailable because this snapshot contains unreadable source data. Review the notices and refresh after fixing the source.', 'notice error'));
+    }
     renderNotices();
   }
 
@@ -323,7 +329,7 @@
     summary.append(textNode('span', `${readable(result.matches)} matches · ${Array.isArray(result.items) ? result.items.length : 0} included`));
     if (result.truncated) summary.append(textNode('span', 'Truncated to budget'));
     container.append(summary);
-    container.append(textNode('p', `BM25 · semantic ${settings.semantic ? 'on' : 'off'} · graph ${settings.graph ? 'on' : 'off'} · budget ${readable(settings.budget)} · maximum per date ${readable(settings.max_per_date)} · strict verification ${settings.strict_verify ? 'on' : 'off'} · agent scope ${settings.agent_scope == null ? 'none' : settings.agent_scope}. Preview, not injection history.`, 'preview-settings'));
+    container.append(textNode('p', `BM25 · semantic ${settings.semantic ? 'on' : 'off'} · graph ${settings.graph ? 'on' : 'off'} · budget ${readable(settings.budget)} · date-diversity cap ${readable(settings.max_per_date)} (overflow deferred) · strict verification ${settings.strict_verify ? 'on' : 'off'} · agent scope ${settings.agent_scope == null ? 'none' : settings.agent_scope}. Preview, not injection history.`, 'preview-settings'));
     const selected = document.createElement('section');
     selected.className = 'preview-block';
     selected.append(textNode('h3', 'Selected memories'));
@@ -355,6 +361,11 @@
       $('preview-result').append(textNode('p', 'Load a snapshot before previewing recall.', 'notice error'));
       return;
     }
+    if (state.summary.state === 'unreadable') {
+      clear($('preview-result'));
+      $('preview-result').append(textNode('p', 'Recall preview is unavailable because this snapshot contains unreadable source data.', 'notice error'));
+      return;
+    }
     const epoch = state.epoch;
     const request = ++state.previewRequest;
     const snapshot = state.summary.snapshot_id;
@@ -374,7 +385,11 @@
   function invalidatePreview() {
     state.previewRequest += 1;
     clear($('preview-result'));
-    $('preview-result').append(textNode('p', 'Prompt or budget changed. Run a new BM25 preview for these settings.', 'empty-state'));
+    if (state.summary?.state === 'unreadable') {
+      $('preview-result').append(textNode('p', 'Recall preview is unavailable because this snapshot contains unreadable source data. Review the notices and refresh after fixing the source.', 'notice error'));
+    } else {
+      $('preview-result').append(textNode('p', 'Prompt or budget changed. Run a new BM25 preview for these settings.', 'empty-state'));
+    }
   }
 
   function activateTab(which, focus = false) {

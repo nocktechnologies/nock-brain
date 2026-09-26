@@ -116,6 +116,20 @@ def test_preview_refuses_corrupt_snapshot(tmp_path):
         run_preview(snap, "what did we decide", 800)
 
 
+@pytest.mark.parametrize("filename,payload", [
+    ("facts.json", '[{"confidence":1e400}]'),
+    ("insights.json", '[{"confidence":1e400}]'),
+    ("revocations.jsonl", '{"counter":1e400}\n'),
+])
+def test_preview_rejects_exponent_overflow_in_each_input(tmp_path, filename, payload):
+    snap = tmp_path / "snapshot"
+    snap.mkdir()
+    (snap / "facts.json").write_text("[]")
+    (snap / filename).write_text(payload)
+    with pytest.raises(PreviewError, match="unreadable"):
+        run_preview(snap, "what did we decide", 800)
+
+
 def test_missing_and_invalid_key_notices(tmp_path):
     snap = tmp_path / "snapshot"
     snap.mkdir()
@@ -125,6 +139,17 @@ def test_missing_and_invalid_key_notices(tmp_path):
     (snap / "signing-key.pub").write_text("invalid")
     invalid = run_preview(snap, "what did we decide", 800)
     assert any("invalid" in text for text in invalid["notices"])
+
+
+def test_preview_round_trips_escaped_surrogate_content(tmp_path):
+    snap = tmp_path / "snapshot"
+    snap.mkdir()
+    content = "Friday delivery \ud800 is a synthetic malformed Unicode example."
+    fact = {"id": "surrogate", "kind": "decision", "status": "current",
+            "confidence": 0.9, "content": content, "source_date": "2026-09-20"}
+    (snap / "facts.json").write_text(json.dumps([fact]))
+    result = run_preview(snap, "Friday delivery", 800)
+    assert result["items"][0]["content"] == content
 
 
 def test_selected_source_is_untouched_and_bad_signatures_are_excluded(tmp_path, monkeypatch):

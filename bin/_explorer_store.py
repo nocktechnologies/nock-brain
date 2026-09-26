@@ -25,7 +25,9 @@ from _store import secure_replace_bytes, secure_write_json
 FILE_LIMIT = 32 * 1024 * 1024
 TOTAL_LIMIT = 64 * 1024 * 1024
 INPUTS = ("facts.json", "insights.json", "revocations.jsonl", "signing-key.pub")
-_TEMP_BASES = (Path("/tmp"), Path("/var/tmp"))
+# Secure mkdtemp creates owner-only scratch outside the selected source;
+# fixed bases prevent hostile TMPDIR from redirecting writes into that source.
+_TEMP_BASES = (Path("/tmp"), Path("/var/tmp"))  # nosec B108
 DETAIL_FIELDS = (
     "source_date", "source_time", "valid_at", "invalid_at", "valid_from",
     "valid_to", "confidence", "evidence", "source", "parents", "parent_fact_ids",

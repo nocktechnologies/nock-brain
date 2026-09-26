@@ -566,8 +566,9 @@ only meaningful together with its `snapshot_id`.
 It launches a bounded child over completed scratch inputs, clears inherited
 Brain/Python configuration, and uses the production classifier,
 `budget-recall.select_recall`, and production formatting. The displayed
-settings are BM25-only (semantic and graph off), max four per date, default
-budget 800, no agent scope, and non-strict verification. Classifier eligibility
+settings are BM25-only (semantic and graph off), a date-diversity cap of four
+per date (overflow deferred), default budget 800, no agent scope, and
+non-strict verification. Classifier eligibility
 is reported separately from matching results. The response is a selection
 preview, not an injection receipt or history.
 

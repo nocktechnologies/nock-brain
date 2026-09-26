@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import stat
-import subprocess
+# Fixed sibling worker with a fixed interpreter and explicit argv; no shell.
+import subprocess  # nosec B404
 import sys
 import tempfile
 
@@ -89,9 +91,10 @@ def run_preview(snapshot_dir: Path, query: str, budget: int = 800, *,
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "PYTHONUTF8": "1",
             }
-            request = json.dumps({"query": query, "budget": budget}, ensure_ascii=False)
+            request = json.dumps({"query": query, "budget": budget}, ensure_ascii=True)
             try:
-                completed = subprocess.run(
+                # sys.executable and the sibling script path are fixed by this module.
+                completed = subprocess.run(  # nosec B603
                     [sys.executable, "-B", str(Path(__file__).resolve()), "--worker", str(copied)],
                     input=request, text=True, encoding="utf-8", errors="replace",
                     capture_output=True, timeout=timeout, env=env, check=False,
@@ -135,6 +138,13 @@ def _reject_constant(_value):
     raise ValueError("non-finite number")
 
 
+def _finite_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite number")
+    return number
+
+
 def _validate_json_inputs(directory: Path) -> dict:
     loaded = {}
     for name in ("facts.json", "insights.json"):
@@ -144,7 +154,8 @@ def _validate_json_inputs(directory: Path) -> dict:
             continue
         try:
             with path.open("r", encoding="utf-8") as stream:
-                records = json.load(stream, parse_constant=_reject_constant)
+                records = json.load(stream, parse_constant=_reject_constant,
+                                    parse_float=_finite_float)
             if not isinstance(records, list):
                 raise ValueError("wrong root")
             loaded[name] = records
@@ -157,7 +168,8 @@ def _validate_json_inputs(directory: Path) -> dict:
             with revocations.open("r", encoding="utf-8") as stream:
                 for line in stream:
                     if line.strip():
-                        event = json.loads(line, parse_constant=_reject_constant)
+                        event = json.loads(line, parse_constant=_reject_constant,
+                                           parse_float=_finite_float)
                         if not isinstance(event, dict):
                             raise ValueError("invalid event")
                         events.append(event)
@@ -273,7 +285,7 @@ def main() -> int:
         result = {"error": str(exc)}
     except Exception:
         result = {"error": "Preview could not be completed."}
-    sys.stdout.write(json.dumps(result, ensure_ascii=False))
+    sys.stdout.write(json.dumps(result, ensure_ascii=True))
     return 0
 
 
