@@ -74,6 +74,8 @@ digest. The old digest cannot be applied. Back up the whole private store,
 including **both** `signing-key` and `signing-key.pub`, with owner-only access.
 New stores use Ed25519 when `cryptography` is already installed, otherwise
 the engine's dependency-free HMAC-SHA256 fallback.
+Opening an existing Ed25519 store still requires `cryptography`; the CLI
+does not convert its keys or silently replace them with HMAC keys.
 The HMAC fallback contains shared secret material in the `.pub` file too.
 Losing or mixing either key can make the store unusable; the CLI will not
 replace it silently. Customer writers share a lock, but mixing legacy writers
