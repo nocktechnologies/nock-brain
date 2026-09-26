@@ -1,7 +1,7 @@
 # Consumer Memory Explorer: first milestone
 
 Date: 2026-09-26
-Status: approved for implementation on 2026-09-26
+Status: implemented and verified on 2026-09-26; consumer release still pending
 Base reviewed: `d41e699` on the public repository's `main`
 
 ## Intent and product boundary

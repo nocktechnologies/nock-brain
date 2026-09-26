@@ -68,7 +68,7 @@ Use `Authorization: Bearer <random>`; launch URL carries capability in `#token=�
 
 **Interfaces:** Produce `ExplorerStore` and `ExplorerError` exactly as above; consume `_sign.sign_facts`, `load_public_key`, `verify_facts`, `_revoke.audit`, `_facts.fact_currently_valid` and secure write helpers, always with explicit scratch paths. Demo key can be a disposable HMAC `SigningKey` created in memory; publish only its verification material in scratch.
 
-- [ ] Write a failing hermetic demo test and run it:
+- [x] Write a failing hermetic demo test and run it:
 
 ```python
 def test_demo_is_isolated(tmp_path, monkeypatch):
@@ -83,9 +83,9 @@ def test_demo_is_isolated(tmp_path, monkeypatch):
     assert not (tmp_path / 'unrelated-home').exists()
 ```
 
-- [ ] Implement the context-manager skeleton and bounded snapshot helpers. Use `os.open` with `O_NOFOLLOW`/`O_NONBLOCK`, `fstat` regular-file checks, bounded reads, path identity checks and retry. All files must be checked before and after the set is copied. Explicit permission and parsing errors become notices, never exception text that contains contents. Reject SQLite selection before capture. Missing optional inputs are represented accurately. Demo: at least eight fictitious Willow Workshop records including a decision, correction, superseded decision, preference, unsigned note and insight; sign through `sign_facts`; include trusted synthetic supersession event.
-- [ ] Parse valid list roots, expose malformed-record notices without crashing; validate identifier types before verification. Verify per collection with engine helpers. Audit revocations, mark trusted revoked facts separately from signature status. Never follow evidence references. Preserve full stored content in detail. Add tests for search/kind/lifecycle, duplicate handles, missing/empty/corrupt stores, wrong roots, invalid key, missing key, unsigned/tampered/revoked, no read of private key (a sentinel or symlink), symlink/FIFO refusal, bounds and one-retry drift. Capture `{relative path: (bytes, mtime_ns, mode)}` before/after browse/refresh and compare.
-- [ ] Run `python3 -m pytest tests/test_explorer_store.py -q`, self-review source and tests, commit only these files; report exact commands/results and any concern.
+- [x] Implement the context-manager skeleton and bounded snapshot helpers. Use `os.open` with `O_NOFOLLOW`/`O_NONBLOCK`, `fstat` regular-file checks, bounded reads, path identity checks and retry. All files must be checked before and after the set is copied. Explicit permission and parsing errors become notices, never exception text that contains contents. Reject SQLite selection before capture. Missing optional inputs are represented accurately. Demo: at least eight fictitious Willow Workshop records including a decision, correction, superseded decision, preference, unsigned note and insight; sign through `sign_facts`; include trusted synthetic supersession event.
+- [x] Parse valid list roots, expose malformed-record notices without crashing; validate identifier types before verification. Verify per collection with engine helpers. Audit revocations, mark trusted revoked facts separately from signature status. Never follow evidence references. Preserve full stored content in detail. Add tests for search/kind/lifecycle, duplicate handles, missing/empty/corrupt stores, wrong roots, invalid key, missing key, unsigned/tampered/revoked, no read of private key (a sentinel or symlink), symlink/FIFO refusal, bounds and one-retry drift. Capture `{relative path: (bytes, mtime_ns, mode)}` before/after browse/refresh and compare.
+- [x] Run `python3 -m pytest tests/test_explorer_store.py -q`, self-review source and tests, commit only these files; report exact commands/results and any concern.
 
 ### Task 2: Isolated production preview and authenticated local service
 
@@ -93,7 +93,7 @@ def test_demo_is_isolated(tmp_path, monkeypatch):
 
 **Interfaces:** Consume Task 1 contract; produce `run_preview`, `create_server`, HTTP contract and CLI above. Fixed web asset paths may return 404 until Task 3 adds them. No changes to production ranking or renderer modules.
 
-- [ ] Write a failing production parity/isolation test:
+- [x] Write a failing production parity/isolation test:
 
 ```python
 def test_preview_uses_selected_snapshot(tmp_path, monkeypatch):
@@ -107,10 +107,10 @@ def test_preview_uses_selected_snapshot(tmp_path, monkeypatch):
         assert result['items']
 ```
 
-- [ ] Implement the child runner with `subprocess.run(..., timeout=timeout, capture_output=True, env=env)` and a private per-preview work directory; copy only selected snapshot inputs, bound output processing and clean on timeout. Worker uses real classify/select and formatting. Compare selected IDs, rendered output and tokens with production under identical scratch and fixed settings; classifier skip still yields separately labeled preview matches. Test corrupt/missing verification, revoked/tampered exclusions, child timeout, query/budget validation and hostile env isolation. Never return raw exceptions/stderr.
-- [ ] Write HTTP tests using a daemon server thread, `http.client` and synthetic stores only. Test missing/wrong capability, bad Host/Origin, no CORS, no-store/CSP, body/query bounds, negative offsets, unknown routes, traversal, stale generation, refresh and preview. Assert no content/token in captured request logs. Slow/read bounds must not let one socket block all server progress indefinitely. Use bounded handler sockets and a threaded server, serialize actual store operations.
-- [ ] Implement CLI argument parsing, explicit modes, auto port, optional browser open and signal cleanup. On no mode, do not instantiate ExplorerStore; cover with monkeypatch/sentinel. Test SQLite refusal, no-mode safe output and process termination removes only owned scratch. No live-store invocation in tests.
-- [ ] Run `python3 -m pytest tests/test_explorer_store.py tests/test_explorer_preview.py tests/test_explorer_http.py -q`, self-review and commit only task files; report test evidence.
+- [x] Implement the child runner with `subprocess.run(..., timeout=timeout, capture_output=True, env=env)` and a private per-preview work directory; copy only selected snapshot inputs, bound output processing and clean on timeout. Worker uses real classify/select and formatting. Compare selected IDs, rendered output and tokens with production under identical scratch and fixed settings; classifier skip still yields separately labeled preview matches. Test corrupt/missing verification, revoked/tampered exclusions, child timeout, query/budget validation and hostile env isolation. Never return raw exceptions/stderr.
+- [x] Write HTTP tests using a daemon server thread, `http.client` and synthetic stores only. Test missing/wrong capability, bad Host/Origin, no CORS, no-store/CSP, body/query bounds, negative offsets, unknown routes, traversal, stale generation, refresh and preview. Assert no content/token in captured request logs. Slow/read bounds must not let one socket block all server progress indefinitely. Use bounded handler sockets and a threaded server, serialize actual store operations.
+- [x] Implement CLI argument parsing, explicit modes, auto port, optional browser open and signal cleanup. On no mode, do not instantiate ExplorerStore; cover with monkeypatch/sentinel. Test SQLite refusal, no-mode safe output and process termination removes only owned scratch. No live-store invocation in tests.
+- [x] Run `python3 -m pytest tests/test_explorer_store.py tests/test_explorer_preview.py tests/test_explorer_http.py -q`, self-review and commit only task files; report test evidence.
 
 ### Task 3: Quiet offline workspace and complete verification
 
@@ -118,8 +118,8 @@ def test_preview_uses_selected_snapshot(tmp_path, monkeypatch):
 
 **Interfaces:** Consume exact API above. Use `.impeccable.md` design context. No new API or request file paths; no dependencies/CDNs. The service handles source reads; UI never follows evidence links.
 
-- [ ] Build a semantic HTML shell with store identity and snapshot strip, health/notices region, Memories/Recall preview controls, search/kind/lifecycle/collection filters, paginated selectable rows and detail pane. Use `<button>` and form controls with labels, skip link, visible focus, status live region. Only source text via `textContent`; counts and empty/error/loading states stay visible. Responsive below 760px: detail becomes stacked, headings wrap, no horizontal body overflow.
-- [ ] Implement fetch helper with in-memory token, safe JSON errors, loading state and stale-response protection. Clear old selection on refresh. Detail fetch includes current snapshot id. Preview form includes prompt and budget, displays classifier eligibility, settings, selected items, rendered text and approximate tokens. Show 'BM25 preview', optional tiers off and 'Preview, not injection history'. Explain confidence as a stored score. Include synthetic example prompt. Render notices and missing/unreadable states without a fake empty success.
+- [x] Build a semantic HTML shell with store identity and snapshot strip, health/notices region, Memories/Recall preview controls, search/kind/lifecycle/collection filters, paginated selectable rows and detail pane. Use `<button>` and form controls with labels, skip link, visible focus, status live region. Only source text via `textContent`; counts and empty/error/loading states stay visible. Responsive below 760px: detail becomes stacked, headings wrap, no horizontal body overflow.
+- [x] Implement fetch helper with in-memory token, safe JSON errors, loading state and stale-response protection. Clear old selection on refresh. Detail fetch includes current snapshot id. Preview form includes prompt and budget, displays classifier eligibility, settings, selected items, rendered text and approximate tokens. Show 'BM25 preview', optional tiers off and 'Preview, not injection history'. Explain confidence as a stored score. Include synthetic example prompt. Render notices and missing/unreadable states without a fake empty success.
 
 ```javascript
 function textNode(tag, value, className = '') {
@@ -130,10 +130,49 @@ function textNode(tag, value, className = '') {
 }
 ```
 
-- [ ] Add local-user documentation with both launch commands, explicit JSON selection, read-only/snapshot limits, pub-key/HMAC caveat, unavailable cryptography notice, refresh behavior, shutdown and demo isolation. Explain this is an evaluation milestone, not a complete consumer distribution. Document all new module/API contracts in REPO-MAP; preserve existing hook documentation.
-- [ ] Run syntax and focused tests; launch demo and verify real browser list/detail, keyboard focus, filters, pagination, preview, refresh, narrow screen and literal malicious HTML stored in a synthetic fixture. Capture only synthetic screenshots.
-- [ ] Run full `python3 -m pytest -q`, classifier `--test`, recall evaluation `--gate`, Python-floor tests and secret/static checks appropriate to new public code. If Python3.9 unavailable, report the limit instead of claiming the runtime was tested. Inspect git diff; commit task files and validation results.
+- [x] Add local-user documentation with both launch commands, explicit JSON selection, read-only/snapshot limits, pub-key/HMAC caveat, unavailable cryptography notice, refresh behavior, shutdown and demo isolation. Explain this is an evaluation milestone, not a complete consumer distribution. Document all new module/API contracts in REPO-MAP; preserve existing hook documentation.
+- [x] Run syntax and focused tests; launch demo and verify real browser list/detail, keyboard focus, filters, pagination, preview, refresh, narrow screen and literal malicious HTML stored in a synthetic fixture. Capture only synthetic screenshots.
+- [x] Run full `python3 -m pytest -q`, classifier `--test`, recall evaluation `--gate`, Python-floor tests and secret/static checks appropriate to new public code. If Python3.9 unavailable, report the limit instead of claiming the runtime was tested. Inspect git diff; commit task files and validation results.
 
 ## Plan self-review
 
 All first-milestone spec paragraphs map to Tasks 1–3; follow-on consumer/bootstrap actions remain excluded. The API and Python names agree across producers and consumers. The five review focus classes have concrete checks above. No fleet data or deployment is needed. User approved continuing with cheaper subagents; use a mid-tier model for multi-file implementation and scoped review, reserving the strongest model for the final branch review.
+
+
+## Delivery validation — 2026-09-26
+
+Implementation is complete in the isolated `codex/brain-consumer-explorer` branch.
+Runtime code reviewed through `95d1e05`; subsequent changes record verification.
+
+- Full suite: `python3 -m pytest -q` — **840 passed**, 16.65 seconds.
+- Classifier smoke: **10/10**, including a separate stock Python 3.9.6 run.
+- `recall-eval.py --gate`: **PASS**, 36/36 selected fixture identities,
+  196/196 valid attestations. This is the existing synthetic regression gate,
+  not a claim about real conversational recall quality.
+- Existing Python-floor tests passed, including all new module imports with
+  the stock interpreter. Hook import closure is unchanged.
+- Bandit 1.8.6 on `bin/`: exit 0, zero findings. Fixed worker argv and secure
+  temporary-base creation have narrow, explained annotations. Existing unrelated
+  annotation-parser warnings are unchanged.
+- Gitleaks on a `git archive HEAD` export: zero findings. A broader working-folder
+  scan matched ordinary prose in an ignored task report; it contained no secret.
+  No scanner policy was weakened. Historical privacy audit remains out of scope.
+- Fresh Python virtual environment with no pip or installed packages: demo
+  startup, authenticated HTTP summary, production preview (three memories),
+  and clean SIGTERM shutdown passed.
+- Real-browser checks: list/detail and evidence; superseded filtering and its
+  replacement link; keyboard search; 123-record pagination (50/50/23); recall
+  preview; refresh; stale-preview invalidation; unreadable-state disabled preview;
+  390px layout with no horizontal overflow; clean warning/error console.
+- Stored HTML-like content and evidence stayed literal text; no image element
+  was injected. A synthetic selected-store sentinel confirmed bytes, mtimes,
+  permissions and file inventory unchanged after browser operations.
+- Independent branch review and scoped fix review completed with no remaining
+  findings. Fixed numeric-overflow parser disagreement, escaped-surrogate HTTP
+  encoding, SQLite cutover races, temporary-path environment redirection and
+  stale UI states.
+
+The optional read-only Explorer milestone is ready for evaluation. No fleet
+store, private data repository, deployed hook or runtime setting was changed.
+Customer identity/bootstrap, capture, correction/forgetting and a versioned
+consumer release remain the explicitly separate follow-on work from the spec.
