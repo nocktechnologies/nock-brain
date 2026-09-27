@@ -166,7 +166,11 @@ def test_invalid_owned_files_keys_lifecycle_and_symlinks(tmp_path):
     marker.unlink()
     pub = path / "signing-key.pub"
     original = pub.read_bytes()
-    pub.write_bytes((tmp_path / "store" / "signing-key").read_bytes())
+    # HMAC deliberately shares the same secret document in both key files.
+    # An unexpected private-key field is invalid for either supported algorithm.
+    malformed_public = json.loads(original)
+    malformed_public["private_key"] = "0" * 64
+    pub.write_text(json.dumps(malformed_public))
     with pytest.raises(cs.ConsumerError):
         with cs.ConsumerStore(path):
             pass
