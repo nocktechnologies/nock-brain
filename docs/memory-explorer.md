@@ -1,6 +1,6 @@
 # Memory Explorer
 
-Memory Explorer is a local, read-only view of one Nock Brain JSON store. It shows facts and insights, their lifecycle and verification state, stored evidence references, and a BM25 recall preview. It is an evaluation milestone for a consumer Brain, not a complete customer distribution or an edit tool.
+Memory Explorer is a local, read-only view of one Nock Brain JSON store. It shows facts and insights, their lifecycle and verification state, stored evidence references, and a BM25 recall preview. It is an evaluation milestone for a consumer Brain, not a complete customer distribution or an edit tool. For a fresh explicit customer store and reviewed imports, follow the [customer setup guide](customer-setup.md), then select that store here.
 
 ## Start with fictitious memories
 
@@ -44,4 +44,4 @@ The HTTP surface accepts only fixed routes and bundled offline assets. It requir
 
 Each list page contains 50 records by default, with a service maximum of 100. Preview prompts are limited to 2,000 characters, request bodies to 16 KiB, and source snapshot inputs to 32 MiB per file and 64 MiB total. Preview times out after five seconds. Exceeding a limit produces a visible error instead of a partial result labeled complete. Snapshotting retries once if selected files change during capture; independent live writers are not covered by a shared transaction.
 
-The viewer performs no memory edits, approvals, supersessions, purges, hook installation, scheduler changes, model downloads, or settings changes. A later consumer release must still address customer bootstrap, capture and freshness, correction and deletion policy, packaging, and standalone injection.
+The viewer performs no memory edits, approvals, supersessions, purges, hook installation, scheduler changes, model downloads, or settings changes. The separate customer CLI now covers fresh bootstrap and explicit reviewed imports. A later consumer release must still address capture and freshness, correction and deletion policy, packaging, standalone injection, and real customer evaluation.
