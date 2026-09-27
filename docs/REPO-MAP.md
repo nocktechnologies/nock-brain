@@ -38,7 +38,9 @@ marker IDs match and the channel closes with no trailing text; malformed
 wrappers and resident-engine prompts cannot mint facts. The operator runbook purges historical wrapper
 facts and documents an uninstalled daily curated-memory timer. `purge-fact.py`
 `--content-prefix` matches only lstripped fact content, never fact ids or
-mid-sentence mentions.
+mid-sentence mentions. The wrapper-purge runbook requires a quiesced
+fact-store, a timestamped backup, and post-synthesis verification because the
+purge replacement is not safe with concurrent writers.
 
 ---
 
@@ -502,7 +504,7 @@ CI (`.github/workflows/ci.yml`): pytest → classifier smoke →
 | `customer-setup.md` | Customer identity, selected sources, review queue, optional session hooks, correction/forgetting and recovery; pilot limits |
 | `customer-agent.md` | Agent playbook for conversational approval and verified lookup through existing customer commands/API; no automatic approval enforcement |
 | `customer-pilot.md` | Assisted conversational pilot, optional capture, human acceptance and privacy-conscious feedback; no claimed customer outcomes |
-| `runbooks/purge-wrapper-facts.md` | Operator-only dry-run/apply purge and resynthesis for channel-wrapper facts, plus uninstalled daily curated-memory user-systemd units |
+| `runbooks/purge-wrapper-facts.md` | Operator-only, writer-quiesced backup/dry-run/apply/resynthesis/verification for channel-wrapper facts, plus uninstalled daily curated-memory user-systemd units |
 
 ---
 
