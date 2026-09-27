@@ -92,7 +92,13 @@ def json_text(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
-_CHANNEL_WRAPPER_RE = re.compile(r"^\s*<channel\s[^>]*>(.*?)</channel>\s*$", re.DOTALL)
+_CHANNEL_FRAME_RE = re.compile(
+    r"^\s*<channel\s[^>]*>\s*"
+    r"\[BEGIN UNTRUSTED CHANNEL CONTENT #(?P<frame_id>[0-9a-f]+)[^\]]*\]\s*"
+    r"(?P<body>(?:(?!\[END UNTRUSTED CHANNEL CONTENT #(?P=frame_id)\]).)*)\s*"
+    r"\[END UNTRUSTED CHANNEL CONTENT #(?P=frame_id)\]\s*</channel>\s*$",
+    re.DOTALL,
+)
 _CHANNEL_TEXT_PATHS = (
     ("message", "text"),
     ("message", "caption"),
@@ -119,45 +125,32 @@ def _nested_text(value: object, path: tuple[str, ...]) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-_UNTRUSTED_BODY_RE = re.compile(
-    r"^\[BEGIN UNTRUSTED[^\]]*\]\s*(.*?)\s*\[END UNTRUSTED\]$", re.DOTALL)
-
-
-def _untrusted_human_body(text: str) -> str | None:
-    """Return only a body explicitly delimited as untrusted human text."""
-    match = _UNTRUSTED_BODY_RE.match(text.strip())
-    if match is None:
-        return None
-    body = match.group(1).strip()
-    return body or None
-
-
 def unwrap_channel_user_text(text: str) -> str | None:
     """Extract a human turn from a resident-channel envelope.
 
     Channel transport receipts are untrusted structural data, not conversation
-    text. Known Telegram text/caption and NockCC body/subject fields take
-    precedence; explicitly-framed untrusted body text is retained. Non-channel
-    text is returned unchanged.
+    text. The resident-channel frame's matching marker ID binds its body to the
+    envelope. Known Telegram text/caption and NockCC body/subject fields take
+    precedence; a non-JSON frame body is a plain human turn. Non-channel text
+    is returned unchanged.
     """
     if not text.lstrip().startswith("<channel "):
         return text
-    match = _CHANNEL_WRAPPER_RE.match(text)
+    match = _CHANNEL_FRAME_RE.match(text)
     if match is None:
-        _, closing, body = text.lstrip().partition(">")
-        return _untrusted_human_body(body) if closing else None
-    body = match.group(1).strip()
+        return None
+    body = match.group("body").strip()
     try:
-        payload, end = json.JSONDecoder().raw_decode(body)
+        payload = json.loads(body)
     except json.JSONDecodeError:
-        return _untrusted_human_body(body)
-    if isinstance(payload, str):
-        return _untrusted_human_body(payload)
+        return body or None
+    if not isinstance(payload, dict):
+        return None
     for path in _CHANNEL_TEXT_PATHS:
         human_text = _nested_text(payload, path)
         if human_text is not None:
             return human_text
-    return _untrusted_human_body(body[end:])
+    return None
 
 
 def _matches_any(value: str, patterns: list[str]) -> bool:
