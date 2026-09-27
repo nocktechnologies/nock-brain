@@ -9,6 +9,7 @@ Dry-run by default. Use --apply to rewrite files.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 import sys
@@ -68,6 +69,23 @@ def fact_event_ids(facts: list[dict[str, Any]]) -> set[str]:
     return event_ids
 
 
+def load_refine_sessions():
+    """Load the hyphenated session-refinement module for its note renderer."""
+    path = BIN_DIR / "refine-sessions.py"
+    spec = importlib.util.spec_from_file_location("refine_sessions", path)
+    if not spec or not spec.loader:
+        raise RuntimeError(f"Unable to load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def rendered_session_fact_bullets(facts: list[dict[str, Any]]) -> set[str]:
+    """Return the exact session-note bullets for the facts being purged."""
+    refine_sessions = load_refine_sessions()
+    return {refine_sessions.render_fact_bullet(fact) for fact in facts}
+
+
 def purge_facts(path: Path, fact_id: str, patterns: list[str],
                 content_prefixes: list[str] | None = None) -> tuple[list[dict[str, Any]], int]:
     store = resolve_store(path)
@@ -116,6 +134,7 @@ def purge_text_tree(
     content_prefixes: list[str] | None = None,
     remove_channel_frames: bool = False,
     skip_paths: set[Path] | None = None,
+    preserve_session_fact_sections: bool = False,
 ) -> tuple[dict[Path, str], int, int, dict[Path, int]]:
     if not root.exists():
         return {}, 0, 0, {}
@@ -133,12 +152,18 @@ def purge_text_tree(
         except OSError:
             continue
         text = original_text
-        frame_matches = list(CHANNEL_FRAME_RE.finditer(original_text)) if remove_channel_frames else []
+        fact_ranges = session_facts_ranges(original_text) if preserve_session_fact_sections else []
+        frame_matches = [
+            match for match in CHANNEL_FRAME_RE.finditer(original_text)
+            if not any(spans_overlap((match.start(), match.end()), fact_range)
+                       for fact_range in fact_ranges)
+        ] if remove_channel_frames else []
         if remove_channel_frames:
             matched_spans = [(match.start(), match.end()) for match in frame_matches]
             unmatched = sum(
                 not any(start <= opener.start() < end for start, end in matched_spans)
                 for opener in re.finditer(r"(?m)^[ \t]*<channel\s+source=", original_text)
+                if not any(start <= opener.start() < end for start, end in fact_ranges)
             )
             if unmatched:
                 unmatched_openers[path] = unmatched
@@ -153,8 +178,16 @@ def purge_text_tree(
             removed_blocks += len(frame_matches)
         lines = text.splitlines(keepends=True)
         kept: list[str] = []
+        in_facts = False
         for line in lines:
-            if starts_with_prefix(line, content_prefixes) or matches_text(line, patterns):
+            line_text = without_line_ending(line)
+            if preserve_session_fact_sections:
+                if line_text == "## Facts":
+                    in_facts = True
+                elif in_facts and line_text.startswith("## "):
+                    in_facts = False
+            if (not in_facts and
+                    (starts_with_prefix(line, content_prefixes) or matches_text(line, patterns))):
                 removed_lines += 1
             else:
                 kept.append(line)
@@ -162,6 +195,72 @@ def purge_text_tree(
         if rewritten != original_text:
             rewrites[path] = rewritten
     return rewrites, removed_blocks, removed_lines, unmatched_openers
+
+
+def without_line_ending(line: str) -> str:
+    if line.endswith("\r\n"):
+        return line[:-2]
+    if line.endswith(("\n", "\r")):
+        return line[:-1]
+    return line
+
+
+def session_facts_ranges(text: str) -> list[tuple[int, int]]:
+    """Return the body spans of all exact ``## Facts`` sections in a note."""
+    ranges: list[tuple[int, int]] = []
+    for header in re.finditer(r"(?m)^## Facts\r?$", text):
+        next_header = re.search(r"(?m)^## [^\r\n]+\r?$", text[header.end():])
+        end = header.end() + next_header.start() if next_header else len(text)
+        ranges.append((header.end(), end))
+    return ranges
+
+
+def spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return left[0] < right[1] and right[0] < left[1]
+
+
+def remove_session_fact_bullets(text: str, bullets: set[str]) -> tuple[str, int]:
+    """Remove only exact renderer-produced bullets inside ``## Facts`` sections."""
+    if not bullets:
+        return text, 0
+    parts: list[str] = []
+    cursor = 0
+    removed = 0
+    for start, end in session_facts_ranges(text):
+        parts.append(text[cursor:start])
+        section = text[start:end]
+        for bullet in sorted(bullets, key=len, reverse=True):
+            section, count = re.subn(
+                r"(?m)^" + re.escape(bullet) + r"(?=\r?\n|\Z)", "", section)
+            removed += count
+        parts.append(section)
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts), removed
+
+
+def purge_session_fact_bullets(
+    root: Path,
+    bullets: set[str],
+    rewrites: dict[Path, str],
+) -> tuple[dict[Path, str], int]:
+    """Extend note rewrites with exact source fact-bullet removals."""
+    if not root.exists() or not bullets:
+        return rewrites, 0
+    updated = dict(rewrites)
+    removed = 0
+    for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
+        original_text = updated.get(path)
+        if original_text is None:
+            try:
+                original_text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+        rewritten, count = remove_session_fact_bullets(original_text, bullets)
+        if rewritten != original_text:
+            updated[path] = rewritten
+            removed += count
+    return updated, removed
 
 
 def vault_frontmatter_id(path: Path) -> str:
@@ -418,7 +517,10 @@ def run(argv: list[str] | None = None) -> int:
     kept_events, removed_events = purge_events(
         args.events, event_ids, patterns, other_prefixes, bool(channel_prefixes))
     note_rewrites, removed_note_blocks, removed_note_lines, note_unmatched = purge_text_tree(
-        args.notes_dir, patterns, other_prefixes, bool(channel_prefixes))
+        args.notes_dir, patterns, other_prefixes, bool(channel_prefixes),
+        preserve_session_fact_sections=True)
+    note_rewrites, removed_session_fact_bullets = purge_session_fact_bullets(
+        args.notes_dir, rendered_session_fact_bullets(removed_fact_records), note_rewrites)
     vault_rewrites, removed_vault_blocks, removed_vault_lines, vault_unmatched = purge_text_tree(
         args.vault, patterns, other_prefixes, bool(channel_prefixes), set(vault_mirror_ids))
     vault_rewrites.update(purge_vault_backlinks(
@@ -475,6 +577,7 @@ def run(argv: list[str] | None = None) -> int:
         f"{removed_note_blocks} note block(s), {removed_vault_blocks} vault block(s), "
         f"{len(vault_mirror_files)} vault mirror file(s), "
         f"{sum(unmatched_openers.values())} unmatched opener(s), "
+        f"{removed_session_fact_bullets} session fact bullet(s), "
         f"{removed_note_lines} note line(s), {removed_vault_lines} vault line(s), "
         f"{'all' if removed_vectors < 0 else removed_vectors} vector(s), "
         f"{removed_insights} insight(s), {removed_graph} graph item(s)"

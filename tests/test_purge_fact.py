@@ -99,6 +99,134 @@ def test_purge_fact_apply_removes_pattern_from_facts_events_notes_and_vault(tmp_
     assert "safe memory" in (vault / "facts" / "keep.md").read_text()
 
 
+def test_purge_removes_only_exact_rendered_session_fact_bullets(tmp_path):
+    """Source session facts use the refiner's whole bullet, never a prefix."""
+    purge_fact = _load("purge-fact")
+    refine_sessions = _load("refine-sessions")
+    facts = tmp_path / "facts.json"
+    notes = tmp_path / "sessions"
+    notes.mkdir()
+    content = channel_frame(
+        "0123456789ab", "[TRUNCATED: original 2000 chars; see session_anchor]"
+    )
+    removed = {
+        "id": "removed", "kind": "directive", "status": "current",
+        "confidence": 0.9, "content": content, "source_file": "session.jsonl",
+        "source_date": "2026-09-27", "evidence": [{"line": 11}],
+    }
+    retained = {
+        "id": "keep", "kind": "directive", "status": "current",
+        "confidence": 0.9, "content": "safe memory", "source_file": "session.jsonl",
+        "source_date": "2026-09-27", "evidence": [{"line": 12}],
+    }
+    facts.write_text(json.dumps([removed, retained]))
+    removed_bullet = refine_sessions.render_fact_bullet(removed)
+    near_match = removed_bullet.replace("session.jsonl:11", "session.jsonl:99")
+    note = notes / "s1.md"
+    note.write_text(
+        "# Session s1\n\n## Facts\n"
+        + removed_bullet + "\n"
+        + near_match + "\n"
+        + refine_sessions.render_fact_bullet(retained) + "\n"
+        + "\n## Evidence Events\n"
+        + "- session.jsonl:11 [text/message] <channel source= transcript history\n"
+    )
+
+    argv = [
+        sys.executable, str(REPO / "bin" / "purge-fact.py"),
+        "--content-prefix", "<channel source=", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"), "--notes-dir", str(notes),
+        "--vault", str(tmp_path / "vault"), "--sidecar", str(tmp_path / "embeddings.npz"),
+    ]
+    dry_run = subprocess.run(argv, cwd=REPO, text=True, capture_output=True, check=True)
+    assert "1 session fact bullet(s)" in dry_run.stdout
+    assert note.read_text().count(removed_bullet) == 1
+
+    applied = subprocess.run(
+        argv + ["--apply"], cwd=REPO, text=True, capture_output=True, check=True,
+    )
+    note_text = note.read_text()
+    assert "1 session fact bullet(s)" in applied.stdout
+    assert removed_bullet not in note_text
+    assert near_match in note_text
+    assert "[text/message] <channel source= transcript history" in note_text
+    assert purge_fact.rendered_session_fact_bullets([removed]) == {removed_bullet}
+
+
+def test_purge_regenerates_review_and_vault_from_clean_sources(tmp_path):
+    """Review and vault copies are regenerated, not hand-edited, after purge."""
+    refine_sessions = _load("refine-sessions")
+    facts = tmp_path / "facts.json"
+    events = tmp_path / "events.jsonl"
+    notes = tmp_path / "sessions"
+    review = tmp_path / "review"
+    vault = tmp_path / "vault"
+    notes.mkdir()
+    review.mkdir()
+    vault.mkdir()
+    content = '<channel source="plugin:resident-channel"> stale wrapper'
+    removed = {
+        "id": "removed", "kind": "directive", "status": "current",
+        "confidence": 0.9, "content": content, "source_file": "session.jsonl",
+        "source_date": "2026-09-27", "evidence": [{"line": 11}],
+    }
+    kept = {
+        "id": "keep", "kind": "directive", "status": "current",
+        "confidence": 0.9, "content": "Kevin kept safe memory", "source_file": "session.jsonl",
+        "source_date": "2026-09-27", "evidence": [{"line": 12}],
+    }
+    facts.write_text(json.dumps([removed, kept]))
+    events.write_text("")
+    (notes / "s1.md").write_text(
+        "# Session s1\n\n## Facts\n"
+        + refine_sessions.render_fact_bullet(removed) + "\n"
+        + refine_sessions.render_fact_bullet(kept) + "\n\n## Evidence Events\n"
+    )
+    old_review = "# Stale review\n" + content + "\n"
+    (review / "promotion-candidates.md").write_text(old_review)
+    (review / "contradiction-candidates.md").write_text(old_review)
+    index = vault / "index.md"
+    index.write_text("# Existing index\n")
+
+    purge = [
+        sys.executable, str(REPO / "bin" / "purge-fact.py"),
+        "--content-prefix", "<channel source=", "--facts", str(facts),
+        "--events", str(events), "--notes-dir", str(notes), "--vault", str(vault),
+        "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+    ]
+    subprocess.run(purge, cwd=REPO, text=True, capture_output=True, check=True)
+
+    assert content not in (notes / "s1.md").read_text()
+    assert (review / "promotion-candidates.md").read_text() == old_review
+    assert (review / "contradiction-candidates.md").read_text() == old_review
+    assert index.read_text() == "# Existing index\n"
+
+    subprocess.run(
+        [sys.executable, str(REPO / "bin" / "review-promotions.py"),
+         "--facts", str(facts), "--output", str(review)],
+        cwd=REPO, text=True, capture_output=True, check=True,
+    )
+    subprocess.run(
+        [sys.executable, str(REPO / "bin" / "detect-contradictions.py"),
+         "--facts", str(facts), "--queue-dir", str(review)],
+        cwd=REPO, text=True, capture_output=True, check=True,
+    )
+    subprocess.run(
+        [sys.executable, str(REPO / "bin" / "export-obsidian.py"),
+         "--facts", str(facts), "--sessions", str(notes), "--review", str(review),
+         "--vault", str(vault)],
+        cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    for path in [
+        review / "promotion-candidates.json", review / "promotion-candidates.md",
+        review / "contradiction-candidates.json", review / "contradiction-candidates.md",
+        vault / "sessions" / "s1.md", vault / "review" / "promotion-candidates.md",
+        vault / "review" / "contradiction-candidates.md",
+    ]:
+        assert content not in path.read_text()
+
+
 def test_purge_content_prefix_only_matches_lstripped_fact_content(tmp_path):
     facts = tmp_path / "facts.json"
     facts.write_text(json.dumps([
