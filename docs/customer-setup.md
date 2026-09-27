@@ -8,6 +8,11 @@ store. Optional session hooks capture proposals and recall accepted memories
 directly in Claude Code; Nock Harness is not required.
 The setup command currently targets macOS and Linux.
 
+For an agent-led first session, start with the
+[conversational pilot](customer-pilot.md). It loads an
+[agent playbook](customer-agent.md) so the agent can operate these commands
+from your requests. This page is the command reference for that same workflow.
+
 From the repository root, choose a **new absolute destination** whose parent
 already exists, outside your source-code checkout. The destination itself
 must not exist. This example source is
@@ -190,7 +195,7 @@ replace it silently. Customer writers share a lock, but mixing legacy writers
 into this store is unsupported. New stores contain an ignore-all `.gitignore`
 as an additional safeguard; keep the store outside repositories anyway.
 Installer packaging and real customer extraction/recall evaluation remain
-release work. Follow the [pilot checklist](customer-pilot.md) before making
+release work. Follow the [pilot walkthrough](customer-pilot.md) before making
 stable-release claims.
 
 The older [`install.sh`](../install.sh) path has different behavior: it

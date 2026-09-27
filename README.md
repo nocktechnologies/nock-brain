@@ -21,7 +21,10 @@ Most Claude Code sessions start from zero. nock-brain fixes that.
 
 The standalone customer workflow is a **pilot**. Choose a fresh destination
 and specific source files; the store starts empty with its own identity and
-keys. From this repository:
+keys. Start with the [conversational pilot](docs/customer-pilot.md) to let
+your agent handle remembering, lookup, correction and forgetting. It loads a
+short playbook in Claude Code and uses the existing commands; Explorer stays
+optional. To try those commands yourself, from this repository:
 
 ```bash
 python3 bin/consumer-brain.py init --store "$HOME/customer-brain"
@@ -36,7 +39,8 @@ for the complete walkthrough, optional Claude Code session hooks, correction,
 forgetting, limits and backups. Capture creates pending proposals; acceptance
 stays explicit. Nock Harness is not required, and setup does not rewrite global
 Claude settings. Real customer feedback and distribution packaging remain
-before a stable release; see the [pilot checklist](docs/customer-pilot.md).
+before a stable release; the [pilot walkthrough](docs/customer-pilot.md)
+includes a short feedback checklist.
 
 ## Legacy installer
 
