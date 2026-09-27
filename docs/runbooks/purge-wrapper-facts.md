@@ -3,12 +3,12 @@
 Run this only after the Nock #10817 fix is present in the pinned runtime
 checkout. This repository does not operate on a live store or alter that pin.
 
-Preview the exact wrapper pattern first. `purge-fact.py` is dry-run by default;
+Preview the exact wrapper content prefix first. `purge-fact.py` is dry-run by default;
 review its count before applying the deletion:
 
 ```bash
-python3 bin/purge-fact.py --pattern '<channel source='
-python3 bin/purge-fact.py --pattern '<channel source=' --apply
+python3 bin/purge-fact.py --content-prefix '<channel source='
+python3 bin/purge-fact.py --content-prefix '<channel source=' --apply
 run-brain-synthesize.sh
 ```
 

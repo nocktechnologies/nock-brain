@@ -202,6 +202,30 @@ def test_channel_wrapper_without_human_content_is_dropped(ingest_jsonl, tmp_path
     assert result["stats"]["channel_wrappers_dropped"] == 1
 
 
+def test_channel_wrapper_fails_closed_without_explicit_human_body(ingest_jsonl):
+    header = '<channel source="resident-channel">\n'
+    assert ingest_jsonl.unwrap_channel_user_text(
+        header + '{"attestation":{"schema":"message-attestation/v1"}}'
+    ) is None
+    assert ingest_jsonl.unwrap_channel_user_text(
+        header + '{"message":{"text":"human turn"}}</channel> trailing note'
+    ) is None
+    assert ingest_jsonl.unwrap_channel_user_text(
+        header + 'not JSON and not a human frame</channel>'
+    ) is None
+
+
+def test_channel_wrapper_keeps_explicit_untrusted_human_body(ingest_jsonl):
+    human_text = "[DIRECTIVE] Preserve the human body, never the receipt."
+    wrapper = (
+        '<channel source="resident-channel">\n'
+        "[BEGIN UNTRUSTED human body]\n"
+        + human_text
+        + "\n[END UNTRUSTED]\n</channel>"
+    )
+    assert ingest_jsonl.unwrap_channel_user_text(wrapper) == human_text
+
+
 def test_plain_user_text_is_not_treated_as_a_channel_wrapper(ingest_jsonl, tmp_path):
     transcript = tmp_path / "session.jsonl"
     human_text = "[DECISION] The channel adapter stays a read-only transport."

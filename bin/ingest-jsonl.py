@@ -119,15 +119,17 @@ def _nested_text(value: object, path: tuple[str, ...]) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def _strip_channel_framing(text: str) -> str:
-    body = text.strip()
-    if body.startswith("[BEGIN UNTRUSTED"):
-        _, closing, body = body.partition("]")
-        if closing:
-            body = body.lstrip()
-    if body.endswith("[END UNTRUSTED]"):
-        body = body[: -len("[END UNTRUSTED]")]
-    return body.strip()
+_UNTRUSTED_BODY_RE = re.compile(
+    r"^\[BEGIN UNTRUSTED[^\]]*\]\s*(.*?)\s*\[END UNTRUSTED\]$", re.DOTALL)
+
+
+def _untrusted_human_body(text: str) -> str | None:
+    """Return only a body explicitly delimited as untrusted human text."""
+    match = _UNTRUSTED_BODY_RE.match(text.strip())
+    if match is None:
+        return None
+    body = match.group(1).strip()
+    return body or None
 
 
 def unwrap_channel_user_text(text: str) -> str | None:
@@ -135,27 +137,27 @@ def unwrap_channel_user_text(text: str) -> str | None:
 
     Channel transport receipts are untrusted structural data, not conversation
     text. Known Telegram text/caption and NockCC body/subject fields take
-    precedence; direct human body text is retained when the receipt has it.
-    Non-channel text is returned unchanged.
+    precedence; explicitly-framed untrusted body text is retained. Non-channel
+    text is returned unchanged.
     """
     if not text.lstrip().startswith("<channel "):
         return text
     match = _CHANNEL_WRAPPER_RE.match(text)
     if match is None:
         _, closing, body = text.lstrip().partition(">")
-        return _strip_channel_framing(body) if closing else None
-    body = _strip_channel_framing(match.group(1))
+        return _untrusted_human_body(body) if closing else None
+    body = match.group(1).strip()
     try:
         payload, end = json.JSONDecoder().raw_decode(body)
     except json.JSONDecodeError:
-        return _strip_channel_framing(body) or None
-    if isinstance(payload, str) and payload.strip():
-        return payload.strip()
+        return _untrusted_human_body(body)
+    if isinstance(payload, str):
+        return _untrusted_human_body(payload)
     for path in _CHANNEL_TEXT_PATHS:
         human_text = _nested_text(payload, path)
         if human_text is not None:
             return human_text
-    return _strip_channel_framing(body[end:]) or None
+    return _untrusted_human_body(body[end:])
 
 
 def _matches_any(value: str, patterns: list[str]) -> bool:

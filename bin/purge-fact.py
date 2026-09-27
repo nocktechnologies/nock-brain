@@ -33,15 +33,22 @@ def matches_text(text: str, patterns: list[str]) -> bool:
     return any(pattern.lower() in haystack for pattern in patterns if pattern)
 
 
-def fact_matches(fact: dict[str, Any], fact_id: str, patterns: list[str]) -> bool:
-    """Match id exactly, or a pattern against id/content only.
+def fact_matches(fact: dict[str, Any], fact_id: str, patterns: list[str],
+                 content_prefixes: list[str] | None = None) -> bool:
+    """Match id exactly, a literal pattern, or a content prefix.
 
     Patterns must not search the whole JSON dump: attestation signatures are
-    hex and a substring match would purge unrelated facts (N10028).
+    hex and a substring match would purge unrelated facts (N10028). Prefixes
+    are content-only, so a runbook can remove structural wrappers without
+    matching an ordinary fact that merely mentions the marker.
     """
     if fact_id and fact.get("id") == fact_id:
         return True
-    haystack = f"{fact.get('id', '')}\n{fact.get('content', '')}"
+    content = str(fact.get("content", ""))
+    if any(content.lstrip().startswith(prefix)
+           for prefix in content_prefixes or [] if prefix):
+        return True
+    haystack = f"{fact.get('id', '')}\n{content}"
     return matches_text(haystack, patterns)
 
 
@@ -55,10 +62,12 @@ def fact_event_ids(facts: list[dict[str, Any]]) -> set[str]:
     return event_ids
 
 
-def purge_facts(path: Path, fact_id: str, patterns: list[str]) -> tuple[list[dict[str, Any]], int]:
+def purge_facts(path: Path, fact_id: str, patterns: list[str],
+                content_prefixes: list[str] | None = None) -> tuple[list[dict[str, Any]], int]:
     store = resolve_store(path)
     facts = store.load_facts()
-    removed = [fact for fact in facts if fact_matches(fact, fact_id, patterns)]
+    removed = [fact for fact in facts if fact_matches(
+        fact, fact_id, patterns, content_prefixes)]
     kept = [fact for fact in facts if fact not in removed]
     return kept, len(removed)
 
@@ -235,6 +244,8 @@ def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Purge fact material from local NockBrain stores")
     parser.add_argument("fact_id", nargs="?", default="")
     parser.add_argument("--pattern", action="append", default=[])
+    parser.add_argument("--content-prefix", action="append", default=[],
+                        help="Match facts whose content starts with this literal prefix")
     parser.add_argument("--facts", type=Path, default=DEFAULT_ROOT / "facts.json")
     parser.add_argument("--events", type=Path, default=DEFAULT_ROOT / "events.jsonl")
     parser.add_argument("--notes-dir", type=Path, default=DEFAULT_ROOT / "sessions")
@@ -243,14 +254,15 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true", help="Rewrite files; otherwise dry-run only")
     args = parser.parse_args(argv)
 
-    if not args.fact_id and not args.pattern:
-        parser.error("provide a fact_id or --pattern")
+    if not args.fact_id and not args.pattern and not args.content_prefix:
+        parser.error("provide a fact_id, --pattern, or --content-prefix")
 
     store = resolve_store(args.facts)
-    kept_facts, removed_facts = purge_facts(args.facts, args.fact_id, args.pattern)
+    kept_facts, removed_facts = purge_facts(
+        args.facts, args.fact_id, args.pattern, args.content_prefix)
     removed_fact_records = [
         fact for fact in store.load_facts()
-        if fact_matches(fact, args.fact_id, args.pattern)
+        if fact_matches(fact, args.fact_id, args.pattern, args.content_prefix)
     ]
     patterns = list(args.pattern)
     patterns.extend(str(fact.get("content", "")) for fact in removed_fact_records)
