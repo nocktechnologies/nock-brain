@@ -28,6 +28,7 @@ from _storeback import resolve_store
 from _verify_cache import cache_path_for, unlink_for_store
 
 DEFAULT_ROOT = Path.home() / ".nock-brain"
+ENTITY_BACKLINK_DIRS = {"agents", "projects", "people", "concepts"}
 
 
 def matches_text(text: str, patterns: list[str]) -> bool:
@@ -114,6 +115,7 @@ def purge_text_tree(
     patterns: list[str],
     content_prefixes: list[str] | None = None,
     remove_channel_frames: bool = False,
+    skip_paths: set[Path] | None = None,
 ) -> tuple[dict[Path, str], int, int, dict[Path, int]]:
     if not root.exists():
         return {}, 0, 0, {}
@@ -121,8 +123,11 @@ def purge_text_tree(
     removed_blocks = 0
     removed_lines = 0
     unmatched_openers: dict[Path, int] = {}
+    skipped = skip_paths or set()
     paths = [root] if root.is_file() else sorted(path for path in root.rglob("*") if path.is_file())
     for path in paths:
+        if path in skipped:
+            continue
         try:
             original_text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -157,6 +162,74 @@ def purge_text_tree(
         if rewritten != original_text:
             rewrites[path] = rewritten
     return rewrites, removed_blocks, removed_lines, unmatched_openers
+
+
+def vault_frontmatter_id(path: Path) -> str:
+    """Read a per-fact vault mirror's id from its leading frontmatter."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    frontmatter = re.match(
+        r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", text, re.DOTALL)
+    if not frontmatter:
+        return ""
+    match = re.search(r"(?m)^id:[ \t]*(.*?)[ \t]*$", frontmatter.group(1))
+    if not match:
+        return ""
+    value = match.group(1)
+    if value[:1] in {"'", '"'}:
+        quote = value[:1]
+        closing = value.find(quote, 1)
+        trailing = value[closing + 1:].strip() if closing >= 0 else ""
+        if closing < 0 or trailing and not trailing.startswith("#"):
+            return ""
+        return value[1:closing]
+    return value.split(" #", 1)[0].rstrip()
+
+
+def purge_vault_backlinks(
+    vault: Path,
+    fact_files: set[Path],
+    rewrites: dict[Path, str],
+    skip_paths: set[Path],
+) -> dict[Path, str]:
+    """Remove vault lines that link to deleted per-fact mirror files."""
+    if not fact_files or not vault.is_dir():
+        return {}
+    targets: set[str] = set()
+    for path in fact_files:
+        relative = path.relative_to(vault).with_suffix("").as_posix()
+        targets.update((path.stem, relative, f"{relative}.md"))
+    explicit_targets = {
+        target for target in targets
+        if target.startswith("facts/") or target.endswith(".md")
+    }
+    backlink_rewrites: dict[Path, str] = {}
+    for path in sorted(candidate for candidate in vault.rglob("*") if candidate.is_file()):
+        if path in skip_paths:
+            continue
+        original_text = rewrites.get(path)
+        if original_text is None:
+            try:
+                original_text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+        list_targets = targets if path.parent.name in ENTITY_BACKLINK_DIRS else explicit_targets
+        removable_lines = {f"- [[{target}]]" for target in list_targets}
+        if path.parent.name == "decisions":
+            removable_lines.update(
+                f"See [[{target}]] for the full fact note." for target in targets)
+        kept = []
+        for line in original_text.splitlines(keepends=True):
+            stripped = line.strip()
+            if stripped in removable_lines:
+                continue
+            kept.append(line)
+        rewritten = "".join(kept)
+        if rewritten != original_text:
+            backlink_rewrites[path] = rewritten
+    return backlink_rewrites
 
 
 def purge_sidecar(path: Path, removed_ids: set[str], apply: bool) -> tuple[str, int]:
@@ -327,17 +400,27 @@ def run(argv: list[str] | None = None) -> int:
         prefix for prefix in args.content_prefix
         if prefix not in channel_prefixes
     ]
+    vault_facts_dir = args.vault / "facts"
+    vault_fact_paths = {
+        path for path in vault_facts_dir.rglob("*") if path.is_file()
+    } if vault_facts_dir.is_dir() else set()
+    removed_ids = {str(fact.get("id")) for fact in removed_fact_records
+                   if fact.get("id")}
+    vault_fact_files = {
+        path for path in vault_fact_paths
+        if vault_frontmatter_id(path) in removed_ids
+    }
     kept_events, removed_events = purge_events(
         args.events, event_ids, patterns, other_prefixes, bool(channel_prefixes))
     note_rewrites, removed_note_blocks, removed_note_lines, note_unmatched = purge_text_tree(
         args.notes_dir, patterns, other_prefixes, bool(channel_prefixes))
     vault_rewrites, removed_vault_blocks, removed_vault_lines, vault_unmatched = purge_text_tree(
-        args.vault, patterns, other_prefixes, bool(channel_prefixes))
+        args.vault, patterns, other_prefixes, bool(channel_prefixes), vault_fact_paths)
+    vault_rewrites.update(purge_vault_backlinks(
+        args.vault, vault_fact_files, vault_rewrites, vault_fact_paths))
     unmatched_openers = dict(note_unmatched)
     for path, count in vault_unmatched.items():
         unmatched_openers[path] = unmatched_openers.get(path, 0) + count
-    removed_ids = {str(fact.get("id")) for fact in removed_fact_records
-                   if fact.get("id")}
     sidecar_note, removed_vectors = purge_sidecar(
         args.sidecar, removed_ids, args.apply)
     insights_path = args.facts.parent / "insights.json"
@@ -372,6 +455,8 @@ def run(argv: list[str] | None = None) -> int:
             secure_write_text(args.events, kept_events, encoding="utf-8")
         for path, text in {**note_rewrites, **vault_rewrites}.items():
             secure_write_text(path, text, encoding="utf-8")
+        for path in vault_fact_files:
+            path.unlink()
         if kept_insights is not None and removed_insights:
             secure_write_json(insights_path, kept_insights, indent=2, default=str)
         if kept_graph is not None and removed_graph:
@@ -383,6 +468,7 @@ def run(argv: list[str] | None = None) -> int:
         f"{'would remove' if not args.apply else 'removed'} "
         f"{removed_facts} fact(s), {removed_events} event(s), "
         f"{removed_note_blocks} note block(s), {removed_vault_blocks} vault block(s), "
+        f"{len(vault_fact_files)} vault fact file(s), "
         f"{sum(unmatched_openers.values())} unmatched opener(s), "
         f"{removed_note_lines} note line(s), {removed_vault_lines} vault line(s), "
         f"{'all' if removed_vectors < 0 else removed_vectors} vector(s), "

@@ -198,6 +198,98 @@ def test_purge_content_prefix_removes_multiline_wrapper_copies(tmp_path):
     assert "Historical wrapper text" not in (vault / "wrapper.md").read_text()
 
 
+def test_purge_removes_vault_fact_mirrors_by_frontmatter_id(tmp_path):
+    """Truncated per-fact vault mirrors are selected by their frontmatter id."""
+    facts = tmp_path / "facts.json"
+    vault = tmp_path / "vault"
+    facts_dir = vault / "facts"
+    facts_dir.mkdir(parents=True)
+    (vault / "agents").mkdir()
+    (vault / "decisions").mkdir()
+    truncated_wrapper = (
+        '<channel source="plugin:resident-channel">\n'
+        "[BEGIN UNTRUSTED CHANNEL CONTENT #0123456789ab]\n"
+        "[TRUNCATED: original 2000 chars; see session_anchor]\n"
+    )
+    facts.write_text(json.dumps([
+        {
+            "id": "removed", "kind": "decision", "status": "current",
+            "confidence": 0.9, "content": truncated_wrapper,
+            "source_date": "2026-09-27", "evidence": [],
+        },
+        {
+            "id": "keep", "kind": "decision", "status": "current",
+            "confidence": 0.9, "content": "safe memory",
+            "source_date": "2026-09-27", "evidence": [],
+        },
+    ]))
+    removed_mirror = facts_dir / "2026-09-27-removed.md"
+    removed_mirror.write_text(
+        "\ufeff---\nid: \"removed\" # mirrored fact id\n---\n\n" + truncated_wrapper,
+        encoding="utf-8",
+    )
+    kept_mirror = facts_dir / "2026-09-27-keep.md"
+    kept_mirror_text = "---\nid: keep\n---\n\n" + truncated_wrapper
+    kept_mirror.write_text(kept_mirror_text)
+    filename_only_mirror = facts_dir / "2026-09-27-removed-copy.md"
+    filename_only_text = "---\nid: other\n---\n\n" + truncated_wrapper
+    filename_only_mirror.write_text(filename_only_text)
+    invalid_utf8_mirror = facts_dir / "2026-09-27-invalid.md"
+    invalid_utf8_mirror.write_bytes(b"---\nid: removed\n---\n\xff")
+    agent_note = vault / "agents" / "mira.md"
+    agent_note.write_text(
+        "## Mentioned in\n"
+        "- [[2026-09-27-removed]]\n"
+        "- [[facts/2026-09-27-removed]]\n"
+        "- [[2026-09-27-keep]]\n"
+    )
+    decision_note = vault / "decisions" / "removed.md"
+    decision_note.write_text(
+        "See [[2026-09-27-removed]] for the full fact note.\n"
+        "Keep this decision-note context.\n"
+    )
+    prose_note = vault / "notes.md"
+    prose_text = "Important context; see [[facts/2026-09-27-removed]] for evidence.\n"
+    prose_note.write_text(prose_text)
+    (vault / "review").mkdir()
+    unrelated_note = vault / "review" / "unrelated.md"
+    unrelated_text = "- [[2026-09-27-removed]]\n"
+    unrelated_note.write_text(unrelated_text)
+
+    argv = [
+        sys.executable, str(REPO / "bin" / "purge-fact.py"),
+        "--content-prefix", "<channel source=", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(tmp_path / "sessions"), "--vault", str(vault),
+        "--sidecar", str(tmp_path / "embeddings.npz"),
+    ]
+    dry_run = subprocess.run(
+        argv, cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    assert "would remove 1 fact" in dry_run.stdout
+    assert "1 vault fact file(s)" in dry_run.stdout
+    assert "0 unmatched opener(s)" in dry_run.stdout
+    assert removed_mirror.exists(), "dry-run must not delete the vault mirror"
+
+    applied = subprocess.run(
+        argv + ["--apply"], cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    assert not removed_mirror.exists()
+    assert kept_mirror.exists()
+    assert kept_mirror.read_text() == kept_mirror_text
+    assert filename_only_mirror.read_text() == filename_only_text
+    assert invalid_utf8_mirror.exists()
+    assert "2026-09-27-removed" not in agent_note.read_text()
+    assert "2026-09-27-keep" in agent_note.read_text()
+    assert "2026-09-27-removed" not in decision_note.read_text()
+    assert "Keep this decision-note context." in decision_note.read_text()
+    assert prose_note.read_text() == prose_text
+    assert unrelated_note.read_text() == unrelated_text
+    assert "1 vault fact file(s)" in applied.stdout
+
+
 def test_purge_content_prefix_removes_complete_single_line_note_wrapper(tmp_path):
     facts = tmp_path / "facts.json"
     notes = tmp_path / "sessions"
