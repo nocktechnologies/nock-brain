@@ -493,7 +493,8 @@ CI (`.github/workflows/ci.yml`): pytest → classifier smoke →
 | `tracking/nockcc-nocks.md` | ⚠ Stale: stops at 2026-06-12 (N8054); covers nothing from #63–#83 |
 | `memory-explorer.md` | Local read-only Explorer launch, isolation and verification limits, snapshot behavior, and BM25 preview semantics |
 | `customer-setup.md` | Customer identity, selected sources, review queue, optional session hooks, correction/forgetting and recovery; pilot limits |
-| `customer-pilot.md` | Human acceptance checklist and privacy-conscious feedback collection; no claimed customer outcomes |
+| `customer-agent.md` | Agent playbook for conversational approval and verified lookup through existing customer commands/API; no automatic approval enforcement |
+| `customer-pilot.md` | Assisted conversational pilot, optional capture, human acceptance and privacy-conscious feedback; no claimed customer outcomes |
 
 ---
 
@@ -698,5 +699,7 @@ private key. Private scratch contains caches and worker output, inherited fleet
 configuration is cleared, semantic/graph are off and journal recovery states
 refuse recall. Failures exit successfully with a fixed diagnostic and no context.
 The customer hook closure is independently acknowledged by Python-floor tests.
-See [customer setup](customer-setup.md) and the [pilot checklist](customer-pilot.md).
+See [customer setup](customer-setup.md) and the [conversational pilot](customer-pilot.md).
+The [agent playbook](customer-agent.md) is loaded through Claude's native
+prompt-file flag; it adds guidance, not runtime commands or approval enforcement.
 Distribution packaging and real customer quality evaluation remain release work.
