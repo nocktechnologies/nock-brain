@@ -32,11 +32,10 @@ API, and runs production BM25 preview in isolated scratch space (§12).
 Contract updates 2026-09-26: explicit customer identity, selected-file import,
 digest-bound proposal review and additive publication are isolated from fleet
 and Explorer writes (§13).
-Contract updates 2026-09-27: JSONL ingest unwraps only allowlisted human text
-from resident-channel receipts and drops receipt-only wrappers; structural
-wrapper prefixes cannot mint facts. Prefix-only purge supports their exact
-removal, semantic insight lead defaults to two, and derived insight refresh
-retries transient failures without gating a completed rebuild.
+Contract updates 2026-09-27: JSONL ingest unwraps human text from
+resident-channel receipts before event creation; structural wrapper prefixes
+cannot mint facts. The operator runbook purges historical wrapper facts and
+documents an uninstalled daily curated-memory timer.
 
 ---
 
@@ -141,8 +140,7 @@ closed validity windows.
 `--since 3`) runs the whole chain into a **staging dir**, applies a HARD
 health gate (abort untouched on any live-secret finding or not-recall-ready),
 signs, exports, then backup-and-swaps into live, then regenerates
-`insights.json` (`synthesize --sign`, retrying transient derived-view failures
-twice with 1s/2s backoff without failing the completed rebuild) and the semantic sidecar
+`insights.json` (`synthesize --sign`) and the semantic sidecar
 (`embed-facts`, 1800s timeout, never gates). `--dry-run` can never alter
 live. `--replace` skips both the live-store merge and the anti-amnesia
 shrink guard — the only intentional way to shrink the store. Windowed merge
@@ -224,7 +222,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 **Ingest / extract**
 | Script | Notes |
 |---|---|
-| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); user-turn resident-channel receipts retain only allowlisted Telegram text/caption or NockCC body/subject, while receipt-only/malformed wrappers are dropped and counted; denied `tool_use` also denies its paired `tool_result` |
+| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped before event creation: human text is retained, while wrappers with no human text are dropped and counted. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result` |
 | `refine-sessions.py` | events → v1-compatible facts + session notes. 1,500-char content cap; `tool_use.input`/`tool_result.content` can never mint facts; reuses extract-facts' classification rules |
 | `extract-facts.py` | Markdown transcripts → facts. Tagged (0.9 conf) + inferred (0.7–0.85) patterns; fleet-activity kinds dropped at classification (#76); `machine_tag()` enforces a **closed machine enum, MINT-ONLY** (`KNOWN_MACHINES` = `mac-kevin`, `kevins-linux`; `fleet-02` retired at the 2026-08-27 seat migration and now raises). Retiring a name blocks new stamps only — facts already carrying a retired `machine` stay readable, verifiable and recallable, because `machine` is in neither attestation payload and no read path consults the enum. Never make it a read filter. **Writes the live store directly** — `propose-facts.py` is the gated twin |
 | `propose-facts.py` / `approve-proposals.py` | Same extraction into `proposed-facts.json`; approve releases to store (no re-sign), reject drops. Live store untouched until approval |
@@ -246,7 +244,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 | `consolidate-facts.py` | Cross-date near-dupes of durable kinds. Double-gated: `--execute --i-have-reviewed-the-manifest`, refuses on manifest drift. `correction` kind never touched. `--execute` sets `invalid_at` and mints signed revocation events (`record_supersessions`) — same contract as `dedup-facts` / `supersede-fact`. OPS RULE: re-run `sign-facts.py` after any execute |
 | `detect-contradictions.py` | Nightly stale-fact pass, propose-ONLY, never writes the store. Output actions are literal `supersede-fact.py` commands. `--llm` judge sees scrubbed content, prompt built from `JUDGE_PROMPT_MARKERS[1]` (N10052); failures degrade to borderline |
 | `supersede-fact.py` | The manual apply-target; mints a signed revocation event via `_revoke` |
-| `purge-fact.py` | HARD delete across facts/events/notes/vault/insights/graph/embedding-sidecar/verified-cache sidecar (GDPR-style). Dry-run default. `--apply` with **zero matches does not rewrite** the store (would drop loader-skipped malformed records). `--pattern` matches id+content only (not signature hex); `--content-prefix` matches content only, for exact structural-wrapper removals. For INSIGHTS the content match covers the N10052 contaminated-cluster shape (the "Most recent:" excerpt quotes the latest member verbatim); `theme` is deliberately NOT matched (top-5 keyword join, can only fire on coincidence). Summary line reports insight/graph counts. Matching apply rewrites the fact store **first**, appends `purged-ids.jsonl` tombstones, scrubs `insights.json`/`graph.json`, then unlinks the verified-cache sidecar |
+| `purge-fact.py` | HARD delete across facts/events/notes/vault/insights/graph/embedding-sidecar/verified-cache sidecar (GDPR-style). Dry-run default. `--apply` with **zero matches does not rewrite** the store (would drop loader-skipped malformed records). Pattern match is id+content only (not signature hex); for INSIGHTS the content match covers the N10052 contaminated-cluster shape (the "Most recent:" excerpt quotes the latest member verbatim); `theme` is deliberately NOT matched (top-5 keyword join, can only fire on coincidence). Summary line reports insight/graph counts. Matching apply rewrites the fact store **first**, appends `purged-ids.jsonl` tombstones, scrubs `insights.json`/`graph.json`, then unlinks the verified-cache sidecar |
 
 **Recall** (see §6 for exact ranking order)
 | Script | Notes |
@@ -363,8 +361,7 @@ Inside `budget-recall.select_recall()`:
    specified: dense first) with concept/session neighbors, always below the
    weakest seed. Off-path returns the identical list object.
 4. **Insights lead**: insights searched with the same `search()` and capped
-   at 2 by default when semantic (the existing `NOCKBRAIN_INSIGHT_LEAD`
-   override remains available). Full lineage never suppresses raw facts. Only signed
+   at 5 when semantic. Full lineage never suppresses raw facts. Only signed
    `covered_source_ids` from a completely included insight can deduplicate
    unchanged, verbatim source detail; reserved dense sources remain included.
 5. **Date-diversity cap**: max 4 per `source_date`, independently within the
@@ -502,7 +499,7 @@ CI (`.github/workflows/ci.yml`): pytest → classifier smoke →
 | `customer-setup.md` | Customer identity, selected sources, review queue, optional session hooks, correction/forgetting and recovery; pilot limits |
 | `customer-agent.md` | Agent playbook for conversational approval and verified lookup through existing customer commands/API; no automatic approval enforcement |
 | `customer-pilot.md` | Assisted conversational pilot, optional capture, human acceptance and privacy-conscious feedback; no claimed customer outcomes |
-| `runbooks/purge-wrapper-facts.md` | Operator-only backup, copy-first dry-run and exact prefix purge for channel-wrapper facts, plus uninstalled daily curated-memory user-systemd units |
+| `runbooks/purge-wrapper-facts.md` | Operator-only dry-run/apply purge and resynthesis for channel-wrapper facts, plus uninstalled daily curated-memory user-systemd units |
 
 ---
 

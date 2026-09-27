@@ -157,6 +157,30 @@ def test_channel_wrapped_nockcc_envelope_falls_back_to_subject(ingest_jsonl, tmp
     assert [event["content"] for event in result["events"]] == [subject]
 
 
+def test_channel_wrapper_keeps_direct_human_body(ingest_jsonl, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    human_text = "[DIRECTIVE] Kevin asked for daily curated-memory ingest."
+    wrapper = (
+        '<channel source="resident-channel">\n'
+        '{"attestation":{"schema":"message-attestation/v1"}}\n'
+        "[BEGIN UNTRUSTED]\n"
+        + human_text
+        + "\n[END UNTRUSTED]\n</channel>"
+    )
+    write_jsonl(transcript, [{
+        "type": "user",
+        "sessionId": "s1",
+        "timestamp": "2026-09-27T12:00:00Z",
+        "message": {"role": "user", "content": wrapper},
+    }])
+
+    result = ingest_jsonl.ingest_file(transcript)
+
+    assert [event["content"] for event in result["events"]] == [human_text]
+    assert result["stats"]["channel_wrappers_unwrapped"] == 1
+    assert result["stats"]["channel_wrappers_dropped"] == 0
+
+
 def test_channel_wrapper_without_human_content_is_dropped(ingest_jsonl, tmp_path):
     transcript = tmp_path / "session.jsonl"
     wrapper = (

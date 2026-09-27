@@ -119,28 +119,43 @@ def _nested_text(value: object, path: tuple[str, ...]) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _strip_channel_framing(text: str) -> str:
+    body = text.strip()
+    if body.startswith("[BEGIN UNTRUSTED"):
+        _, closing, body = body.partition("]")
+        if closing:
+            body = body.lstrip()
+    if body.endswith("[END UNTRUSTED]"):
+        body = body[: -len("[END UNTRUSTED]")]
+    return body.strip()
+
+
 def unwrap_channel_user_text(text: str) -> str | None:
     """Extract a human turn from a resident-channel envelope.
 
     Channel transport receipts are untrusted structural data, not conversation
-    text. Only known Telegram text/caption and NockCC body/subject fields may
-    cross this boundary; a malformed or receipt-only channel wrapper is dropped.
+    text. Known Telegram text/caption and NockCC body/subject fields take
+    precedence; direct human body text is retained when the receipt has it.
     Non-channel text is returned unchanged.
     """
     if not text.lstrip().startswith("<channel "):
         return text
     match = _CHANNEL_WRAPPER_RE.match(text)
     if match is None:
-        return None
+        _, closing, body = text.lstrip().partition(">")
+        return _strip_channel_framing(body) if closing else None
+    body = _strip_channel_framing(match.group(1))
     try:
-        payload = json.loads(match.group(1))
+        payload, end = json.JSONDecoder().raw_decode(body)
     except json.JSONDecodeError:
-        return None
+        return _strip_channel_framing(body) or None
+    if isinstance(payload, str) and payload.strip():
+        return payload.strip()
     for path in _CHANNEL_TEXT_PATHS:
         human_text = _nested_text(payload, path)
         if human_text is not None:
             return human_text
-    return None
+    return _strip_channel_framing(body[end:]) or None
 
 
 def _matches_any(value: str, patterns: list[str]) -> bool:

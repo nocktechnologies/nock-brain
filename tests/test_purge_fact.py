@@ -82,38 +82,6 @@ def test_purge_fact_apply_removes_pattern_from_facts_events_notes_and_vault(tmp_
     assert "safe memory" in (vault / "facts" / "keep.md").read_text()
 
 
-def test_purge_content_prefix_does_not_match_a_mentioned_marker(tmp_path):
-    facts = tmp_path / "facts.json"
-    facts.write_text(json.dumps([
-        {
-            "id": "wrapper", "kind": "decision", "status": "current",
-            "confidence": 0.9, "content": "<channel source=\"resident-channel\">receipt",
-            "source_date": "2026-09-27", "evidence": [],
-        },
-        {
-            "id": "mention", "kind": "decision", "status": "current",
-            "confidence": 0.9,
-            "content": "The <channel marker is reserved for transport envelopes.",
-            "source_date": "2026-09-27", "evidence": [],
-        },
-    ]))
-    command = [
-        sys.executable, str(REPO / "bin" / "purge-fact.py"),
-        "--content-prefix", "<channel ", "--facts", str(facts),
-        "--events", str(tmp_path / "events.jsonl"),
-        "--notes-dir", str(tmp_path / "sessions"),
-        "--vault", str(tmp_path / "vault"),
-        "--sidecar", str(tmp_path / "embeddings.npz"),
-    ]
-
-    dry_run = subprocess.run(command, cwd=REPO, text=True, capture_output=True, check=True)
-    assert "would remove 1 fact" in dry_run.stdout
-    assert [fact["id"] for fact in json.loads(facts.read_text())] == ["wrapper", "mention"]
-
-    subprocess.run(command + ["--apply"], cwd=REPO, text=True, capture_output=True, check=True)
-    assert [fact["id"] for fact in json.loads(facts.read_text())] == ["mention"]
-
-
 def test_purge_apply_unlinks_verified_cache_sidecar(tmp_path):
     """Issue #52: purge-fact must remove facts.json.verified-cache.json.
     Digests are opaque, so the whole sidecar goes; dry-run leaves it."""

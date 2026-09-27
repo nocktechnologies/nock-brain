@@ -793,7 +793,7 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
 # consumed most of the 800-token budget before any fused fact. Applies only
 # when the semantic tier is on, so the flag-off path stays byte-identical.
 # Env-tunable; <= 0 disables the cap.
-DEFAULT_INSIGHT_LEAD_CAP = 2
+DEFAULT_INSIGHT_LEAD_CAP = 5
 
 
 def _resolve_insight_lead_cap() -> int:

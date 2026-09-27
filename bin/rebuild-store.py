@@ -60,8 +60,6 @@ from _store import secure_copyfile, secure_mkdir, secure_write_json  # noqa: E40
 DEFAULT_STORE_DIR = Path.home() / ".nock-brain"
 DEFAULT_SOURCE_ROOTS = [Path.home() / ".claude" / "projects"]
 DEFAULT_SINCE_DAYS = 7
-INSIGHT_REFRESH_ATTEMPTS = 3
-INSIGHT_REFRESH_RETRY_SECONDS = 1
 
 # Live artifacts that get backed up before a swap and replaced on promote.
 # Each is (name-in-store, staging-source-name). Some live names differ only by
@@ -451,26 +449,17 @@ def refresh_insights(store_dir: Path) -> str:
     FIRST, so a stale view outshouts a clean store). Never gates the rebuild;
     failure surfaces in the summary and recall falls back to raw facts.
     """
-    for attempt in range(INSIGHT_REFRESH_ATTEMPTS):
-        try:
-            _run_cli("synthesize.py", [
-                "--facts", str(store_dir / "facts.json"),
-                "--output", str(store_dir / "insights.json"),
-                "--sign",
-            ])
-            raw = json.loads((store_dir / "insights.json").read_text(encoding="utf-8"))
-            items = raw if isinstance(raw, list) else raw.get("insights", [])
-            return f"regenerated {len(items)}"
-        except (RebuildError, OSError, ValueError) as exc:
-            if attempt + 1 == INSIGHT_REFRESH_ATTEMPTS:
-                return f"FAILED ({str(exc)[:80]})"
-            delay = INSIGHT_REFRESH_RETRY_SECONDS * (2 ** attempt)
-            print(
-                f"rebuild-store: insight refresh attempt {attempt + 1}/"
-                f"{INSIGHT_REFRESH_ATTEMPTS} failed ({exc}); retrying in {delay}s",
-                file=sys.stderr,
-            )
-            time.sleep(delay)
+    try:
+        _run_cli("synthesize.py", [
+            "--facts", str(store_dir / "facts.json"),
+            "--output", str(store_dir / "insights.json"),
+            "--sign",
+        ])
+        raw = json.loads((store_dir / "insights.json").read_text(encoding="utf-8"))
+        items = raw if isinstance(raw, list) else raw.get("insights", [])
+        return f"regenerated {len(items)}"
+    except (RebuildError, OSError, ValueError) as exc:
+        return f"FAILED ({str(exc)[:80]})"
 
 
 def refresh_semantic_sidecar(store_dir: Path) -> str:
