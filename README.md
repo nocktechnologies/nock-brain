@@ -51,6 +51,22 @@ Restart Claude Code after install.
 
 ## Usage
 
+### Memory Explorer (read-only preview)
+
+Open a local browser workspace without a memory store, harness, credentials, or model:
+
+```bash
+python3 bin/explore-memory.py --demo
+```
+
+To inspect a specific JSON store, select its directory explicitly:
+
+```bash
+python3 bin/explore-memory.py --store /absolute/path/to/customer-brain
+```
+
+Open the printed local URL, or add `--open`. The page shows facts and insights, their sources and verification state, and a production BM25 recall preview. It does not edit the store or show injection history. The Explorer never selects `~/.nock-brain` implicitly. See [Memory Explorer](docs/memory-explorer.md) for verification, snapshot, and isolation details.
+
 ### Auto-injection (recommended)
 
 After install, nock-brain works transparently. When you ask questions like:
@@ -252,6 +268,10 @@ nock-brain/
     detect-contradictions.py # Propose supersessions for stale-but-live facts
     migrate-store.py       # Build brain.db from facts.json, fail-closed
     eval-store-parity.py   # Prove JSON/SQLite backends interchangeable
+    explore-memory.py      # Optional loopback Memory Explorer
+    _explorer_store.py      # Isolated read-only snapshots and record model
+    _explorer_preview.py    # Production recall preview in scratch space
+  web/explorer/            # Bundled offline Memory Explorer interface
   hooks/
     memory-inject.sh       # Claude Code auto-injection hook
   tests/                   # pytest suite for the extraction + recall pipeline
