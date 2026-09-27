@@ -81,6 +81,8 @@ survive the rollback.
 
 ```bash
 while IFS= read -r name; do
+  [[ -n "$name" && "$name" != */* ]] || continue
+  rm -rf -- "$store_dir/$name"
   cp -a -- "$backup_dir/$name" "$store_dir/"
 done < "$backup_dir/present-files.txt"
 
