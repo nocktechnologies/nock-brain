@@ -162,7 +162,7 @@ def render_fact_bullet(fact: dict[str, Any]) -> str:
     """Render one source-fact entry in a session note's ``## Facts`` section."""
     evidence = (fact.get("evidence") or [{}])[0]
     anchor = f"{fact.get('source_file', '')}:{evidence.get('line', '')}"
-    return f"- [{fact['kind'].upper()}] {fact['content']} ({anchor})"
+    return f"- [{str(fact.get('kind') or '').upper()}] {fact.get('content') or ''} ({anchor})"
 
 
 def render_session_note(events: list[dict[str, Any]]) -> str:
