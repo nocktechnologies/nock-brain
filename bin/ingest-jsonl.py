@@ -92,13 +92,15 @@ def json_text(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
+# The resident-channel plugin emits 12-character lowercase hexadecimal frame IDs.
 _CHANNEL_FRAME_RE = re.compile(
-    r"^\s*<channel\s[^>]*>\s*"
-    r"\[BEGIN UNTRUSTED CHANNEL CONTENT #(?P<frame_id>[0-9a-f]+)[^\]]*\]\s*"
+    r"^\s*(?P<opening_tag><channel\s[^>]*>)\s*"
+    r"\[BEGIN UNTRUSTED CHANNEL CONTENT #(?P<frame_id>[0-9a-f]{12})[^\]]*\]\s*"
     r"(?P<body>(?:(?!\[END UNTRUSTED CHANNEL CONTENT #(?P=frame_id)\]).)*)\s*"
     r"\[END UNTRUSTED CHANNEL CONTENT #(?P=frame_id)\]\s*</channel>\s*$",
     re.DOTALL,
 )
+_CHANNEL_NAME_RE = re.compile(r"\bchannel=(?P<quote>[\"'])(?P<channel>[^\"']*)(?P=quote)")
 _CHANNEL_TEXT_PATHS = (
     ("message", "text"),
     ("message", "caption"),
@@ -139,13 +141,20 @@ def unwrap_channel_user_text(text: str) -> str | None:
     match = _CHANNEL_FRAME_RE.match(text)
     if match is None:
         return None
+    channel = _CHANNEL_NAME_RE.search(match.group("opening_tag"))
+    if channel is not None and channel.group("channel") == "engine":
+        return None
     body = match.group("body").strip()
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
         return body or None
-    if not isinstance(payload, dict):
+    if isinstance(payload, str):
+        return payload.strip() or None
+    if isinstance(payload, list):
         return None
+    if not isinstance(payload, dict):
+        return body
     for path in _CHANNEL_TEXT_PATHS:
         human_text = _nested_text(payload, path)
         if human_text is not None:

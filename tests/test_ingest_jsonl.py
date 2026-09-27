@@ -5,6 +5,8 @@ private tools/endpoints, and secrets are filtered before persistence.
 """
 import json
 
+import pytest
+
 
 def write_jsonl(path, rows):
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
@@ -21,9 +23,12 @@ _CHANNEL_BEGIN = (
 )
 
 
-def channel_frame(body, end_id=_CHANNEL_FRAME_ID):
+def channel_frame(body, end_id=_CHANNEL_FRAME_ID, channel="telegram", kind="voice"):
+    header = _CHANNEL_HEADER.replace(
+        'channel="telegram" kind="voice"', f'channel="{channel}" kind="{kind}"'
+    )
     return (
-        _CHANNEL_HEADER
+        header
         + "\n"
         + _CHANNEL_BEGIN
         + "\n"
@@ -153,8 +158,42 @@ def test_channel_wrapped_nockcc_json_without_known_text_is_dropped(ingest_jsonl,
     assert ingest_jsonl.unwrap_channel_user_text(channel_frame(json.dumps(["human turn"]))) is None
 
 
+@pytest.mark.parametrize("kind", ["boot-prompt", "rotation-order"])
+def test_channel_wrapped_engine_prompts_are_dropped(ingest_jsonl, tmp_path, kind):
+    wrapper = channel_frame(
+        "Resident engine instructions must never be a user turn.",
+        channel="engine",
+        kind=kind,
+    )
+    transcript = tmp_path / f"{kind}.jsonl"
+    write_jsonl(transcript, [{
+        "type": "user",
+        "sessionId": "s1",
+        "timestamp": "2026-09-27T12:00:00Z",
+        "message": {"role": "user", "content": wrapper},
+    }])
+
+    assert ingest_jsonl.unwrap_channel_user_text(wrapper) is None
+    result = ingest_jsonl.ingest_file(transcript)
+    assert result["events"] == []
+    assert result["stats"]["channel_wrappers_dropped"] == 1
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ('" yes "', "yes"),
+        ("true", "true"),
+        ("123", "123"),
+        ("null", "null"),
+    ],
+)
+def test_channel_wrapper_keeps_json_scalars_as_plain_human_body(ingest_jsonl, body, expected):
+    assert ingest_jsonl.unwrap_channel_user_text(channel_frame(body)) == expected
+
+
 def test_channel_wrapper_rejects_mismatched_end_id(ingest_jsonl):
-    wrapper = channel_frame("You can decide.", end_id="different")
+    wrapper = channel_frame("You can decide.", end_id="f0e1d2c3b4a5")
     assert ingest_jsonl.unwrap_channel_user_text(wrapper) is None
 
 
