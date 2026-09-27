@@ -12,12 +12,29 @@ REPO = Path(__file__).resolve().parent.parent
 BIN = REPO / "bin"
 
 
+def channel_frame(frame_id, body):
+    return (
+        '<channel source="plugin:resident-channel">\n'
+        f"[BEGIN UNTRUSTED CHANNEL CONTENT #{frame_id}]\n"
+        f"{body}\n"
+        f"[END UNTRUSTED CHANNEL CONTENT #{frame_id}]\n"
+        "</channel>"
+    )
+
+
 def _load(name: str):
     spec = importlib.util.spec_from_file_location(
         name.replace("-", "_"), BIN / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def test_purge_uses_ingest_channel_frame_regex():
+    purge_fact = _load("purge-fact")
+    ingest_jsonl = _load("ingest-jsonl")
+
+    assert purge_fact.CHANNEL_FRAME_RE is ingest_jsonl._CHANNEL_FRAME_RE
 
 
 def test_purge_fact_apply_removes_pattern_from_facts_events_notes_and_vault(tmp_path):
@@ -134,12 +151,7 @@ def test_purge_content_prefix_removes_multiline_wrapper_copies(tmp_path):
     vault = tmp_path / "vault"
     notes.mkdir()
     vault.mkdir()
-    wrapper = (
-        '<channel source="plugin:resident-channel">\n'
-        "[BEGIN UNTRUSTED CHANNEL CONTENT #frame]\n"
-        "Historical wrapper text\n"
-        "</channel>"
-    )
+    wrapper = channel_frame("a1b2c3d4e5f6", "Historical wrapper text")
     facts.write_text(json.dumps([
         {
             "id": "wrapper", "kind": "decision", "status": "current",
@@ -184,6 +196,132 @@ def test_purge_content_prefix_removes_multiline_wrapper_copies(tmp_path):
     assert "Historical wrapper text" not in (notes / "session.md").read_text()
     assert "This sentence mentions <channel source=" in (notes / "session.md").read_text()
     assert "Historical wrapper text" not in (vault / "wrapper.md").read_text()
+
+
+def test_purge_content_prefix_removes_complete_single_line_note_wrapper(tmp_path):
+    facts = tmp_path / "facts.json"
+    notes = tmp_path / "sessions"
+    notes.mkdir()
+    facts.write_text("[]")
+    wrapper = channel_frame("0123456789ab", "single-line wrapper").replace("\n", " ")
+    note = notes / "session.md"
+    note.write_text(f"Before {wrapper} after\n")
+
+    command = [
+        sys.executable, str(REPO / "bin" / "purge-fact.py"),
+        "--content-prefix", "<channel source=", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(notes), "--vault", str(tmp_path / "vault"),
+        "--sidecar", str(tmp_path / "embeddings.npz"),
+    ]
+    dry_run = subprocess.run(
+        command, cwd=REPO, text=True, capture_output=True, check=True,
+    )
+    assert "1 note block" in dry_run.stdout
+    assert note.read_text() == f"Before {wrapper} after\n"
+
+    result = subprocess.run(
+        command + ["--apply"], cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    assert note.read_text() == "Before  after\n"
+    assert "1 note block" in result.stdout
+
+
+def test_purge_keeps_unclosed_opener_and_prose_before_later_complete_frame(tmp_path):
+    facts = tmp_path / "facts.json"
+    notes = tmp_path / "sessions"
+    notes.mkdir()
+    facts.write_text("[]")
+    note = notes / "session.md"
+    note.write_text(
+        '<channel source="plugin:resident-channel">\n'
+        "Legitimate prose must survive.\n"
+        + channel_frame("abcdef123456", "remove only this block")
+        + "\nTrailing prose must survive.\n"
+    )
+
+    command = [
+        sys.executable, str(REPO / "bin" / "purge-fact.py"),
+        "--content-prefix", "<channel source=", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(notes), "--vault", str(tmp_path / "vault"),
+        "--sidecar", str(tmp_path / "embeddings.npz"),
+    ]
+    dry_run = subprocess.run(
+        command, cwd=REPO, text=True, capture_output=True, check=True,
+    )
+    assert "1 unmatched opener" in dry_run.stdout
+    assert str(note) in dry_run.stdout
+    assert "remove only this block" in note.read_text()
+
+    result = subprocess.run(
+        command + ["--apply"], cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    text = note.read_text()
+    assert '<channel source="plugin:resident-channel">' in text
+    assert "Legitimate prose must survive." in text
+    assert "remove only this block" not in text
+    assert "Trailing prose must survive." in text
+    assert "1 unmatched opener" in result.stdout
+    assert str(note) in result.stdout
+
+
+def test_purge_does_not_cross_close_channel_frames_with_different_ids(tmp_path):
+    facts = tmp_path / "facts.json"
+    notes = tmp_path / "sessions"
+    notes.mkdir()
+    facts.write_text("[]")
+    note = notes / "session.md"
+    note.write_text(
+        '<channel source="plugin:resident-channel">\n'
+        "[BEGIN UNTRUSTED CHANNEL CONTENT #111111111111]\n"
+        "Unclosed first frame.\n"
+        "[END UNTRUSTED CHANNEL CONTENT #222222222222]\n"
+        "</channel>\n"
+        + channel_frame("222222222222", "remove only second frame")
+        + "\n"
+    )
+
+    subprocess.run(
+        [
+            sys.executable, str(REPO / "bin" / "purge-fact.py"),
+            "--content-prefix", "<channel source=", "--facts", str(facts),
+            "--events", str(tmp_path / "events.jsonl"),
+            "--notes-dir", str(notes), "--vault", str(tmp_path / "vault"),
+            "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+        ],
+        cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    text = note.read_text()
+    assert "Unclosed first frame." in text
+    assert "remove only second frame" not in text
+
+
+def test_purge_keeps_mid_sentence_channel_source_mention(tmp_path):
+    facts = tmp_path / "facts.json"
+    notes = tmp_path / "sessions"
+    notes.mkdir()
+    facts.write_text("[]")
+    note = notes / "session.md"
+    mention = "This prose mentions '<channel source=' mid-sentence.\n"
+    note.write_text(mention)
+
+    result = subprocess.run(
+        [
+            sys.executable, str(REPO / "bin" / "purge-fact.py"),
+            "--content-prefix", "<channel source=", "--facts", str(facts),
+            "--events", str(tmp_path / "events.jsonl"),
+            "--notes-dir", str(notes), "--vault", str(tmp_path / "vault"),
+            "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+        ],
+        cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    assert note.read_text() == mention
+    assert "0 note block" in result.stdout
 
 
 def test_purge_apply_unlinks_verified_cache_sidecar(tmp_path):

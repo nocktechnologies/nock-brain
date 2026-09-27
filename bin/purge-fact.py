@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from _embed import DEFAULT_SIDECAR, EmbedUnavailable, load_sidecar, save_sidecar
+from _channel_frame import CHANNEL_FRAME_RE
 from _facts import TOMBSTONES_FILENAME
 from _store import FILE_MODE, secure_write_json, secure_write_text
 from _storeback import resolve_store
@@ -76,7 +78,8 @@ def purge_facts(path: Path, fact_id: str, patterns: list[str],
 
 
 def purge_events(path: Path, event_ids: set[str], patterns: list[str],
-                 content_prefixes: list[str] | None = None) -> tuple[str, int]:
+                 content_prefixes: list[str] | None = None,
+                 remove_channel_frames: bool = False) -> tuple[str, int]:
     if not path.exists():
         return "", 0
     kept: list[str] = []
@@ -86,9 +89,14 @@ def purge_events(path: Path, event_ids: set[str], patterns: list[str],
             drop = False
             try:
                 event = json.loads(line)
+                content = str(event.get("content", ""))
                 drop = (
                     str(event.get("id", "")) in event_ids
-                    or starts_with_prefix(str(event.get("content", "")), content_prefixes)
+                    or (
+                        remove_channel_frames
+                        and next(CHANNEL_FRAME_RE.finditer(content), None) is not None
+                    )
+                    or starts_with_prefix(content, content_prefixes)
                 )
             except json.JSONDecodeError:
                 drop = False
@@ -101,37 +109,54 @@ def purge_events(path: Path, event_ids: set[str], patterns: list[str],
     return "".join(kept), removed
 
 
-def purge_text_tree(root: Path, patterns: list[str],
-                    content_prefixes: list[str] | None = None) -> tuple[dict[Path, str], int]:
+def purge_text_tree(
+    root: Path,
+    patterns: list[str],
+    content_prefixes: list[str] | None = None,
+    remove_channel_frames: bool = False,
+) -> tuple[dict[Path, str], int, int, dict[Path, int]]:
     if not root.exists():
-        return {}, 0
+        return {}, 0, 0, {}
     rewrites: dict[Path, str] = {}
-    removed = 0
+    removed_blocks = 0
+    removed_lines = 0
+    unmatched_openers: dict[Path, int] = {}
     paths = [root] if root.is_file() else sorted(path for path in root.rglob("*") if path.is_file())
     for path in paths:
         try:
-            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
+            original_text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
+        text = original_text
+        frame_matches = list(CHANNEL_FRAME_RE.finditer(original_text)) if remove_channel_frames else []
+        if remove_channel_frames:
+            matched_spans = [(match.start(), match.end()) for match in frame_matches]
+            unmatched = sum(
+                not any(start <= opener.start() < end for start, end in matched_spans)
+                for opener in re.finditer(r"(?m)^[ \t]*<channel\s+source=", original_text)
+            )
+            if unmatched:
+                unmatched_openers[path] = unmatched
+        if frame_matches:
+            kept: list[str] = []
+            cursor = 0
+            for match in frame_matches:
+                kept.append(original_text[cursor:match.start()])
+                cursor = match.end()
+            kept.append(original_text[cursor:])
+            text = "".join(kept)
+            removed_blocks += len(frame_matches)
+        lines = text.splitlines(keepends=True)
         kept: list[str] = []
-        index = 0
-        while index < len(lines):
-            if starts_with_prefix(lines[index], content_prefixes):
-                end = index + 1
-                while end < len(lines) and lines[end].strip() != "</channel>":
-                    end += 1
-                if end < len(lines):
-                    removed += end - index + 1
-                    index = end + 1
-                    continue
-            if matches_text(lines[index], patterns):
-                removed += 1
+        for line in lines:
+            if starts_with_prefix(line, content_prefixes) or matches_text(line, patterns):
+                removed_lines += 1
             else:
-                kept.append(lines[index])
-            index += 1
-        if len(kept) != len(lines):
-            rewrites[path] = "".join(kept)
-    return rewrites, removed
+                kept.append(line)
+        rewritten = "".join(kept)
+        if rewritten != original_text:
+            rewrites[path] = rewritten
+    return rewrites, removed_blocks, removed_lines, unmatched_openers
 
 
 def purge_sidecar(path: Path, removed_ids: set[str], apply: bool) -> tuple[str, int]:
@@ -294,12 +319,23 @@ def run(argv: list[str] | None = None) -> int:
         ) or matches_text(f"{fact.get('id', '')}\n{content}", args.pattern):
             patterns.append(content)
     event_ids = fact_event_ids(removed_fact_records)
+    channel_prefixes = [
+        prefix for prefix in args.content_prefix
+        if prefix.lstrip().startswith("<channel")
+    ]
+    other_prefixes = [
+        prefix for prefix in args.content_prefix
+        if prefix not in channel_prefixes
+    ]
     kept_events, removed_events = purge_events(
-        args.events, event_ids, patterns, args.content_prefix)
-    note_rewrites, removed_note_lines = purge_text_tree(
-        args.notes_dir, patterns, args.content_prefix)
-    vault_rewrites, removed_vault_lines = purge_text_tree(
-        args.vault, patterns, args.content_prefix)
+        args.events, event_ids, patterns, other_prefixes, bool(channel_prefixes))
+    note_rewrites, removed_note_blocks, removed_note_lines, note_unmatched = purge_text_tree(
+        args.notes_dir, patterns, other_prefixes, bool(channel_prefixes))
+    vault_rewrites, removed_vault_blocks, removed_vault_lines, vault_unmatched = purge_text_tree(
+        args.vault, patterns, other_prefixes, bool(channel_prefixes))
+    unmatched_openers = dict(note_unmatched)
+    for path, count in vault_unmatched.items():
+        unmatched_openers[path] = unmatched_openers.get(path, 0) + count
     removed_ids = {str(fact.get("id")) for fact in removed_fact_records
                    if fact.get("id")}
     sidecar_note, removed_vectors = purge_sidecar(
@@ -346,10 +382,14 @@ def run(argv: list[str] | None = None) -> int:
     print(
         f"{'would remove' if not args.apply else 'removed'} "
         f"{removed_facts} fact(s), {removed_events} event(s), "
+        f"{removed_note_blocks} note block(s), {removed_vault_blocks} vault block(s), "
+        f"{sum(unmatched_openers.values())} unmatched opener(s), "
         f"{removed_note_lines} note line(s), {removed_vault_lines} vault line(s), "
         f"{'all' if removed_vectors < 0 else removed_vectors} vector(s), "
         f"{removed_insights} insight(s), {removed_graph} graph item(s)"
     )
+    for path, count in sorted(unmatched_openers.items()):
+        print(f"{count} unmatched opener(s): {path}")
     if sidecar_note:
         print(sidecar_note, file=sys.stderr)
     if cache_note:

@@ -29,6 +29,7 @@ if str(BIN_DIR) not in sys.path:
 
 from _scrub import scrub_secrets
 from _store import secure_write_text
+from _channel_frame import CHANNEL_FRAME_RE
 
 DEFAULT_PATH_DENYLIST = [
     "agents/*/private/**",
@@ -92,14 +93,7 @@ def json_text(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
-# The resident-channel plugin emits 12-character lowercase hexadecimal frame IDs.
-_CHANNEL_FRAME_RE = re.compile(
-    r"^\s*(?P<opening_tag><channel\s[^>]*>)\s*"
-    r"\[BEGIN UNTRUSTED CHANNEL CONTENT #(?P<frame_id>[0-9a-f]{12})[^\]]*\]\s*"
-    r"(?P<body>(?:(?!\[END UNTRUSTED CHANNEL CONTENT #(?P=frame_id)\]).)*)\s*"
-    r"\[END UNTRUSTED CHANNEL CONTENT #(?P=frame_id)\]\s*</channel>\s*$",
-    re.DOTALL,
-)
+_CHANNEL_FRAME_RE = CHANNEL_FRAME_RE
 _CHANNEL_NAME_RE = re.compile(r"\bchannel=(?P<quote>[\"'])(?P<channel>[^\"']*)(?P=quote)")
 _CHANNEL_TEXT_PATHS = (
     ("message", "text"),
@@ -138,7 +132,7 @@ def unwrap_channel_user_text(text: str) -> str | None:
     """
     if not text.lstrip().startswith("<channel "):
         return text
-    match = _CHANNEL_FRAME_RE.match(text)
+    match = _CHANNEL_FRAME_RE.fullmatch(text.strip())
     if match is None:
         return None
     channel = _CHANNEL_NAME_RE.search(match.group("opening_tag"))
