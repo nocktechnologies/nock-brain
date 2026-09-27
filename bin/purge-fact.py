@@ -33,6 +33,10 @@ def matches_text(text: str, patterns: list[str]) -> bool:
     return any(pattern.lower() in haystack for pattern in patterns if pattern)
 
 
+def starts_with_prefix(text: str, prefixes: list[str] | None) -> bool:
+    return any(text.lstrip().startswith(prefix) for prefix in prefixes or [] if prefix)
+
+
 def fact_matches(fact: dict[str, Any], fact_id: str, patterns: list[str],
                  content_prefixes: list[str] | None = None) -> bool:
     """Match id exactly, a literal pattern, or a content prefix.
@@ -45,8 +49,7 @@ def fact_matches(fact: dict[str, Any], fact_id: str, patterns: list[str],
     if fact_id and fact.get("id") == fact_id:
         return True
     content = str(fact.get("content", ""))
-    if any(content.lstrip().startswith(prefix)
-           for prefix in content_prefixes or [] if prefix):
+    if starts_with_prefix(content, content_prefixes):
         return True
     haystack = f"{fact.get('id', '')}\n{content}"
     return matches_text(haystack, patterns)
@@ -72,7 +75,8 @@ def purge_facts(path: Path, fact_id: str, patterns: list[str],
     return kept, len(removed)
 
 
-def purge_events(path: Path, event_ids: set[str], patterns: list[str]) -> tuple[str, int]:
+def purge_events(path: Path, event_ids: set[str], patterns: list[str],
+                 content_prefixes: list[str] | None = None) -> tuple[str, int]:
     if not path.exists():
         return "", 0
     kept: list[str] = []
@@ -82,7 +86,10 @@ def purge_events(path: Path, event_ids: set[str], patterns: list[str]) -> tuple[
             drop = False
             try:
                 event = json.loads(line)
-                drop = str(event.get("id", "")) in event_ids
+                drop = (
+                    str(event.get("id", "")) in event_ids
+                    or starts_with_prefix(str(event.get("content", "")), content_prefixes)
+                )
             except json.JSONDecodeError:
                 drop = False
             if not drop:
@@ -94,7 +101,8 @@ def purge_events(path: Path, event_ids: set[str], patterns: list[str]) -> tuple[
     return "".join(kept), removed
 
 
-def purge_text_tree(root: Path, patterns: list[str]) -> tuple[dict[Path, str], int]:
+def purge_text_tree(root: Path, patterns: list[str],
+                    content_prefixes: list[str] | None = None) -> tuple[dict[Path, str], int]:
     if not root.exists():
         return {}, 0
     rewrites: dict[Path, str] = {}
@@ -105,8 +113,22 @@ def purge_text_tree(root: Path, patterns: list[str]) -> tuple[dict[Path, str], i
             lines = path.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
         except OSError:
             continue
-        kept = [line for line in lines if not matches_text(line, patterns)]
-        removed += len(lines) - len(kept)
+        kept: list[str] = []
+        index = 0
+        while index < len(lines):
+            if starts_with_prefix(lines[index], content_prefixes):
+                end = index + 1
+                while end < len(lines) and lines[end].strip() != "</channel>":
+                    end += 1
+                if end < len(lines):
+                    removed += end - index + 1
+                    index = end + 1
+                    continue
+            if matches_text(lines[index], patterns):
+                removed += 1
+            else:
+                kept.append(lines[index])
+            index += 1
         if len(kept) != len(lines):
             rewrites[path] = "".join(kept)
     return rewrites, removed
@@ -265,11 +287,19 @@ def run(argv: list[str] | None = None) -> int:
         if fact_matches(fact, args.fact_id, args.pattern, args.content_prefix)
     ]
     patterns = list(args.pattern)
-    patterns.extend(str(fact.get("content", "")) for fact in removed_fact_records)
+    for fact in removed_fact_records:
+        content = str(fact.get("content", ""))
+        if (
+            args.fact_id and fact.get("id") == args.fact_id
+        ) or matches_text(f"{fact.get('id', '')}\n{content}", args.pattern):
+            patterns.append(content)
     event_ids = fact_event_ids(removed_fact_records)
-    kept_events, removed_events = purge_events(args.events, event_ids, patterns)
-    note_rewrites, removed_note_lines = purge_text_tree(args.notes_dir, patterns)
-    vault_rewrites, removed_vault_lines = purge_text_tree(args.vault, patterns)
+    kept_events, removed_events = purge_events(
+        args.events, event_ids, patterns, args.content_prefix)
+    note_rewrites, removed_note_lines = purge_text_tree(
+        args.notes_dir, patterns, args.content_prefix)
+    vault_rewrites, removed_vault_lines = purge_text_tree(
+        args.vault, patterns, args.content_prefix)
     removed_ids = {str(fact.get("id")) for fact in removed_fact_records
                    if fact.get("id")}
     sidecar_note, removed_vectors = purge_sidecar(

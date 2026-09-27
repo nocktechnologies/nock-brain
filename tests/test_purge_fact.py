@@ -126,6 +126,66 @@ def test_purge_content_prefix_only_matches_lstripped_fact_content(tmp_path):
     ]
 
 
+def test_purge_content_prefix_removes_multiline_wrapper_copies(tmp_path):
+    """Prefix purges must remove whole wrapper copies without event evidence."""
+    facts = tmp_path / "facts.json"
+    events = tmp_path / "events.jsonl"
+    notes = tmp_path / "sessions"
+    vault = tmp_path / "vault"
+    notes.mkdir()
+    vault.mkdir()
+    wrapper = (
+        '<channel source="plugin:resident-channel">\n'
+        "[BEGIN UNTRUSTED CHANNEL CONTENT #frame]\n"
+        "Historical wrapper text\n"
+        "</channel>"
+    )
+    facts.write_text(json.dumps([
+        {
+            "id": "wrapper", "kind": "decision", "status": "current",
+            "confidence": 0.9, "content": wrapper,
+            "source_date": "2026-09-27", "evidence": [],
+        },
+        {
+            "id": "keep", "kind": "decision", "status": "current",
+            "confidence": 0.9, "content": "Safe memory",
+            "source_date": "2026-09-27", "evidence": [],
+        },
+    ]))
+    events.write_text(
+        json.dumps({"id": "historical-wrapper", "content": wrapper}) + "\n"
+        + json.dumps({"id": "keep", "content": "Safe event"}) + "\n"
+    )
+    (notes / "session.md").write_text(
+        "Session notes\n"
+        + wrapper + "\n"
+        + "This sentence mentions <channel source= without being a wrapper.\n"
+    )
+    (vault / "wrapper.md").write_text(wrapper + "\n")
+
+    subprocess.run(
+        [
+            sys.executable, str(REPO / "bin" / "purge-fact.py"),
+            "--content-prefix", "<channel source=",
+            "--facts", str(facts), "--events", str(events),
+            "--notes-dir", str(notes), "--vault", str(vault),
+            "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+        ],
+        cwd=REPO,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert [fact["id"] for fact in json.loads(facts.read_text())] == ["keep"]
+    assert "Historical wrapper text" not in events.read_text()
+    assert "Safe event" in events.read_text()
+    assert "Historical wrapper text" not in (notes / "session.md").read_text()
+    assert "This sentence mentions <channel source=" in (notes / "session.md").read_text()
+    assert "Historical wrapper text" not in (vault / "wrapper.md").read_text()
+
+
 def test_purge_apply_unlinks_verified_cache_sidecar(tmp_path):
     """Issue #52: purge-fact must remove facts.json.verified-cache.json.
     Digests are opaque, so the whole sidecar goes; dry-run leaves it."""
