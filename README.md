@@ -19,9 +19,9 @@ Most Claude Code sessions start from zero. nock-brain fixes that.
 
 ## Try an explicit customer Brain
 
-The reviewed customer workflow is an **evaluation milestone**. Choose a fresh
-destination and specific source files; no home transcript discovery, hook
-installation, or Claude Code settings change occurs. From this repository:
+The standalone customer workflow is a **pilot**. Choose a fresh destination
+and specific source files; the store starts empty with its own identity and
+keys. From this repository:
 
 ```bash
 python3 bin/consumer-brain.py init --store "$HOME/customer-brain"
@@ -29,12 +29,14 @@ python3 bin/consumer-brain.py propose --store "$HOME/customer-brain" --format ma
 ```
 
 The proposal output gives a digest and review command. Read the full review
-before using its apply command, then inspect the store with
-`python3 bin/explore-memory.py --store "$HOME/customer-brain"`. The example
+before using its apply command, then open the store with
+`python3 bin/consumer-brain.py open --store "$HOME/customer-brain"`. The example
 notes are fictitious. See the [customer setup guide](docs/customer-setup.md)
-for the complete walkthrough, limits, backups, and release gaps. Explorer's
-BM25 preview is the current recall UI for this workflow; it does not inject
-memories into an agent.
+for the complete walkthrough, optional Claude Code session hooks, correction,
+forgetting, limits and backups. Capture creates pending proposals; acceptance
+stays explicit. Nock Harness is not required, and setup does not rewrite global
+Claude settings. Real customer feedback and distribution packaging remain
+before a stable release; see the [pilot checklist](docs/customer-pilot.md).
 
 ## Legacy installer
 
@@ -292,6 +294,11 @@ nock-brain/
     explore-memory.py      # Optional loopback Memory Explorer
     _explorer_store.py      # Isolated read-only snapshots and record model
     _explorer_preview.py    # Production recall preview in scratch space
+    consumer-brain.py       # Customer setup, review queue and memory controls
+    consumer-hook.py        # Opt-in customer capture and recall adapter
+    _consumer_store.py      # Customer identity, signed publication and recovery
+    _consumer_import.py     # Explicit Markdown / Claude JSONL source adapters
+    _consumer_hooks.py      # Session settings and isolated customer hook work
   web/explorer/            # Bundled offline Memory Explorer interface
   hooks/
     memory-inject.sh       # Claude Code auto-injection hook

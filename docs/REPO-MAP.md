@@ -492,7 +492,8 @@ CI (`.github/workflows/ci.yml`): pytest → classifier smoke →
 | `evals/README.md` + `recall-gold-v1.json` (CI) + `curated-recall-suite.json` (Phase-2/offline) | Gold is a reconstruction of a lost n=90 set; queries must stay hand-authored |
 | `tracking/nockcc-nocks.md` | ⚠ Stale: stops at 2026-06-12 (N8054); covers nothing from #63–#83 |
 | `memory-explorer.md` | Local read-only Explorer launch, isolation and verification limits, snapshot behavior, and BM25 preview semantics |
-| `customer-setup.md` | Fresh customer identity, explicit selected sources, full proposal review, apply and Explorer walkthrough; limits and release gaps |
+| `customer-setup.md` | Customer identity, selected sources, review queue, optional session hooks, correction/forgetting and recovery; pilot limits |
+| `customer-pilot.md` | Human acceptance checklist and privacy-conscious feedback collection; no claimed customer outcomes |
 
 ---
 
@@ -603,16 +604,21 @@ seconds; failures are visible rather than silently truncated.
 
 ---
 
-## 13. Explicit customer bootstrap and reviewed import
+## 13. Standalone customer pilot
 
-`bin/consumer-brain.py` owns the `init`, `propose`, `review`, and `apply` CLI.
+`bin/consumer-brain.py` owns `init`, `status`, `propose`, `pending`, `review`,
+`apply`, `discard`, `correct`, `forget`, `recover`, `setup-hooks`, and `open`.
 Every operation requires `--store` with an explicit absolute destination;
 `propose` requires `--format markdown|claude-jsonl` and repeated `--source`
-paths; `review` and `apply` require a full SHA-256 `--proposal` digest. With
+paths; `review`, `apply`, and `discard` require a full SHA-256 `--proposal` digest. With
 no subcommand, it prints help without store access. Output containing source
 or path data is ASCII JSON; review prints the complete proposal. Errors are
-concise and do not echo raw inputs. This CLI neither installs a hook nor reads
-default home or fleet sources. Explorer (§12) remains the read-only recall UI.
+concise and do not echo raw inputs. `correct --fact ID --replacement-proposal
+DIGEST` requires one current import candidate; `forget --fact ID` proposes a
+removal. Both produce a digest for the same review/apply flow. Review also shows
+the selected target, stale/recovery state and forgetting scope. `open` launches
+Explorer (§12), which remains read-only. No command discovers home or fleet
+sources. `setup-hooks` writes only a selected store's opt-in settings file.
 
 `bin/_consumer_store.py` owns `ConsumerError`, `init_store(Path)`, and the
 locked `ConsumerStore(Path)` context manager. Its read-only `path`, `manifest`,
@@ -621,15 +627,41 @@ locked `ConsumerStore(Path)` context manager. Its read-only `path`, `manifest`,
 additive publication. `read_regular` is the bounded no-follow reader and
 `canonical_bytes` provides strict deterministic ASCII JSON. `init_store`
 creates a fresh 0700 directory only, with a local identity and keypair, empty
-`facts.json`, and private proposals directory. Existing destinations are never
+`facts.json`, private proposals directory and ignore-all `.gitignore`. Existing destinations are never
 adopted. Existing facts must be valid signed local v1 customer facts; foreign,
 unsigned, malformed, or tampered records fail closed. Proposals bind store
-UUID, key ID and facts generation. Apply rejects stale generations, signs new
+UUID, key ID and combined facts/revocations generation. Apply rejects stale generations, signs new
 facts through `_sign.sign_facts`, verifies before atomic replacement, and
-skips existing IDs without editing their signatures or evidence. A customer
+skips existing or revoked IDs without editing their signatures or evidence. A customer
 lock and pre-replacement byte check coordinate these writers; unrelated
 legacy writers have no transaction guarantee and are unsupported. SQLite
-cutover and nonempty lifecycle sidecars are refused.
+cutover and the legacy purge ledger are refused. Signed customer revocations
+are strictly parsed and verified with the captured customer key.
+
+`propose_correction` and `propose_forget` save lifecycle proposals.
+`pending_proposals` returns digest/action/count/stale summaries (100 proposal
+files / 64 MiB queue limit);
+`discard_proposal` removes one; `status` reports record counts and recovery state.
+Correction preserves the old signed core and attestation while marking it
+superseded, adds a newly signed replacement, and records its signed revocation.
+Forgetting removes the selected record and clears all saved proposals while
+retaining a content-free ID revocation against exact replay. Unsupported derived
+outputs cause lifecycle changes to fail rather than claiming complete erasure.
+
+Lifecycle apply signs a private `.customer-journal.json` containing the intended
+post-operation facts, hashes of the previous inputs and the signed event. It
+publishes the journal before the revocation, then facts, then proposal cleanup.
+This is recoverable multi-file publication, not a single atomic transaction.
+An interrupted operation blocks normal mutations; explicit `recover()` validates
+and finishes that accepted transition. Opening/status does not silently finish
+erasure. The journal never copies the forgotten record's content. External
+sources, backups and already open Explorer snapshots are outside erasure scope.
+Recognized owner-private transaction temporaries also require explicit recovery;
+reads never clean them. Recovery either finishes a validated journal or discards
+unpublished temporaries, and supports paired hardlink remnants from the older
+proposal publisher. New publication uses atomic replacement under the customer
+lock. Revocation and journal size limits are checked before publication.
+Process-death boundaries are tested; power-loss durability is not claimed.
 
 `bin/_consumer_import.py` owns `collect_candidates(sources, format, manifest)`.
 It reads only selected single-link regular source files and returns candidates, source
@@ -647,6 +679,24 @@ content and kind plus customer UUID. The selected source hash, sanitized path
 and event anchor are signed evidence. Overlong candidates are counted and
 skipped; source or proposal limit violations fail visibly. Source files are
 never rewritten. The fleet mint gate, default extraction paths, recall hook,
-and Explorer's read-only service contract remain unchanged. Correction,
-forgetting, standalone injection, packaging and real customer evaluation are
-future milestones.
+and Explorer's read-only service contract remain unchanged.
+
+`bin/_consumer_hooks.py` owns `setup_hooks(store_path, roots) -> settings_path`,
+explicit transcript containment, pending-only capture and public-key recall.
+`bin/consumer-hook.py` is the bounded Claude adapter and subprocess worker.
+`setup-hooks --transcript-root ABSOLUTE_DIRECTORY` (repeatable) generates
+`claude-settings.json` with absolute interpreter/script paths and event timeouts.
+The printed `claude --settings FILE` opts a session in; no global settings are
+rewritten. Stop captures only its supplied, allowlisted transcript. Repeated
+unchanged capture is idempotent; existing/revoked candidate IDs are excluded.
+No hook applies a proposal or logs raw transcript text.
+
+UserPromptSubmit returns `hookSpecificOutput.additionalContext` after the
+production classifier and strict verified BM25 recall. Recall reads only the
+selected manifest, facts, revocations and public verifier; it never reads the
+private key. Private scratch contains caches and worker output, inherited fleet
+configuration is cleared, semantic/graph are off and journal recovery states
+refuse recall. Failures exit successfully with a fixed diagnostic and no context.
+The customer hook closure is independently acknowledged by Python-floor tests.
+See [customer setup](customer-setup.md) and the [pilot checklist](customer-pilot.md).
+Distribution packaging and real customer quality evaluation remain release work.

@@ -31,6 +31,7 @@ BIN = REPO / "bin"
 
 # The two scripts hooks/memory-inject.sh invokes directly.
 HOOK_ENTRYPOINTS = ["recall-classifier.py", "budget-recall.py"]
+CUSTOMER_HOOK_ENTRYPOINTS = ["consumer-hook.py"]
 
 # The interpreter the hook gets on a stock Mac. Anything under 3.10 exercises
 # the real floor; a newer one still adds an import smoke test at no cost.
@@ -60,12 +61,12 @@ def _local_module_refs(path: Path) -> "set[str]":
     return refs
 
 
-def hook_reachable_modules() -> "list[Path]":
+def hook_reachable_modules(entrypoints=None) -> "list[Path]":
     """Transitive closure of bin/ modules reachable from the hook entrypoints,
     including branches behind flags (--graph / NOCKBRAIN_GRAPH_RECALL): the
     hook runs with the user's environment, so gated paths are still hot."""
     seen = []
-    queue = list(HOOK_ENTRYPOINTS)
+    queue = list(HOOK_ENTRYPOINTS if entrypoints is None else entrypoints)
     while queue:
         name = queue.pop()
         if name in seen:
@@ -94,6 +95,60 @@ def test_hook_reachable_closure_is_acknowledged():
         "export-graph.py",
         "recall-classifier.py",
     ]
+
+
+def test_customer_hook_closure_is_acknowledged():
+    # The opt-in adapter includes capture; it must not enlarge the fleet hook.
+    assert [p.name for p in hook_reachable_modules(CUSTOMER_HOOK_ENTRYPOINTS)] == [
+        "_consumer_hooks.py", "_consumer_import.py", "_consumer_store.py",
+        "_dense_recall.py", "_embed.py", "_facts.py", "_graph_recall.py",
+        "_projection.py", "_revoke.py", "_scrub.py", "_sign.py", "_store.py",
+        "_storeback.py", "_verify_cache.py", "budget-recall.py", "consumer-hook.py",
+        "export-graph.py", "extract-facts.py", "ingest-jsonl.py", "recall-classifier.py",
+    ]
+
+
+@pytest.mark.skipif(not STOCK_PYTHON.exists(), reason="no stock Python on this machine")
+def test_customer_generated_hooks_execute_under_stock_python3(tmp_path):
+    """Real session commands: pending-only capture, explicit acceptance, recall."""
+    driver = r'''
+import json, os, shlex, subprocess, sys
+from pathlib import Path
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+from _consumer_store import ConsumerStore, init_store
+from _consumer_hooks import setup_hooks
+root = Path(sys.argv[2]).resolve()
+store_path = root / "customer"
+sources = root / "transcripts"
+sources.mkdir()
+init_store(store_path)
+transcript = sources / "session.jsonl"
+transcript.write_text(json.dumps({"type":"user", "timestamp":"2026-09-26T12:00:00Z",
+    "message":{"role":"user", "content":"[DECISION] Friday delivery is the release target."}}) + "\n")
+settings = json.loads(setup_hooks(store_path, [sources]).read_text())
+def hook(event, payload):
+    command = settings["hooks"][event][0]["hooks"][0]["command"]
+    run = subprocess.run(shlex.split(command), input=json.dumps(dict(payload, hook_event_name=event)),
+        text=True, capture_output=True, timeout=15)
+    assert run.returncode == 0, run.stderr
+    return json.loads(run.stdout)
+assert "pending proposal" in hook("Stop", {
+    "transcript_path":str(transcript), "stop_hook_active":False})["systemMessage"]
+with ConsumerStore(store_path) as store:
+    assert store.facts == []
+    pending = store.pending_proposals()
+    assert len(pending) == 1
+    assert store.apply_proposal(pending[0]["digest"])["added"] == 1
+before = (store_path / "facts.json").read_bytes()
+result = hook("UserPromptSubmit", {"prompt":"What did we decide about Friday delivery?"})
+assert result["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+assert "Friday delivery" in result["hookSpecificOutput"]["additionalContext"]
+assert (store_path / "facts.json").read_bytes() == before
+'''
+    result = subprocess.run([str(STOCK_PYTHON), "-B", "-c", driver, str(BIN), str(tmp_path)],
+                            capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("path", hook_reachable_modules(), ids=lambda p: p.name)
