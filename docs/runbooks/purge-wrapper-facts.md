@@ -115,7 +115,7 @@ directory and apply only when the reported fact count is the expected 70.
 )
 ```
 
-## 4. Apply, synthesize, and verify
+## 4. Apply, regenerate derived views, synthesize, and verify
 
 The applied purge removes matching facts and their derived references,
 including insights. Re-synthesize before re-enabling writers, then fail if a
@@ -130,6 +130,12 @@ wrapper-derived insight remains. These checks do not print live fact content.
     --notes-dir "$store_dir/sessions" \
     --vault "$store_dir/vault" \
     --sidecar "$store_dir/embeddings.npz"
+  # review/ and vault/ are derived views. Regenerate them from the cleaned
+  # fact store and session-note sources; do not hand-edit their copies.
+  python3 bin/review-promotions.py --facts "$store_dir/facts.json" --output "$store_dir/review"
+  python3 bin/detect-contradictions.py --facts "$store_dir/facts.json" --queue-dir "$store_dir/review"
+  python3 bin/export-obsidian.py --facts "$store_dir/facts.json" \
+    --sessions "$store_dir/sessions" --review "$store_dir/review" --vault "$store_dir/vault"
   python3 bin/synthesize.py --facts "$store_dir/facts.json" --output "$store_dir/insights.json" --sign
   python3 - "$store_dir/insights.json" <<'PY'
 import json
