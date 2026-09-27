@@ -190,20 +190,20 @@ def vault_frontmatter_id(path: Path) -> str:
 
 def purge_vault_backlinks(
     vault: Path,
-    fact_files: set[Path],
+    mirror_files: set[Path],
     rewrites: dict[Path, str],
     skip_paths: set[Path],
 ) -> dict[Path, str]:
-    """Remove vault lines that link to deleted per-fact mirror files."""
-    if not fact_files or not vault.is_dir():
+    """Remove vault lines that link to deleted vault mirror files."""
+    if not mirror_files or not vault.is_dir():
         return {}
     targets: set[str] = set()
-    for path in fact_files:
+    for path in mirror_files:
         relative = path.relative_to(vault).with_suffix("").as_posix()
         targets.update((path.stem, relative, f"{relative}.md"))
     explicit_targets = {
         target for target in targets
-        if target.startswith("facts/") or target.endswith(".md")
+        if "/" in target or target.endswith(".md")
     }
     backlink_rewrites: dict[Path, str] = {}
     for path in sorted(candidate for candidate in vault.rglob("*") if candidate.is_file()):
@@ -400,24 +400,29 @@ def run(argv: list[str] | None = None) -> int:
         prefix for prefix in args.content_prefix
         if prefix not in channel_prefixes
     ]
-    vault_facts_dir = args.vault / "facts"
-    vault_fact_paths = {
-        path for path in vault_facts_dir.rglob("*") if path.is_file()
-    } if vault_facts_dir.is_dir() else set()
+    vault_paths = {
+        path for path in args.vault.rglob("*") if path.is_file()
+    } if args.vault.is_dir() else set()
     removed_ids = {str(fact.get("id")) for fact in removed_fact_records
                    if fact.get("id")}
-    vault_fact_files = {
-        path for path in vault_fact_paths
-        if vault_frontmatter_id(path) in removed_ids
+    vault_mirror_ids = {
+        path: mirror_id
+        for path in vault_paths
+        if path != args.vault / "index.md"
+        if (mirror_id := vault_frontmatter_id(path))
+    }
+    vault_mirror_files = {
+        path for path, mirror_id in vault_mirror_ids.items()
+        if mirror_id in removed_ids
     }
     kept_events, removed_events = purge_events(
         args.events, event_ids, patterns, other_prefixes, bool(channel_prefixes))
     note_rewrites, removed_note_blocks, removed_note_lines, note_unmatched = purge_text_tree(
         args.notes_dir, patterns, other_prefixes, bool(channel_prefixes))
     vault_rewrites, removed_vault_blocks, removed_vault_lines, vault_unmatched = purge_text_tree(
-        args.vault, patterns, other_prefixes, bool(channel_prefixes), vault_fact_paths)
+        args.vault, patterns, other_prefixes, bool(channel_prefixes), set(vault_mirror_ids))
     vault_rewrites.update(purge_vault_backlinks(
-        args.vault, vault_fact_files, vault_rewrites, vault_fact_paths))
+        args.vault, vault_mirror_files, vault_rewrites, vault_mirror_files))
     unmatched_openers = dict(note_unmatched)
     for path, count in vault_unmatched.items():
         unmatched_openers[path] = unmatched_openers.get(path, 0) + count
@@ -455,7 +460,7 @@ def run(argv: list[str] | None = None) -> int:
             secure_write_text(args.events, kept_events, encoding="utf-8")
         for path, text in {**note_rewrites, **vault_rewrites}.items():
             secure_write_text(path, text, encoding="utf-8")
-        for path in vault_fact_files:
+        for path in vault_mirror_files:
             path.unlink()
         if kept_insights is not None and removed_insights:
             secure_write_json(insights_path, kept_insights, indent=2, default=str)
@@ -468,7 +473,7 @@ def run(argv: list[str] | None = None) -> int:
         f"{'would remove' if not args.apply else 'removed'} "
         f"{removed_facts} fact(s), {removed_events} event(s), "
         f"{removed_note_blocks} note block(s), {removed_vault_blocks} vault block(s), "
-        f"{len(vault_fact_files)} vault fact file(s), "
+        f"{len(vault_mirror_files)} vault mirror file(s), "
         f"{sum(unmatched_openers.values())} unmatched opener(s), "
         f"{removed_note_lines} note line(s), {removed_vault_lines} vault line(s), "
         f"{'all' if removed_vectors < 0 else removed_vectors} vector(s), "

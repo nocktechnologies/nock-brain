@@ -228,12 +228,22 @@ def test_purge_removes_vault_fact_mirrors_by_frontmatter_id(tmp_path):
         "\ufeff---\nid: \"removed\" # mirrored fact id\n---\n\n" + truncated_wrapper,
         encoding="utf-8",
     )
+    removed_decision_mirror = vault / "decisions" / "2026-09-27-decision-removed.md"
+    removed_decision_mirror.write_text(
+        "---\nid: removed\n---\n\n" + truncated_wrapper,
+    )
     kept_mirror = facts_dir / "2026-09-27-keep.md"
     kept_mirror_text = "---\nid: keep\n---\n\n" + truncated_wrapper
     kept_mirror.write_text(kept_mirror_text)
     filename_only_mirror = facts_dir / "2026-09-27-removed-copy.md"
     filename_only_text = "---\nid: other\n---\n\n" + truncated_wrapper
     filename_only_mirror.write_text(filename_only_text)
+    kept_decision_mirror = vault / "decisions" / "2026-09-27-keep.md"
+    kept_decision_text = "---\nid: keep\n---\n\nA retained decision mirror.\n"
+    kept_decision_mirror.write_text(kept_decision_text)
+    index = vault / "index.md"
+    index_text = "---\nid: removed\n---\n\nVault index must remain.\n"
+    index.write_text(index_text)
     invalid_utf8_mirror = facts_dir / "2026-09-27-invalid.md"
     invalid_utf8_mirror.write_bytes(b"---\nid: removed\n---\n\xff")
     agent_note = vault / "agents" / "mira.md"
@@ -241,6 +251,7 @@ def test_purge_removes_vault_fact_mirrors_by_frontmatter_id(tmp_path):
         "## Mentioned in\n"
         "- [[2026-09-27-removed]]\n"
         "- [[facts/2026-09-27-removed]]\n"
+        "- [[decisions/2026-09-27-decision-removed]]\n"
         "- [[2026-09-27-keep]]\n"
     )
     decision_note = vault / "decisions" / "removed.md"
@@ -253,7 +264,10 @@ def test_purge_removes_vault_fact_mirrors_by_frontmatter_id(tmp_path):
     prose_note.write_text(prose_text)
     (vault / "review").mkdir()
     unrelated_note = vault / "review" / "unrelated.md"
-    unrelated_text = "- [[2026-09-27-removed]]\n"
+    unrelated_text = (
+        "- [[2026-09-27-removed]]\n"
+        "- [[decisions/2026-09-27-decision-removed]]\n"
+    )
     unrelated_note.write_text(unrelated_text)
 
     argv = [
@@ -268,7 +282,7 @@ def test_purge_removes_vault_fact_mirrors_by_frontmatter_id(tmp_path):
     )
 
     assert "would remove 1 fact" in dry_run.stdout
-    assert "1 vault fact file(s)" in dry_run.stdout
+    assert "2 vault mirror file(s)" in dry_run.stdout
     assert "0 unmatched opener(s)" in dry_run.stdout
     assert removed_mirror.exists(), "dry-run must not delete the vault mirror"
 
@@ -277,17 +291,21 @@ def test_purge_removes_vault_fact_mirrors_by_frontmatter_id(tmp_path):
     )
 
     assert not removed_mirror.exists()
+    assert not removed_decision_mirror.exists()
     assert kept_mirror.exists()
     assert kept_mirror.read_text() == kept_mirror_text
     assert filename_only_mirror.read_text() == filename_only_text
+    assert kept_decision_mirror.read_text() == kept_decision_text
+    assert index.read_text() == index_text
     assert invalid_utf8_mirror.exists()
     assert "2026-09-27-removed" not in agent_note.read_text()
+    assert "2026-09-27-decision-removed" not in agent_note.read_text()
     assert "2026-09-27-keep" in agent_note.read_text()
     assert "2026-09-27-removed" not in decision_note.read_text()
     assert "Keep this decision-note context." in decision_note.read_text()
     assert prose_note.read_text() == prose_text
-    assert unrelated_note.read_text() == unrelated_text
-    assert "1 vault fact file(s)" in applied.stdout
+    assert unrelated_note.read_text() == "- [[2026-09-27-removed]]\n"
+    assert "2 vault mirror file(s)" in applied.stdout
 
 
 def test_purge_content_prefix_removes_complete_single_line_note_wrapper(tmp_path):
