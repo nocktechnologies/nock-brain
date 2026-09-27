@@ -107,6 +107,8 @@ def test_is_structural_noise_flags_extended_dump_families(scrub):
     assert scrub.is_structural_noise("===== N8322 =====") is True
     assert scrub.is_structural_noise("<task-notification>\n<task-id>abc</task-id>") is True
     assert scrub.is_structural_noise("<system-reminder>\nbackground context") is True
+    assert scrub.is_structural_noise('<channel source="resident-channel">wrapped body') is True
+    assert scrub.is_structural_noise("[BEGIN UNTRUSTED] wrapped body") is True
 
 
 # (g) the [TAG] escape hatch: a genuine tagged fact is spared even if its body

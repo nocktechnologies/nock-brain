@@ -64,6 +64,73 @@ def test_user_pasted_secret_is_scrubbed_without_path_or_tool_match(ingest_jsonl,
     assert result["stats"]["secrets_redacted"] == 1
 
 
+def test_user_channel_wrapper_keeps_the_human_body(ingest_jsonl, refine_sessions, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    write_jsonl(transcript, [
+        {
+            "type": "user",
+            "sessionId": "s1",
+            "timestamp": "2026-09-27T01:00:00Z",
+            "message": {
+                "role": "user",
+                "content": (
+                    '<channel source="resident-channel">\n'
+                    '{"attestation":{"kind":"channel"}}\n'
+                    "[BEGIN UNTRUSTED]\n"
+                    "[DIRECTIVE] Kevin asked for daily curated-memory ingest.\n"
+                    "[END UNTRUSTED]\n"
+                    "</channel>"
+                ),
+            },
+        }
+    ])
+
+    result = ingest_jsonl.ingest_file(transcript)
+
+    assert [event["content"] for event in result["events"]] == [
+        "[DIRECTIVE] Kevin asked for daily curated-memory ingest."
+    ]
+    fact = refine_sessions.fact_from_event(result["events"][0])
+    assert fact is not None
+    assert fact["content"] == result["events"][0]["content"]
+
+
+def test_user_channel_wrapper_without_human_body_is_dropped(ingest_jsonl, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    write_jsonl(transcript, [
+        {
+            "type": "user",
+            "sessionId": "s1",
+            "timestamp": "2026-09-27T01:00:00Z",
+            "message": {
+                "role": "user",
+                "content": '<channel source="resident-channel">{"attestation":{}}</channel>',
+            },
+        }
+    ])
+
+    result = ingest_jsonl.ingest_file(transcript)
+
+    assert result["events"] == []
+
+
+def test_assistant_channel_wrapper_is_not_unwrapped(ingest_jsonl, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    wrapped = '<channel source="resident-channel">{"attestation":{}}assistant text</channel>'
+    write_jsonl(transcript, [
+        {
+            "type": "assistant",
+            "sessionId": "s1",
+            "timestamp": "2026-09-27T01:00:00Z",
+            "message": {"role": "assistant", "content": wrapped},
+        }
+    ])
+
+    result = ingest_jsonl.ingest_file(transcript)
+
+    assert [event["content"] for event in result["events"]] == [wrapped]
+
+
 def test_telegram_bot_token_embedded_in_url_is_scrubbed(ingest_jsonl, tmp_path):
     transcript = tmp_path / "session.jsonl"
     token = "8913101123:" + "AAExampleTelegramBotTokenSecret"

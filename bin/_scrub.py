@@ -18,6 +18,7 @@ _STRUCTURAL_NOISE_PREFIXES = (
     '[{"',
     "```",
     "<command-",
+    "<channel ",
     "<task-notification",
     "<system-reminder",
 )
@@ -68,9 +69,9 @@ def is_structural_noise(content: str) -> bool:
     fact like "[CORRECTION] ...CRM_AGENT_NAME=mira was passing
     author_surface=..." must be spared, so we never match 'CRM_AGENT_NAME='
     anywhere in the text, and a leading [TAG] is an explicit escape hatch.
-    The exception is JUDGE_PROMPT_MARKERS (N10052): a full judge-template
-    sentence anywhere in the text — [TAG]ged or not — is always noise, since
-    no genuine fact embeds the tooling's own prompts verbatim.
+    The exceptions are JUDGE_PROMPT_MARKERS (N10052), and the
+    ``[BEGIN UNTRUSTED`` framing prefix: either is always noise even when it
+    resembles a [TAG], since neither is durable fact content.
     Empty/whitespace returns False.
     """
     if not content:
@@ -80,6 +81,8 @@ def is_structural_noise(content: str) -> bool:
         return False
     # Judge-template check outranks the [TAG] escape (see JUDGE_PROMPT_MARKERS).
     if any(marker in stripped for marker in JUDGE_PROMPT_MARKERS):
+        return True
+    if stripped.startswith("[BEGIN UNTRUSTED"):
         return True
     if _GENUINE_TAG_RE.match(stripped):
         return False

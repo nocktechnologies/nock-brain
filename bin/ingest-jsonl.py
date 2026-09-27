@@ -90,6 +90,33 @@ def json_text(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
+def unwrap_channel_text(text: str) -> str:
+    """Remove a resident-channel envelope while retaining its human body."""
+    stripped = text.lstrip()
+    if not stripped.startswith("<channel "):
+        return text
+    _, closing, body = stripped.partition(">")
+    if not closing:
+        return text
+    body = body.lstrip()
+    if body.startswith("{"):
+        try:
+            _, end = json.JSONDecoder().raw_decode(body)
+        except json.JSONDecodeError:
+            pass
+        else:
+            body = body[end:].lstrip()
+    if body.endswith("</channel>"):
+        body = body[: -len("</channel>")].rstrip()
+    if body.startswith("[BEGIN UNTRUSTED"):
+        _, closing, body = body.partition("]")
+        if closing:
+            body = body.lstrip()
+    if body.endswith("[END UNTRUSTED]"):
+        body = body[: -len("[END UNTRUSTED]")]
+    return body.strip()
+
+
 def _matches_any(value: str, patterns: list[str]) -> bool:
     cleaned = value.strip().strip("'\"")
     candidates = {cleaned, cleaned.lstrip("/"), cleaned.removeprefix("./"), Path(cleaned).name}
@@ -196,6 +223,8 @@ def line_events(
             part_type = part.get("type", "text")
             if part_type == "text":
                 text = json_text(part.get("text", ""))
+                if actor == "user":
+                    text = unwrap_channel_text(text)
                 if text:
                     events.append(
                         make_event(path, line_number, raw, actor, "text", "message", text, stats=stats)

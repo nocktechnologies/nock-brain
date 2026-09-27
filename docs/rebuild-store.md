@@ -61,3 +61,53 @@ launchctl load ~/Library/LaunchAgents/io.nocktechnologies.nockbrain-rebuild.plis
 ```
 
 A weekly run keeps the live store fresh and signed without any manual step.
+
+## Channel-wrapper remediation (operator-run)
+
+After the ingest fix is deployed to the checkout that owns the live store,
+first preview the channel-wrapper purge, then apply it only after reviewing the
+match count. Rebuild synthesized insights after the applied purge:
+
+```bash
+python3 bin/purge-fact.py --pattern '<channel source='
+python3 bin/purge-fact.py --pattern '<channel source=' --apply
+run-brain-synthesize.sh
+```
+
+This repository does not run those commands against a live store. In
+particular, updating a source checkout does not update any separately pinned
+runtime checkout.
+
+## Daily curated-memory timer (operator-installed)
+
+Curated Markdown memory can be re-ingested daily with user-level systemd units.
+Save the following templates with real absolute paths substituted; review and
+install or enable them as an operator decision, not as part of this repository.
+
+`~/.config/systemd/user/nockbrain-curated-memory.service`:
+
+```ini
+[Unit]
+Description=Ingest curated NockBrain memory
+
+[Service]
+Type=oneshot
+WorkingDirectory=/absolute/path/to/nock-brain
+Environment=NOCKBRAIN_CURATED_DIR=/absolute/path/to/curated-memory
+ExecStart=/usr/bin/python3 /absolute/path/to/nock-brain/bin/ingest-curated-memory.py
+```
+
+`~/.config/systemd/user/nockbrain-curated-memory.timer`:
+
+```ini
+[Unit]
+Description=Run curated NockBrain memory ingest daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=nockbrain-curated-memory.service
+
+[Install]
+WantedBy=timers.target
+```
