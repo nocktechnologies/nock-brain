@@ -20,11 +20,13 @@ _STRUCTURAL_NOISE_PREFIXES = (
     "<command-",
     "<task-notification",
     "<system-reminder",
+    "<channel ",
+    "[BEGIN UNTRUSTED",
 )
-# A leading [UPPER-CASE TAG] marks a synthesized/tagged fact. Checked FIRST as
-# an escape hatch so no broad matcher below can ever drop a genuine tagged fact
-# (e.g. an [INSIGHT] note that happened to open with '==='). Note '[{"' is NOT
-# matched here ('{' is not A-Z), so JSON-array noise is still caught below.
+# A leading [UPPER-CASE TAG] marks a synthesized/tagged fact. It is an escape
+# hatch after the exact structural prefixes, so a transport fence such as
+# '[BEGIN UNTRUSTED' cannot evade the guard by resembling a tag. Note '[{"' is
+# NOT matched here ('{' is not A-Z), so JSON-array noise is still caught below.
 _GENUINE_TAG_RE = re.compile(r"^\[[A-Z][A-Z0-9 _/-]*\]")
 
 # N10052: the nightly LLM judges' own prompt templates. The judges run via
@@ -58,9 +60,8 @@ def is_structural_noise(content: str) -> bool:
     classification. It is importable by purge-fact.py to sweep pre-existing
     noise with the identical rule.
 
-    Content is structural noise IFF content.lstrip(), and it is NOT a [TAG]ged
-    fact, either:
-      - startswith one of _STRUCTURAL_NOISE_PREFIXES, OR
+    Content is structural noise IFF content.lstrip() starts with one of the
+    exact _STRUCTURAL_NOISE_PREFIXES, or (when it is not a [TAG]ged fact):
       - matches ^={3,}  (=== ... bus/shell/dump headers), OR
       - matches ^\\d+\\t (cat -n line-numbered file dumps).
 
@@ -81,10 +82,10 @@ def is_structural_noise(content: str) -> bool:
     # Judge-template check outranks the [TAG] escape (see JUDGE_PROMPT_MARKERS).
     if any(marker in stripped for marker in JUDGE_PROMPT_MARKERS):
         return True
-    if _GENUINE_TAG_RE.match(stripped):
-        return False
     if stripped.startswith(_STRUCTURAL_NOISE_PREFIXES):
         return True
+    if _GENUINE_TAG_RE.match(stripped):
+        return False
     if _EQUALS_DUMP_RE.match(stripped) or _LINE_NUMBERED_DUMP_RE.match(stripped):
         return True
     return False

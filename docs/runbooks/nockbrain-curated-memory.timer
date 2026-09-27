@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily curated NockBrain memory ingest
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+Unit=nockbrain-curated-memory.service
+
+[Install]
+WantedBy=timers.target

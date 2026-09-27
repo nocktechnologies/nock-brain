@@ -158,6 +158,13 @@ def facts_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return facts
 
 
+def render_fact_bullet(fact: dict[str, Any]) -> str:
+    """Render one source-fact entry in a session note's ``## Facts`` section."""
+    evidence = (fact.get("evidence") or [{}])[0]
+    anchor = f"{fact.get('source_file', '')}:{evidence.get('line', '')}"
+    return f"- [{str(fact.get('kind') or '').upper()}] {fact.get('content') or ''} ({anchor})"
+
+
 def render_session_note(events: list[dict[str, Any]]) -> str:
     if not events:
         return "# Session unknown\n"
@@ -168,9 +175,7 @@ def render_session_note(events: list[dict[str, Any]]) -> str:
 
     if facts:
         for fact in facts:
-            evidence = fact.get("evidence", [{}])[0]
-            anchor = f"{fact.get('source_file', '')}:{evidence.get('line', '')}"
-            lines.append(f"- [{fact['kind'].upper()}] {fact['content']} ({anchor})")
+            lines.append(render_fact_bullet(fact))
     else:
         lines.append("- No durable facts extracted.")
 

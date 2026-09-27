@@ -9,7 +9,9 @@ Dry-run by default. Use --apply to rewrite files.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,12 +22,14 @@ if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
 from _embed import DEFAULT_SIDECAR, EmbedUnavailable, load_sidecar, save_sidecar
-from _facts import TOMBSTONES_FILENAME
+from _channel_frame import CHANNEL_FRAME_RE
+from _facts import TOMBSTONES_FILENAME, load_jsonl_ids
 from _store import FILE_MODE, secure_write_json, secure_write_text
 from _storeback import resolve_store
 from _verify_cache import cache_path_for, unlink_for_store
 
 DEFAULT_ROOT = Path.home() / ".nock-brain"
+ENTITY_BACKLINK_DIRS = {"agents", "projects", "people", "concepts"}
 
 
 def matches_text(text: str, patterns: list[str]) -> bool:
@@ -33,15 +37,25 @@ def matches_text(text: str, patterns: list[str]) -> bool:
     return any(pattern.lower() in haystack for pattern in patterns if pattern)
 
 
-def fact_matches(fact: dict[str, Any], fact_id: str, patterns: list[str]) -> bool:
-    """Match id exactly, or a pattern against id/content only.
+def starts_with_prefix(text: str, prefixes: list[str] | None) -> bool:
+    return any(text.lstrip().startswith(prefix) for prefix in prefixes or [] if prefix)
+
+
+def fact_matches(fact: dict[str, Any], fact_id: str, patterns: list[str],
+                 content_prefixes: list[str] | None = None) -> bool:
+    """Match id exactly, a literal pattern, or a content prefix.
 
     Patterns must not search the whole JSON dump: attestation signatures are
-    hex and a substring match would purge unrelated facts (N10028).
+    hex and a substring match would purge unrelated facts (N10028). Prefixes
+    are content-only, so a runbook can remove structural wrappers without
+    matching an ordinary fact that merely mentions the marker.
     """
     if fact_id and fact.get("id") == fact_id:
         return True
-    haystack = f"{fact.get('id', '')}\n{fact.get('content', '')}"
+    content = str(fact.get("content", ""))
+    if starts_with_prefix(content, content_prefixes):
+        return True
+    haystack = f"{fact.get('id', '')}\n{content}"
     return matches_text(haystack, patterns)
 
 
@@ -55,15 +69,36 @@ def fact_event_ids(facts: list[dict[str, Any]]) -> set[str]:
     return event_ids
 
 
-def purge_facts(path: Path, fact_id: str, patterns: list[str]) -> tuple[list[dict[str, Any]], int]:
+def load_refine_sessions():
+    """Load the hyphenated session-refinement module for its note renderer."""
+    path = BIN_DIR / "refine-sessions.py"
+    spec = importlib.util.spec_from_file_location("refine_sessions", path)
+    if not spec or not spec.loader:
+        raise RuntimeError(f"Unable to load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def rendered_session_fact_bullets(facts: list[dict[str, Any]]) -> set[str]:
+    """Return the exact session-note bullets for the facts being purged."""
+    refine_sessions = load_refine_sessions()
+    return {refine_sessions.render_fact_bullet(fact) for fact in facts}
+
+
+def purge_facts(path: Path, fact_id: str, patterns: list[str],
+                content_prefixes: list[str] | None = None) -> tuple[list[dict[str, Any]], int]:
     store = resolve_store(path)
     facts = store.load_facts()
-    removed = [fact for fact in facts if fact_matches(fact, fact_id, patterns)]
+    removed = [fact for fact in facts if fact_matches(
+        fact, fact_id, patterns, content_prefixes)]
     kept = [fact for fact in facts if fact not in removed]
     return kept, len(removed)
 
 
-def purge_events(path: Path, event_ids: set[str], patterns: list[str]) -> tuple[str, int]:
+def purge_events(path: Path, event_ids: set[str], patterns: list[str],
+                 content_prefixes: list[str] | None = None,
+                 channel_prefixes: list[str] | None = None) -> tuple[str, int]:
     if not path.exists():
         return "", 0
     kept: list[str] = []
@@ -73,7 +108,15 @@ def purge_events(path: Path, event_ids: set[str], patterns: list[str]) -> tuple[
             drop = False
             try:
                 event = json.loads(line)
-                drop = str(event.get("id", "")) in event_ids
+                content = str(event.get("content", ""))
+                drop = (
+                    str(event.get("id", "")) in event_ids
+                    or (
+                        any(starts_with_prefix(match.group("opening_tag"), channel_prefixes)
+                            for match in CHANNEL_FRAME_RE.finditer(content))
+                    )
+                    or starts_with_prefix(content, content_prefixes)
+                )
             except json.JSONDecodeError:
                 drop = False
             if not drop:
@@ -85,22 +128,218 @@ def purge_events(path: Path, event_ids: set[str], patterns: list[str]) -> tuple[
     return "".join(kept), removed
 
 
-def purge_text_tree(root: Path, patterns: list[str]) -> tuple[dict[Path, str], int]:
+def purge_text_tree(
+    root: Path,
+    patterns: list[str],
+    content_prefixes: list[str] | None = None,
+    channel_prefixes: list[str] | None = None,
+    skip_paths: set[Path] | None = None,
+    preserve_session_fact_sections: bool = False,
+    session_bullets: set[str] | None = None,
+) -> tuple[dict[Path, str], int, int, dict[Path, int]]:
     if not root.exists():
-        return {}, 0
+        return {}, 0, 0, {}
     rewrites: dict[Path, str] = {}
-    removed = 0
+    removed_blocks = 0
+    removed_lines = 0
+    unmatched_openers: dict[Path, int] = {}
+    skipped = skip_paths or set()
     paths = [root] if root.is_file() else sorted(path for path in root.rglob("*") if path.is_file())
     for path in paths:
+        if path in skipped:
+            continue
         try:
-            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
+            original_text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        kept = [line for line in lines if not matches_text(line, patterns)]
-        removed += len(lines) - len(kept)
-        if len(kept) != len(lines):
-            rewrites[path] = "".join(kept)
-    return rewrites, removed
+        text = original_text
+        fact_ranges = session_facts_ranges(original_text, session_bullets) if preserve_session_fact_sections else []
+        frame_matches = [
+            match for match in CHANNEL_FRAME_RE.finditer(original_text)
+            if starts_with_prefix(match.group("opening_tag"), channel_prefixes)
+            if not any(spans_overlap((match.start(), match.end()), fact_range)
+                       for fact_range in fact_ranges)
+        ] if channel_prefixes else []
+        if channel_prefixes:
+            matched_spans = [(match.start(), match.end()) for match in frame_matches]
+            unmatched = sum(
+                not any(start <= opener.start() < end for start, end in matched_spans)
+                for opener in re.finditer(r"(?m)^[ \t]*<channel[^\r\n]*", original_text)
+                if starts_with_prefix(opener.group(), channel_prefixes)
+                if not any(start <= opener.start() < end for start, end in fact_ranges)
+            )
+            if unmatched:
+                unmatched_openers[path] = unmatched
+        if frame_matches:
+            kept: list[str] = []
+            cursor = 0
+            for match in frame_matches:
+                kept.append(original_text[cursor:match.start()])
+                cursor = match.end()
+            kept.append(original_text[cursor:])
+            text = "".join(kept)
+            removed_blocks += len(frame_matches)
+        lines = text.splitlines(keepends=True)
+        kept: list[str] = []
+        fact_ranges = session_facts_ranges(text, session_bullets) if preserve_session_fact_sections else []
+        offset = 0
+        for line in lines:
+            in_facts = (
+                preserve_session_fact_sections and without_line_ending(line) == "## Facts"
+            ) or any(start <= offset < end for start, end in fact_ranges)
+            if (not in_facts and
+                    (starts_with_prefix(line, content_prefixes) or matches_text(line, patterns))):
+                removed_lines += 1
+            else:
+                kept.append(line)
+            offset += len(line)
+        rewritten = "".join(kept)
+        if rewritten != original_text:
+            rewrites[path] = rewritten
+    return rewrites, removed_blocks, removed_lines, unmatched_openers
+
+
+def without_line_ending(line: str) -> str:
+    if line.endswith("\r\n"):
+        return line[:-2]
+    if line.endswith(("\n", "\r")):
+        return line[:-1]
+    return line
+
+
+def session_facts_ranges(text: str, bullets: set[str] | None = None) -> list[tuple[int, int]]:
+    """Return the body spans of all exact ``## Facts`` sections in a note."""
+    ranges: list[tuple[int, int]] = []
+    bullet_spans = [
+        match.span() for bullet in bullets or set()
+        for match in re.finditer(r"(?m)^" + re.escape(bullet) + r"(?=\r?\n|\Z)", text)
+    ]
+    headings = [
+        match for match in re.finditer(r"(?m)^## [^\r\n]+\r?$", text)
+        if not any(start <= match.start() < end for start, end in bullet_spans)
+    ]
+    for index, header in enumerate(headings):
+        if without_line_ending(header.group()) != "## Facts":
+            continue
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+        ranges.append((header.end(), end))
+    return ranges
+
+
+def spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return left[0] < right[1] and right[0] < left[1]
+
+
+def remove_session_fact_bullets(text: str, bullets: set[str]) -> tuple[str, int]:
+    """Remove only exact renderer-produced bullets inside ``## Facts`` sections."""
+    if not bullets:
+        return text, 0
+    parts: list[str] = []
+    cursor = 0
+    removed = 0
+    for start, end in session_facts_ranges(text, bullets):
+        parts.append(text[cursor:start])
+        section = text[start:end]
+        for bullet in sorted(bullets, key=len, reverse=True):
+            section, count = re.subn(
+                r"(?m)^" + re.escape(bullet) + r"(?=\r?\n|\Z)", "", section)
+            removed += count
+        parts.append(section)
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts), removed
+
+
+def purge_session_fact_bullets(
+    root: Path,
+    bullets: set[str],
+    rewrites: dict[Path, str],
+) -> tuple[dict[Path, str], int]:
+    """Extend note rewrites with exact source fact-bullet removals."""
+    if not root.exists() or not bullets:
+        return rewrites, 0
+    updated = dict(rewrites)
+    removed = 0
+    for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
+        original_text = updated.get(path)
+        if original_text is None:
+            try:
+                original_text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+        rewritten, count = remove_session_fact_bullets(original_text, bullets)
+        if rewritten != original_text:
+            updated[path] = rewritten
+            removed += count
+    return updated, removed
+
+
+def vault_frontmatter_id(path: Path) -> str:
+    """Read a per-fact vault mirror's id from its leading frontmatter."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    frontmatter = re.match(
+        r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", text, re.DOTALL)
+    if not frontmatter:
+        return ""
+    match = re.search(r"(?m)^id:[ \t]*(.*?)[ \t]*$", frontmatter.group(1))
+    if not match:
+        return ""
+    value = match.group(1)
+    if value[:1] in {"'", '"'}:
+        quote = value[:1]
+        closing = value.find(quote, 1)
+        trailing = value[closing + 1:].strip() if closing >= 0 else ""
+        if closing < 0 or trailing and not trailing.startswith("#"):
+            return ""
+        return value[1:closing]
+    return value.split(" #", 1)[0].rstrip()
+
+
+def purge_vault_backlinks(
+    vault: Path,
+    mirror_files: set[Path],
+    rewrites: dict[Path, str],
+    skip_paths: set[Path],
+) -> dict[Path, str]:
+    """Remove vault lines that link to deleted vault mirror files."""
+    if not mirror_files or not vault.is_dir():
+        return {}
+    targets: set[str] = set()
+    for path in mirror_files:
+        relative = path.relative_to(vault).with_suffix("").as_posix()
+        targets.update((path.stem, relative, f"{relative}.md"))
+    explicit_targets = {
+        target for target in targets
+        if "/" in target or target.endswith(".md")
+    }
+    backlink_rewrites: dict[Path, str] = {}
+    for path in sorted(candidate for candidate in vault.rglob("*") if candidate.is_file()):
+        if path in skip_paths:
+            continue
+        original_text = rewrites.get(path)
+        if original_text is None:
+            try:
+                original_text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+        list_targets = targets if path.parent.name in ENTITY_BACKLINK_DIRS else explicit_targets
+        removable_lines = {f"- [[{target}]]" for target in list_targets}
+        if path.parent.name == "decisions":
+            removable_lines.update(
+                f"See [[{target}]] for the full fact note." for target in targets)
+        kept = []
+        for line in original_text.splitlines(keepends=True):
+            stripped = line.strip()
+            if stripped in removable_lines:
+                continue
+            kept.append(line)
+        rewritten = "".join(kept)
+        if rewritten != original_text:
+            backlink_rewrites[path] = rewritten
+    return backlink_rewrites
 
 
 def purge_sidecar(path: Path, removed_ids: set[str], apply: bool) -> tuple[str, int]:
@@ -235,31 +474,74 @@ def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Purge fact material from local NockBrain stores")
     parser.add_argument("fact_id", nargs="?", default="")
     parser.add_argument("--pattern", action="append", default=[])
+    parser.add_argument("--content-prefix", action="append", default=[],
+                        help="Match facts whose content starts with this literal prefix")
     parser.add_argument("--facts", type=Path, default=DEFAULT_ROOT / "facts.json")
     parser.add_argument("--events", type=Path, default=DEFAULT_ROOT / "events.jsonl")
     parser.add_argument("--notes-dir", type=Path, default=DEFAULT_ROOT / "sessions")
     parser.add_argument("--vault", type=Path, default=DEFAULT_ROOT / "vault")
     parser.add_argument("--sidecar", type=Path, default=DEFAULT_SIDECAR)
     parser.add_argument("--apply", action="store_true", help="Rewrite files; otherwise dry-run only")
+    parser.add_argument("--dry-run", dest="apply", action="store_false", help="Report matches without writing")
     args = parser.parse_args(argv)
 
-    if not args.fact_id and not args.pattern:
-        parser.error("provide a fact_id or --pattern")
+    if not args.fact_id and not args.pattern and not args.content_prefix:
+        parser.error("provide a fact_id, --pattern, or --content-prefix")
 
     store = resolve_store(args.facts)
-    kept_facts, removed_facts = purge_facts(args.facts, args.fact_id, args.pattern)
+    kept_facts, removed_facts = purge_facts(
+        args.facts, args.fact_id, args.pattern, args.content_prefix)
     removed_fact_records = [
         fact for fact in store.load_facts()
-        if fact_matches(fact, args.fact_id, args.pattern)
+        if fact_matches(fact, args.fact_id, args.pattern, args.content_prefix)
     ]
     patterns = list(args.pattern)
-    patterns.extend(str(fact.get("content", "")) for fact in removed_fact_records)
+    for fact in removed_fact_records:
+        content = str(fact.get("content", ""))
+        if (
+            args.fact_id and fact.get("id") == args.fact_id
+        ) or matches_text(f"{fact.get('id', '')}\n{content}", args.pattern):
+            patterns.append(content)
     event_ids = fact_event_ids(removed_fact_records)
-    kept_events, removed_events = purge_events(args.events, event_ids, patterns)
-    note_rewrites, removed_note_lines = purge_text_tree(args.notes_dir, patterns)
-    vault_rewrites, removed_vault_lines = purge_text_tree(args.vault, patterns)
+    channel_prefixes = [
+        prefix for prefix in args.content_prefix
+        if prefix.lstrip().startswith("<channel")
+    ]
+    other_prefixes = [
+        prefix for prefix in args.content_prefix
+        if prefix not in channel_prefixes
+    ]
+    vault_paths = {
+        path for path in args.vault.rglob("*") if path.is_file()
+    } if args.vault.is_dir() else set()
     removed_ids = {str(fact.get("id")) for fact in removed_fact_records
                    if fact.get("id")}
+    tombstoned_ids = load_jsonl_ids(args.facts.parent / TOMBSTONES_FILENAME, "id")
+    vault_mirror_ids = {
+        path: mirror_id
+        for path in vault_paths
+        if path != args.vault / "index.md"
+        if (mirror_id := vault_frontmatter_id(path))
+    }
+    vault_mirror_files = {
+        path for path, mirror_id in vault_mirror_ids.items()
+        if mirror_id in removed_ids or mirror_id in tombstoned_ids
+    }
+    kept_events, removed_events = purge_events(
+        args.events, event_ids, patterns, other_prefixes, channel_prefixes)
+    session_bullets = rendered_session_fact_bullets(removed_fact_records)
+    note_rewrites, removed_note_blocks, removed_note_lines, note_unmatched = purge_text_tree(
+        args.notes_dir, patterns, other_prefixes, channel_prefixes,
+        preserve_session_fact_sections=True, session_bullets=session_bullets)
+    note_rewrites, removed_session_fact_bullets = purge_session_fact_bullets(
+        args.notes_dir, session_bullets, note_rewrites)
+    vault_rewrites, removed_vault_blocks, removed_vault_lines, vault_unmatched = purge_text_tree(
+        args.vault, patterns, other_prefixes, channel_prefixes, set(vault_mirror_ids))
+    vault_rewrites.update(purge_vault_backlinks(
+        args.vault, vault_mirror_files, vault_rewrites, vault_mirror_files))
+    unmatched_openers = dict(note_unmatched)
+    for path, count in vault_unmatched.items():
+        unmatched_openers[path] = unmatched_openers.get(path, 0) + count
     sidecar_note, removed_vectors = purge_sidecar(
         args.sidecar, removed_ids, args.apply)
     insights_path = args.facts.parent / "insights.json"
@@ -270,6 +552,7 @@ def run(argv: list[str] | None = None) -> int:
 
     cache_path = cache_path_for(store.freshness_path)
     cache_note = ""
+    mirror_unlink_failures: list[tuple[Path, OSError]] = []
     if args.apply:
         # Rewrite the store first so a concurrent recall that loaded the old
         # facts.json cannot save() the sidecar back: save() re-stats and skips
@@ -298,21 +581,34 @@ def run(argv: list[str] | None = None) -> int:
             secure_write_json(insights_path, kept_insights, indent=2, default=str)
         if kept_graph is not None and removed_graph:
             secure_write_json(graph_path, kept_graph, indent=2, default=str)
+        for path in sorted(vault_mirror_files):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                mirror_unlink_failures.append((path, exc))
     elif removed_facts and cache_path.exists():
         cache_note = f"would delete verification cache {cache_path}"
 
     print(
         f"{'would remove' if not args.apply else 'removed'} "
         f"{removed_facts} fact(s), {removed_events} event(s), "
+        f"{removed_note_blocks} note block(s), {removed_vault_blocks} vault block(s), "
+        f"{len(vault_mirror_files) - len(mirror_unlink_failures)} vault mirror file(s), "
+        f"{sum(unmatched_openers.values())} unmatched opener(s), "
+        f"{removed_session_fact_bullets} session fact bullet(s), "
         f"{removed_note_lines} note line(s), {removed_vault_lines} vault line(s), "
         f"{'all' if removed_vectors < 0 else removed_vectors} vector(s), "
         f"{removed_insights} insight(s), {removed_graph} graph item(s)"
     )
+    for path, count in sorted(unmatched_openers.items()):
+        print(f"{count} unmatched opener(s): {path}")
+    for path, error in mirror_unlink_failures:
+        print(f"failed to delete vault mirror {path}: {error}")
     if sidecar_note:
         print(sidecar_note, file=sys.stderr)
     if cache_note:
         print(cache_note, file=sys.stderr)
-    return 0
+    return 1 if mirror_unlink_failures else 0
 
 
 def main() -> int:

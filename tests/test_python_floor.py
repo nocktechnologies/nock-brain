@@ -100,7 +100,7 @@ def test_hook_reachable_closure_is_acknowledged():
 def test_customer_hook_closure_is_acknowledged():
     # The opt-in adapter includes capture; it must not enlarge the fleet hook.
     assert [p.name for p in hook_reachable_modules(CUSTOMER_HOOK_ENTRYPOINTS)] == [
-        "_consumer_hooks.py", "_consumer_import.py", "_consumer_store.py",
+        "_channel_frame.py", "_consumer_hooks.py", "_consumer_import.py", "_consumer_store.py",
         "_dense_recall.py", "_embed.py", "_facts.py", "_graph_recall.py",
         "_projection.py", "_revoke.py", "_scrub.py", "_sign.py", "_store.py",
         "_storeback.py", "_verify_cache.py", "budget-recall.py", "consumer-hook.py",

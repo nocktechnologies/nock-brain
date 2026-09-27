@@ -32,6 +32,20 @@ API, and runs production BM25 preview in isolated scratch space (§12).
 Contract updates 2026-09-26: explicit customer identity, selected-file import,
 digest-bound proposal review and additive publication are isolated from fleet
 and Explorer writes (§13).
+Contract updates 2026-09-27: JSONL ingest unwraps human text from
+resident-channel receipts before event creation only when the BEGIN/END frame
+marker IDs match and the channel closes with no trailing text; malformed
+wrappers and resident-engine prompts cannot mint facts. The operator runbook purges historical wrapper
+facts and documents an uninstalled daily curated-memory timer. `purge-fact.py`
+`--content-prefix` matches only lstripped fact content, never fact ids or
+mid-sentence mentions; it also removes matching decoded JSONL events and
+complete channel blocks from session notes and vault files. The wrapper-purge runbook requires a quiesced
+fact-store, a timestamped backup, and post-synthesis verification because the
+purge replacement is not safe with concurrent writers.
+Contract updates 2026-09-27: purge removes a session-note fact only when its
+complete rendered bullet exactly matches a removed fact (including its anchor
+and truncation), preserving transcript history and near-matches. Review and
+vault outputs are regenerated from the cleaned sources.
 
 ---
 
@@ -151,6 +165,7 @@ never overwritten by a re-extracted `current` copy.
 | Module | Owns | Key API |
 |---|---|---|
 | `_store.py` | Filesystem permission discipline (0700/0600) | `secure_mkdir/write_text/write_json/copyfile`; `secure_write_json` **is** atomic (`secure_write_json_atomic`: mkstemp + chmod 0600 + os.replace); `secure_replace_text` / `secure_replace_bytes` (optional `before_replace` skip); `secure_write_text` stays non-atomic |
+| `_channel_frame.py` | Resident-channel envelope grammar shared by ingest and purge | `CHANNEL_FRAME_RE` (12-hex id-bound BEGIN/END frame; unanchored callers use `finditer`, ingest uses `fullmatch`) |
 | `_facts.py` | The v1 fact-record contract, defensive loading, bi-temporal validity, agent ownership | `REQUIRED_FACT_FIELDS`, `RECALL_ITEM_FIELDS`, `load_facts` (`on_unreadable` callback on I/O/parse failure), `fill_source_date` (v2 `source_time` → operational `source_date`), `fact_currently_valid` (v1 `valid_at`/`invalid_at` **and** v2 `valid_from`/`valid_to`), `fact_source` (default `"mira"`), `content_tokens`, `jaccard`, `malformed_fact_reason`, `load_jsonl_ids` / `TOMBSTONES_FILENAME` |
 | `_scrub.py` | Secret redaction + structural-noise discrimination, shared by EVERY extraction path | `scrub_secrets`, `is_structural_noise` (prefix rules + ONE substring exception: `JUDGE_PROMPT_MARKERS`, checked before the [TAG] escape — N10052), `SECRET_PATTERNS` |
 | `_sign.py` (977 L) | Both attestation contracts, keys, canonicalization, the verification state machine | `sign_facts` (per-fact routing), `sign_fact`, `sign_claim_fact_v2` (also fills `source_date` from `source_time`), `is_v2_claim_fact`, `verify_fact` → `VALID/TAMPERED/UNSIGNED/PARENT_SUSPECT`, `verify_facts(..., verified_cache=None)` (caching is a property of verification; the offline auditor passes None), `load_or_create_key`, `resolve_key_paths` / `resolve_signing_key` / `resolve_verify_key` (shared env-aware resolver: CLI > `NOCKBRAIN_SIGNING_KEY`/`_PUB` > store_dir/`~/.nock-brain`), `SigningKey.cache_key_material()` (Ed25519 private bytes or `None` if pub-only), verifier receipts |
@@ -218,7 +233,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 **Ingest / extract**
 | Script | Notes |
 |---|---|
-| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result` |
+| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame: `channel="engine"` is always dropped, JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result` |
 | `refine-sessions.py` | events → v1-compatible facts + session notes. 1,500-char content cap; `tool_use.input`/`tool_result.content` can never mint facts; reuses extract-facts' classification rules |
 | `extract-facts.py` | Markdown transcripts → facts. Tagged (0.9 conf) + inferred (0.7–0.85) patterns; fleet-activity kinds dropped at classification (#76); `machine_tag()` enforces a **closed machine enum, MINT-ONLY** (`KNOWN_MACHINES` = `mac-kevin`, `kevins-linux`; `fleet-02` retired at the 2026-08-27 seat migration and now raises). Retiring a name blocks new stamps only — facts already carrying a retired `machine` stay readable, verifiable and recallable, because `machine` is in neither attestation payload and no read path consults the enum. Never make it a read filter. **Writes the live store directly** — `propose-facts.py` is the gated twin |
 | `propose-facts.py` / `approve-proposals.py` | Same extraction into `proposed-facts.json`; approve releases to store (no re-sign), reject drops. Live store untouched until approval |
@@ -240,7 +255,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 | `consolidate-facts.py` | Cross-date near-dupes of durable kinds. Double-gated: `--execute --i-have-reviewed-the-manifest`, refuses on manifest drift. `correction` kind never touched. `--execute` sets `invalid_at` and mints signed revocation events (`record_supersessions`) — same contract as `dedup-facts` / `supersede-fact`. OPS RULE: re-run `sign-facts.py` after any execute |
 | `detect-contradictions.py` | Nightly stale-fact pass, propose-ONLY, never writes the store. Output actions are literal `supersede-fact.py` commands. `--llm` judge sees scrubbed content, prompt built from `JUDGE_PROMPT_MARKERS[1]` (N10052); failures degrade to borderline |
 | `supersede-fact.py` | The manual apply-target; mints a signed revocation event via `_revoke` |
-| `purge-fact.py` | HARD delete across facts/events/notes/vault/insights/graph/embedding-sidecar/verified-cache sidecar (GDPR-style). Dry-run default. `--apply` with **zero matches does not rewrite** the store (would drop loader-skipped malformed records). Pattern match is id+content only (not signature hex); for INSIGHTS the content match covers the N10052 contaminated-cluster shape (the "Most recent:" excerpt quotes the latest member verbatim); `theme` is deliberately NOT matched (top-5 keyword join, can only fire on coincidence). Summary line reports insight/graph counts. Matching apply rewrites the fact store **first**, appends `purged-ids.jsonl` tombstones, scrubs `insights.json`/`graph.json`, then unlinks the verified-cache sidecar |
+| `purge-fact.py` | HARD delete across facts/events/notes/vault/insights/graph/embedding-sidecar/verified-cache sidecar (GDPR-style). Per-fact vault mirrors are selected by parsed frontmatter `id` (never filename) across every vault kind folder; `vault/index.md` and files without parsed frontmatter are never deleted. Matching mirrors are deleted as whole files, and their backlink lines are removed. Every run also selects mirrors whose ids are already in `purged-ids.jsonl`, allowing a failed unlink to finish on retry after the fact is gone. Mirror unlinking runs only after insight and graph writes; a missing mirror counts as deleted, while other unlink failures are listed after the remaining mirrors are attempted and make the command exit nonzero. A session note's `## Facts` entry is removed only when it exactly equals the `refine-sessions.py` renderer's complete bullet for a removed fact, including the source anchor and any truncation; headings inside a matched multiline bullet do not end the section. Transcript history and near-matches remain. Dry-run default. `--apply` with **zero matches does not rewrite** the store (would drop loader-skipped malformed records). `--pattern` matches id+content only (not signature hex); `--content-prefix` matches only lstripped content, never ids or mid-sentence mentions. Channel-prefix cleanup parses JSONL event content and removes only complete ID-bound frames whose opening tag matches the literal requested prefix, as found by `_channel_frame.CHANNEL_FRAME_RE` in session/vault prose; unmatched matching opener lines stay in place and are reported with their files. For INSIGHTS the content match covers the N10052 contaminated-cluster shape (the "Most recent:" excerpt quotes the latest member verbatim); `theme` is deliberately NOT matched (top-5 keyword join, can only fire on coincidence). Summary line reports fact/event/note-block/vault-block/vault-mirror-file/unmatched-opener/session-fact-bullet counts plus insight/graph counts. Matching apply rewrites the fact store **first**, appends tombstones, scrubs `insights.json`/`graph.json`, then unlinks the verified-cache sidecar |
 
 **Recall** (see §6 for exact ranking order)
 | Script | Notes |
@@ -496,6 +511,7 @@ CI (`.github/workflows/ci.yml`): pytest → classifier smoke →
 | `customer-setup.md` | Customer identity, selected sources, review queue, optional session hooks, correction/forgetting and recovery; pilot limits |
 | `customer-agent.md` | Agent playbook for conversational approval and verified lookup through existing customer commands/API; no automatic approval enforcement |
 | `customer-pilot.md` | Assisted conversational pilot, optional capture, human acceptance and privacy-conscious feedback; no claimed customer outcomes |
+| `runbooks/purge-wrapper-facts.md` | Operator-only, writer-quiesced backup/dry-run/apply/resynthesis/verification for channel-wrapper facts, plus uninstalled daily curated-memory user-systemd units |
 
 ---
 

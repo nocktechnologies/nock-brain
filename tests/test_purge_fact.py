@@ -12,12 +12,29 @@ REPO = Path(__file__).resolve().parent.parent
 BIN = REPO / "bin"
 
 
+def channel_frame(frame_id, body):
+    return (
+        '<channel source="plugin:resident-channel">\n'
+        f"[BEGIN UNTRUSTED CHANNEL CONTENT #{frame_id}]\n"
+        f"{body}\n"
+        f"[END UNTRUSTED CHANNEL CONTENT #{frame_id}]\n"
+        "</channel>"
+    )
+
+
 def _load(name: str):
     spec = importlib.util.spec_from_file_location(
         name.replace("-", "_"), BIN / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def test_purge_uses_ingest_channel_frame_regex():
+    purge_fact = _load("purge-fact")
+    ingest_jsonl = _load("ingest-jsonl")
+
+    assert purge_fact.CHANNEL_FRAME_RE is ingest_jsonl._CHANNEL_FRAME_RE
 
 
 def test_purge_fact_apply_removes_pattern_from_facts_events_notes_and_vault(tmp_path):
@@ -80,6 +97,702 @@ def test_purge_fact_apply_removes_pattern_from_facts_events_notes_and_vault(tmp_
     assert "event-keep" in events.read_text()
     assert "leaked-secret-value" not in (notes / "s1.md").read_text()
     assert "safe memory" in (vault / "facts" / "keep.md").read_text()
+
+
+def test_purge_removes_only_exact_rendered_session_fact_bullets(tmp_path):
+    """Source session facts use the refiner's whole bullet, never a prefix."""
+    purge_fact = _load("purge-fact")
+    refine_sessions = _load("refine-sessions")
+    facts = tmp_path / "facts.json"
+    notes = tmp_path / "sessions"
+    notes.mkdir()
+    content = channel_frame(
+        "0123456789ab", "[TRUNCATED: original 2000 chars; see session_anchor]"
+    )
+    removed = {
+        "id": "removed", "kind": "directive", "status": "current",
+        "confidence": 0.9, "content": content, "source_file": "session.jsonl",
+        "source_date": "2026-09-27", "evidence": [{"line": 11}],
+    }
+    retained = {
+        "id": "keep", "kind": "directive", "status": "current",
+        "confidence": 0.9, "content": "safe memory", "source_file": "session.jsonl",
+        "source_date": "2026-09-27", "evidence": [{"line": 12}],
+    }
+    facts.write_text(json.dumps([removed, retained]))
+    removed_bullet = refine_sessions.render_fact_bullet(removed)
+    near_match = removed_bullet.replace("session.jsonl:11", "session.jsonl:99")
+    note = notes / "s1.md"
+    note.write_text(
+        "# Session s1\n\n## Facts\n"
+        + removed_bullet + "\n"
+        + near_match + "\n"
+        + refine_sessions.render_fact_bullet(retained) + "\n"
+        + "\n## Evidence Events\n"
+        + "- session.jsonl:11 [text/message] <channel source= transcript history\n"
+    )
+
+    argv = [
+        sys.executable, str(REPO / "bin" / "purge-fact.py"),
+        "--content-prefix", "<channel source=", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"), "--notes-dir", str(notes),
+        "--vault", str(tmp_path / "vault"), "--sidecar", str(tmp_path / "embeddings.npz"),
+    ]
+    dry_run = subprocess.run(argv, cwd=REPO, text=True, capture_output=True, check=True)
+    assert "1 session fact bullet(s)" in dry_run.stdout
+    assert note.read_text().count(removed_bullet) == 1
+
+    applied = subprocess.run(
+        argv + ["--apply"], cwd=REPO, text=True, capture_output=True, check=True,
+    )
+    note_text = note.read_text()
+    assert "1 session fact bullet(s)" in applied.stdout
+    assert removed_bullet not in note_text
+    assert near_match in note_text
+    assert "[text/message] <channel source= transcript history" in note_text
+    assert purge_fact.rendered_session_fact_bullets([removed]) == {removed_bullet}
+
+
+def test_purge_multiline_fact_bullet_with_heading(tmp_path):
+    refine = _load("refine-sessions")
+    facts = tmp_path / "facts.json"
+    notes = tmp_path / "sessions"
+    notes.mkdir()
+    removed = {
+        "id": "removed", "kind": "directive", "status": "current",
+        "confidence": 0.9, "source_date": "2026-09-27", "content": channel_frame(
+            "0123456789ab", "First line\n## Instructions\nlast line"),
+        "evidence": [],
+    }
+    facts.write_text(json.dumps([removed]))
+    bullet = refine.render_fact_bullet(removed)
+    note = notes / "session.md"
+    note.write_text("# Session\n\n## Facts\n" + bullet + "\n\n## Evidence Events\nkeep\n")
+    result = subprocess.run([
+        sys.executable, str(BIN / "purge-fact.py"), "--content-prefix", "<channel source=",
+        "--facts", str(facts), "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(notes), "--vault", str(tmp_path / "vault"),
+        "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+    ], cwd=REPO, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert "1 session fact bullet(s)" in result.stdout
+    assert bullet not in note.read_text()
+    assert "## Instructions" not in note.read_text()
+    assert "## Evidence Events\nkeep" in note.read_text()
+
+
+def test_purge_fact_without_kind_uses_safe_bullet_default():
+    refine = _load("refine-sessions")
+    fact = {"id": "removed", "content": "safe content", "evidence": []}
+    assert refine.render_fact_bullet(fact) == "- [] safe content (:)"
+    assert _load("purge-fact").rendered_session_fact_bullets([fact]) == {
+        "- [] safe content (:)"}
+
+
+def test_pattern_matching_facts_heading_still_removes_fact_bullet(tmp_path):
+    refine = _load("refine-sessions")
+    fact = {
+        "id": "removed", "kind": "decision", "status": "current",
+        "confidence": 0.9, "source_date": "2026-09-27",
+        "content": "private facts", "evidence": [],
+    }
+    facts = tmp_path / "facts.json"
+    notes = tmp_path / "sessions"
+    notes.mkdir()
+    facts.write_text(json.dumps([fact]))
+    note = notes / "session.md"
+    note.write_text("## Facts\n" + refine.render_fact_bullet(fact)
+                    + "\n\n## Evidence Events\nkeep\n")
+    result = subprocess.run([
+        sys.executable, str(BIN / "purge-fact.py"), "--pattern", "facts",
+        "--facts", str(facts), "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(notes), "--vault", str(tmp_path / "vault"),
+        "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+    ], cwd=REPO, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert "1 session fact bullet(s)" in result.stdout
+    assert "private facts" not in note.read_text()
+    assert "## Facts" in note.read_text()
+    assert "## Evidence Events\nkeep" in note.read_text()
+
+
+def test_purge_regenerates_review_and_vault_from_clean_sources(tmp_path):
+    """Review and vault copies are regenerated, not hand-edited, after purge."""
+    refine_sessions = _load("refine-sessions")
+    facts = tmp_path / "facts.json"
+    events = tmp_path / "events.jsonl"
+    notes = tmp_path / "sessions"
+    review = tmp_path / "review"
+    vault = tmp_path / "vault"
+    notes.mkdir()
+    review.mkdir()
+    vault.mkdir()
+    content = '<channel source="plugin:resident-channel"> stale wrapper'
+    removed = {
+        "id": "removed", "kind": "directive", "status": "current",
+        "confidence": 0.9, "content": content, "source_file": "session.jsonl",
+        "source_date": "2026-09-27", "evidence": [{"line": 11}],
+    }
+    kept = {
+        "id": "keep", "kind": "directive", "status": "current",
+        "confidence": 0.9, "content": "Kevin kept safe memory", "source_file": "session.jsonl",
+        "source_date": "2026-09-27", "evidence": [{"line": 12}],
+    }
+    facts.write_text(json.dumps([removed, kept]))
+    events.write_text("")
+    (notes / "s1.md").write_text(
+        "# Session s1\n\n## Facts\n"
+        + refine_sessions.render_fact_bullet(removed) + "\n"
+        + refine_sessions.render_fact_bullet(kept) + "\n\n## Evidence Events\n"
+    )
+    old_review = "# Stale review\n" + content + "\n"
+    (review / "promotion-candidates.md").write_text(old_review)
+    (review / "contradiction-candidates.md").write_text(old_review)
+    index = vault / "index.md"
+    index.write_text("# Existing index\n")
+
+    purge = [
+        sys.executable, str(REPO / "bin" / "purge-fact.py"),
+        "--content-prefix", "<channel source=", "--facts", str(facts),
+        "--events", str(events), "--notes-dir", str(notes), "--vault", str(vault),
+        "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+    ]
+    subprocess.run(purge, cwd=REPO, text=True, capture_output=True, check=True)
+
+    assert content not in (notes / "s1.md").read_text()
+    assert (review / "promotion-candidates.md").read_text() == old_review
+    assert (review / "contradiction-candidates.md").read_text() == old_review
+    assert index.read_text() == "# Existing index\n"
+
+    subprocess.run(
+        [sys.executable, str(REPO / "bin" / "review-promotions.py"),
+         "--facts", str(facts), "--output", str(review)],
+        cwd=REPO, text=True, capture_output=True, check=True,
+    )
+    subprocess.run(
+        [sys.executable, str(REPO / "bin" / "detect-contradictions.py"),
+         "--facts", str(facts), "--queue-dir", str(review)],
+        cwd=REPO, text=True, capture_output=True, check=True,
+    )
+    subprocess.run(
+        [sys.executable, str(REPO / "bin" / "export-obsidian.py"),
+         "--facts", str(facts), "--sessions", str(notes), "--review", str(review),
+         "--vault", str(vault)],
+        cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    for path in [
+        review / "promotion-candidates.json", review / "promotion-candidates.md",
+        review / "contradiction-candidates.json", review / "contradiction-candidates.md",
+        vault / "sessions" / "s1.md", vault / "review" / "promotion-candidates.md",
+        vault / "review" / "contradiction-candidates.md",
+    ]:
+        assert content not in path.read_text()
+
+
+def test_purge_content_prefix_only_matches_lstripped_fact_content(tmp_path):
+    facts = tmp_path / "facts.json"
+    facts.write_text(json.dumps([
+        {
+            "id": "wrapper", "kind": "decision", "status": "current",
+            "confidence": 0.9,
+            "content": " \n<channel source=\"resident-channel\">receipt",
+            "source_date": "2026-09-27", "evidence": [],
+        },
+        {
+            "id": "mention", "kind": "decision", "status": "current",
+            "confidence": 0.9,
+            "content": "A note that mentions <channel source= as an example.",
+            "source_date": "2026-09-27", "evidence": [],
+        },
+        {
+            "id": "<channel source=not-content", "kind": "decision", "status": "current",
+            "confidence": 0.9, "content": "A safe fact with a marker-like id.",
+            "source_date": "2026-09-27", "evidence": [],
+        },
+    ]))
+    command = [
+        sys.executable, str(REPO / "bin" / "purge-fact.py"),
+        "--content-prefix", "<channel source=", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(tmp_path / "sessions"),
+        "--vault", str(tmp_path / "vault"),
+        "--sidecar", str(tmp_path / "embeddings.npz"),
+    ]
+
+    dry_run = subprocess.run(command, cwd=REPO, text=True, capture_output=True,
+                             check=True)
+    assert "would remove 1 fact" in dry_run.stdout
+    assert [fact["id"] for fact in json.loads(facts.read_text())] == [
+        "wrapper", "mention", "<channel source=not-content",
+    ]
+
+    subprocess.run(command + ["--apply"], cwd=REPO, text=True,
+                   capture_output=True, check=True)
+    assert [fact["id"] for fact in json.loads(facts.read_text())] == [
+        "mention", "<channel source=not-content",
+    ]
+
+
+def test_purge_content_prefix_removes_multiline_wrapper_copies(tmp_path):
+    """Prefix purges must remove whole wrapper copies without event evidence."""
+    facts = tmp_path / "facts.json"
+    events = tmp_path / "events.jsonl"
+    notes = tmp_path / "sessions"
+    vault = tmp_path / "vault"
+    notes.mkdir()
+    vault.mkdir()
+    wrapper = channel_frame("a1b2c3d4e5f6", "Historical wrapper text")
+    facts.write_text(json.dumps([
+        {
+            "id": "wrapper", "kind": "decision", "status": "current",
+            "confidence": 0.9, "content": wrapper,
+            "source_date": "2026-09-27", "evidence": [],
+        },
+        {
+            "id": "keep", "kind": "decision", "status": "current",
+            "confidence": 0.9, "content": "Safe memory",
+            "source_date": "2026-09-27", "evidence": [],
+        },
+    ]))
+    events.write_text(
+        json.dumps({"id": "historical-wrapper", "content": wrapper}) + "\n"
+        + json.dumps({"id": "keep", "content": "Safe event"}) + "\n"
+    )
+    (notes / "session.md").write_text(
+        "Session notes\n"
+        + wrapper + "\n"
+        + "This sentence mentions <channel source= without being a wrapper.\n"
+    )
+    (vault / "wrapper.md").write_text(wrapper + "\n")
+
+    subprocess.run(
+        [
+            sys.executable, str(REPO / "bin" / "purge-fact.py"),
+            "--content-prefix", "<channel source=",
+            "--facts", str(facts), "--events", str(events),
+            "--notes-dir", str(notes), "--vault", str(vault),
+            "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+        ],
+        cwd=REPO,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert [fact["id"] for fact in json.loads(facts.read_text())] == ["keep"]
+    assert "Historical wrapper text" not in events.read_text()
+    assert "Safe event" in events.read_text()
+    assert "Historical wrapper text" not in (notes / "session.md").read_text()
+    assert "This sentence mentions <channel source=" in (notes / "session.md").read_text()
+    assert "Historical wrapper text" not in (vault / "wrapper.md").read_text()
+
+
+def test_narrow_channel_prefix_preserves_other_frames(tmp_path):
+    facts = tmp_path / "facts.json"
+    events = tmp_path / "events.jsonl"
+    notes = tmp_path / "sessions"
+    vault = tmp_path / "vault"
+    notes.mkdir()
+    vault.mkdir()
+    target = channel_frame("0123456789ab", "target body").replace(
+        'source="plugin:resident-channel"', 'source="target"')
+    other = channel_frame("abcdef012345", "other body")
+    facts.write_text(json.dumps([
+        {"id": "target", "kind": "decision", "status": "current", "confidence": 0.9,
+         "source_date": "2026-09-27", "content": target, "evidence": []},
+        {"id": "other", "kind": "decision", "status": "current", "confidence": 0.9,
+         "source_date": "2026-09-27", "content": other, "evidence": []},
+    ]))
+    events.write_text("".join(json.dumps({"id": name, "content": body}) + "\n"
+                              for name, body in (("target", target), ("other", other))))
+    (notes / "session.md").write_text(target + "\n" + other + "\n")
+    (vault / "copy.md").write_text(target + "\n" + other + "\n")
+    result = subprocess.run([
+        sys.executable, str(BIN / "purge-fact.py"),
+        "--content-prefix", '<channel source="target"',
+        "--facts", str(facts), "--events", str(events),
+        "--notes-dir", str(notes), "--vault", str(vault),
+        "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+    ], cwd=REPO, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert [fact["id"] for fact in json.loads(facts.read_text())] == ["other"]
+    assert [json.loads(line)["id"] for line in events.read_text().splitlines()] == ["other"]
+    for path in (notes / "session.md", vault / "copy.md"):
+        assert "target body" not in path.read_text()
+        assert other in path.read_text()
+
+
+def test_purge_removes_vault_fact_mirrors_by_frontmatter_id(tmp_path):
+    """Truncated per-fact vault mirrors are selected by their frontmatter id."""
+    facts = tmp_path / "facts.json"
+    vault = tmp_path / "vault"
+    facts_dir = vault / "facts"
+    facts_dir.mkdir(parents=True)
+    (vault / "agents").mkdir()
+    (vault / "decisions").mkdir()
+    truncated_wrapper = (
+        '<channel source="plugin:resident-channel">\n'
+        "[BEGIN UNTRUSTED CHANNEL CONTENT #0123456789ab]\n"
+        "[TRUNCATED: original 2000 chars; see session_anchor]\n"
+    )
+    facts.write_text(json.dumps([
+        {
+            "id": "removed", "kind": "decision", "status": "current",
+            "confidence": 0.9, "content": truncated_wrapper,
+            "source_date": "2026-09-27", "evidence": [],
+        },
+        {
+            "id": "keep", "kind": "decision", "status": "current",
+            "confidence": 0.9, "content": "safe memory",
+            "source_date": "2026-09-27", "evidence": [],
+        },
+    ]))
+    removed_mirror = facts_dir / "2026-09-27-removed.md"
+    removed_mirror.write_text(
+        "\ufeff---\nid: \"removed\" # mirrored fact id\n---\n\n" + truncated_wrapper,
+        encoding="utf-8",
+    )
+    removed_decision_mirror = vault / "decisions" / "2026-09-27-decision-removed.md"
+    removed_decision_mirror.write_text(
+        "---\nid: removed\n---\n\n" + truncated_wrapper,
+    )
+    kept_mirror = facts_dir / "2026-09-27-keep.md"
+    kept_mirror_text = "---\nid: keep\n---\n\n" + truncated_wrapper
+    kept_mirror.write_text(kept_mirror_text)
+    filename_only_mirror = facts_dir / "2026-09-27-removed-copy.md"
+    filename_only_text = "---\nid: other\n---\n\n" + truncated_wrapper
+    filename_only_mirror.write_text(filename_only_text)
+    kept_decision_mirror = vault / "decisions" / "2026-09-27-keep.md"
+    kept_decision_text = "---\nid: keep\n---\n\nA retained decision mirror.\n"
+    kept_decision_mirror.write_text(kept_decision_text)
+    index = vault / "index.md"
+    index_text = "---\nid: removed\n---\n\nVault index must remain.\n"
+    index.write_text(index_text)
+    invalid_utf8_mirror = facts_dir / "2026-09-27-invalid.md"
+    invalid_utf8_mirror.write_bytes(b"---\nid: removed\n---\n\xff")
+    agent_note = vault / "agents" / "mira.md"
+    agent_note.write_text(
+        "## Mentioned in\n"
+        "- [[2026-09-27-removed]]\n"
+        "- [[facts/2026-09-27-removed]]\n"
+        "- [[decisions/2026-09-27-decision-removed]]\n"
+        "- [[2026-09-27-keep]]\n"
+    )
+    decision_note = vault / "decisions" / "removed.md"
+    decision_note.write_text(
+        "See [[2026-09-27-removed]] for the full fact note.\n"
+        "Keep this decision-note context.\n"
+    )
+    prose_note = vault / "notes.md"
+    prose_text = "Important context; see [[facts/2026-09-27-removed]] for evidence.\n"
+    prose_note.write_text(prose_text)
+    (vault / "review").mkdir()
+    unrelated_note = vault / "review" / "unrelated.md"
+    unrelated_text = (
+        "- [[2026-09-27-removed]]\n"
+        "- [[decisions/2026-09-27-decision-removed]]\n"
+    )
+    unrelated_note.write_text(unrelated_text)
+
+    argv = [
+        sys.executable, str(REPO / "bin" / "purge-fact.py"),
+        "--content-prefix", "<channel source=", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(tmp_path / "sessions"), "--vault", str(vault),
+        "--sidecar", str(tmp_path / "embeddings.npz"),
+    ]
+    dry_run = subprocess.run(
+        argv, cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    assert "would remove 1 fact" in dry_run.stdout
+    assert "2 vault mirror file(s)" in dry_run.stdout
+    assert "0 unmatched opener(s)" in dry_run.stdout
+    assert removed_mirror.exists(), "dry-run must not delete the vault mirror"
+
+    applied = subprocess.run(
+        argv + ["--apply"], cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    assert not removed_mirror.exists()
+    assert not removed_decision_mirror.exists()
+    assert kept_mirror.exists()
+    assert kept_mirror.read_text() == kept_mirror_text
+    assert filename_only_mirror.read_text() == filename_only_text
+    assert kept_decision_mirror.read_text() == kept_decision_text
+    assert index.read_text() == index_text
+    assert invalid_utf8_mirror.exists()
+    assert "2026-09-27-removed" not in agent_note.read_text()
+    assert "2026-09-27-decision-removed" not in agent_note.read_text()
+    assert "2026-09-27-keep" in agent_note.read_text()
+    assert "2026-09-27-removed" not in decision_note.read_text()
+    assert "Keep this decision-note context." in decision_note.read_text()
+    assert prose_note.read_text() == prose_text
+    assert unrelated_note.read_text() == "- [[2026-09-27-removed]]\n"
+    assert "2 vault mirror file(s)" in applied.stdout
+
+
+def test_purge_missing_vault_mirror_still_purges_insights_and_graph(
+        tmp_path, monkeypatch, capsys):
+    """A mirror disappearing after discovery is already successfully purged."""
+    purge_fact = _load("purge-fact")
+    facts = tmp_path / "facts.json"
+    vault = tmp_path / "vault"
+    mirrors = vault / "facts"
+    mirrors.mkdir(parents=True)
+    insights = tmp_path / "insights.json"
+    graph = tmp_path / "graph.json"
+    facts.write_text(json.dumps([
+        {"id": "removed", "kind": "decision", "status": "current",
+         "confidence": 0.9, "content": "secret-to-remove",
+         "source_date": "2026-09-27", "evidence": []},
+        {"id": "keep", "kind": "decision", "status": "current",
+         "confidence": 0.9, "content": "safe memory",
+         "source_date": "2026-09-27", "evidence": []},
+    ]))
+    vanished_mirror = mirrors / "a-removed.md"
+    vanished_mirror.write_text("---\nid: removed\n---\n\nsecret-to-remove\n")
+    remaining_mirror = mirrors / "b-removed.md"
+    remaining_mirror.write_text("---\nid: removed\n---\n\nsecret-to-remove\n")
+    insights.write_text(json.dumps([
+        {"id": "removed-insight", "source_ids": ["removed"], "content": "secret"},
+        {"id": "keep-insight", "source_ids": ["keep"], "content": "safe"},
+    ]))
+    graph.write_text(json.dumps({
+        "nodes": [{"id": "fact:removed"}, {"id": "fact:keep"}],
+        "edges": [{"id": "removed-edge", "source": "fact:removed", "target": "fact:keep"}],
+    }))
+
+    original_unlink = Path.unlink
+    attempted: list[Path] = []
+
+    def disappear_before_unlink(path, *args, **kwargs):
+        if path == vanished_mirror:
+            attempted.append(path)
+            original_unlink(path)
+            return original_unlink(path, *args, **kwargs)
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", disappear_before_unlink)
+
+    result = purge_fact.run([
+        "--pattern", "secret-to-remove", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(tmp_path / "sessions"), "--vault", str(vault),
+        "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+    ])
+    output = capsys.readouterr().out
+
+    assert result == 0
+    assert attempted == [vanished_mirror]
+    assert "2 vault mirror file(s)" in output
+    assert not vanished_mirror.exists()
+    assert not remaining_mirror.exists()
+    assert [item["id"] for item in json.loads(insights.read_text())] == ["keep-insight"]
+    assert [node["id"] for node in json.loads(graph.read_text())["nodes"]] == ["fact:keep"]
+    assert json.loads(graph.read_text())["edges"] == []
+
+
+def test_purge_vault_mirror_unlink_failure_finishes_authoritative_writes(
+        tmp_path, monkeypatch, capsys):
+    """One inaccessible mirror does not stop the remaining purge work."""
+    purge_fact = _load("purge-fact")
+    facts = tmp_path / "facts.json"
+    vault = tmp_path / "vault"
+    mirrors = vault / "facts"
+    mirrors.mkdir(parents=True)
+    insights = tmp_path / "insights.json"
+    graph = tmp_path / "graph.json"
+    facts.write_text(json.dumps([
+        {"id": "removed", "kind": "decision", "status": "current",
+         "confidence": 0.9, "content": "secret-to-remove",
+         "source_date": "2026-09-27", "evidence": []},
+        {"id": "keep", "kind": "decision", "status": "current",
+         "confidence": 0.9, "content": "safe memory",
+         "source_date": "2026-09-27", "evidence": []},
+    ]))
+    blocked_mirror = mirrors / "a-removed.md"
+    blocked_mirror.write_text("---\nid: removed\n---\n\nsecret-to-remove\n")
+    deleted_mirror = mirrors / "b-removed.md"
+    deleted_mirror.write_text("---\nid: removed\n---\n\nsecret-to-remove\n")
+    insights.write_text(json.dumps([
+        {"id": "removed-insight", "source_ids": ["removed"], "content": "secret"},
+        {"id": "keep-insight", "source_ids": ["keep"], "content": "safe"},
+    ]))
+    graph.write_text(json.dumps({
+        "nodes": [{"id": "fact:removed"}, {"id": "fact:keep"}],
+        "edges": [{"id": "removed-edge", "source": "fact:removed", "target": "fact:keep"}],
+    }))
+
+    original_unlink = Path.unlink
+    attempted: list[Path] = []
+
+    def deny_one_unlink(path, *args, **kwargs):
+        if path in {blocked_mirror, deleted_mirror}:
+            attempted.append(path)
+        if path == blocked_mirror:
+            raise PermissionError("mirror is not removable")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", deny_one_unlink)
+
+    result = purge_fact.run([
+        "--pattern", "secret-to-remove", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(tmp_path / "sessions"), "--vault", str(vault),
+        "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+    ])
+    output = capsys.readouterr().out
+
+    assert result == 1
+    assert set(attempted) == {blocked_mirror, deleted_mirror}
+    assert blocked_mirror.exists()
+    assert not deleted_mirror.exists()
+    assert str(blocked_mirror) in output
+    assert [item["id"] for item in json.loads(insights.read_text())] == ["keep-insight"]
+    assert [node["id"] for node in json.loads(graph.read_text())["nodes"]] == ["fact:keep"]
+    assert json.loads(graph.read_text())["edges"] == []
+
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+    retry = purge_fact.run([
+        "--pattern", "secret-to-remove", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(tmp_path / "sessions"), "--vault", str(vault),
+        "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+    ])
+    retry_output = capsys.readouterr().out
+    assert retry == 0
+    assert "1 vault mirror file(s)" in retry_output
+    assert not blocked_mirror.exists()
+    assert [fact["id"] for fact in json.loads(facts.read_text())] == ["keep"]
+
+
+def test_purge_content_prefix_removes_complete_single_line_note_wrapper(tmp_path):
+    facts = tmp_path / "facts.json"
+    notes = tmp_path / "sessions"
+    notes.mkdir()
+    facts.write_text("[]")
+    wrapper = channel_frame("0123456789ab", "single-line wrapper").replace("\n", " ")
+    note = notes / "session.md"
+    note.write_text(f"Before {wrapper} after\n")
+
+    command = [
+        sys.executable, str(REPO / "bin" / "purge-fact.py"),
+        "--content-prefix", "<channel source=", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(notes), "--vault", str(tmp_path / "vault"),
+        "--sidecar", str(tmp_path / "embeddings.npz"),
+    ]
+    dry_run = subprocess.run(
+        command, cwd=REPO, text=True, capture_output=True, check=True,
+    )
+    assert "1 note block" in dry_run.stdout
+    assert note.read_text() == f"Before {wrapper} after\n"
+
+    result = subprocess.run(
+        command + ["--apply"], cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    assert note.read_text() == "Before  after\n"
+    assert "1 note block" in result.stdout
+
+
+def test_purge_keeps_unclosed_opener_and_prose_before_later_complete_frame(tmp_path):
+    facts = tmp_path / "facts.json"
+    notes = tmp_path / "sessions"
+    notes.mkdir()
+    facts.write_text("[]")
+    note = notes / "session.md"
+    note.write_text(
+        '<channel source="plugin:resident-channel">\n'
+        "Legitimate prose must survive.\n"
+        + channel_frame("abcdef123456", "remove only this block")
+        + "\nTrailing prose must survive.\n"
+    )
+
+    command = [
+        sys.executable, str(REPO / "bin" / "purge-fact.py"),
+        "--content-prefix", "<channel source=", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(notes), "--vault", str(tmp_path / "vault"),
+        "--sidecar", str(tmp_path / "embeddings.npz"),
+    ]
+    dry_run = subprocess.run(
+        command, cwd=REPO, text=True, capture_output=True, check=True,
+    )
+    assert "1 unmatched opener" in dry_run.stdout
+    assert str(note) in dry_run.stdout
+    assert "remove only this block" in note.read_text()
+
+    result = subprocess.run(
+        command + ["--apply"], cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    text = note.read_text()
+    assert '<channel source="plugin:resident-channel">' in text
+    assert "Legitimate prose must survive." in text
+    assert "remove only this block" not in text
+    assert "Trailing prose must survive." in text
+    assert "1 unmatched opener" in result.stdout
+    assert str(note) in result.stdout
+
+
+def test_purge_does_not_cross_close_channel_frames_with_different_ids(tmp_path):
+    facts = tmp_path / "facts.json"
+    notes = tmp_path / "sessions"
+    notes.mkdir()
+    facts.write_text("[]")
+    note = notes / "session.md"
+    note.write_text(
+        '<channel source="plugin:resident-channel">\n'
+        "[BEGIN UNTRUSTED CHANNEL CONTENT #111111111111]\n"
+        "Unclosed first frame.\n"
+        "[END UNTRUSTED CHANNEL CONTENT #222222222222]\n"
+        "</channel>\n"
+        + channel_frame("222222222222", "remove only second frame")
+        + "\n"
+    )
+
+    subprocess.run(
+        [
+            sys.executable, str(REPO / "bin" / "purge-fact.py"),
+            "--content-prefix", "<channel source=", "--facts", str(facts),
+            "--events", str(tmp_path / "events.jsonl"),
+            "--notes-dir", str(notes), "--vault", str(tmp_path / "vault"),
+            "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+        ],
+        cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    text = note.read_text()
+    assert "Unclosed first frame." in text
+    assert "remove only second frame" not in text
+
+
+def test_purge_keeps_mid_sentence_channel_source_mention(tmp_path):
+    facts = tmp_path / "facts.json"
+    notes = tmp_path / "sessions"
+    notes.mkdir()
+    facts.write_text("[]")
+    note = notes / "session.md"
+    mention = "This prose mentions '<channel source=' mid-sentence.\n"
+    note.write_text(mention)
+
+    result = subprocess.run(
+        [
+            sys.executable, str(REPO / "bin" / "purge-fact.py"),
+            "--content-prefix", "<channel source=", "--facts", str(facts),
+            "--events", str(tmp_path / "events.jsonl"),
+            "--notes-dir", str(notes), "--vault", str(tmp_path / "vault"),
+            "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+        ],
+        cwd=REPO, text=True, capture_output=True, check=True,
+    )
+
+    assert note.read_text() == mention
+    assert "0 note block" in result.stdout
 
 
 def test_purge_apply_unlinks_verified_cache_sidecar(tmp_path):

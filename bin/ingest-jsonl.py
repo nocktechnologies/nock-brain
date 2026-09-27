@@ -29,6 +29,7 @@ if str(BIN_DIR) not in sys.path:
 
 from _scrub import scrub_secrets
 from _store import secure_write_text
+from _channel_frame import CHANNEL_FRAME_RE
 
 DEFAULT_PATH_DENYLIST = [
     "agents/*/private/**",
@@ -74,6 +75,8 @@ def new_stats() -> dict[str, int]:
         "denied_result_endpoints": 0,
         "secrets_redacted": 0,
         "malformed_lines": 0,
+        "channel_wrappers_unwrapped": 0,
+        "channel_wrappers_dropped": 0,
     }
 
 
@@ -88,6 +91,69 @@ def json_text(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
+_CHANNEL_FRAME_RE = CHANNEL_FRAME_RE
+_CHANNEL_NAME_RE = re.compile(r"\bchannel=(?P<quote>[\"'])(?P<channel>[^\"']*)(?P=quote)")
+_CHANNEL_TEXT_PATHS = (
+    ("message", "text"),
+    ("message", "caption"),
+    ("telegram", "message", "text"),
+    ("telegram", "message", "caption"),
+    ("update", "message", "text"),
+    ("update", "message", "caption"),
+    ("body",),
+    ("subject",),
+    ("envelope", "body"),
+    ("envelope", "subject"),
+    ("attestation", "envelope", "body"),
+    ("attestation", "envelope", "subject"),
+    ("data", "body"),
+    ("data", "subject"),
+)
+
+
+def _nested_text(value: object, path: tuple[str, ...]) -> str | None:
+    for key in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def unwrap_channel_user_text(text: str) -> str | None:
+    """Extract a human turn from a resident-channel envelope.
+
+    Channel transport receipts are untrusted structural data, not conversation
+    text. The resident-channel frame's matching marker ID binds its body to the
+    envelope. Known Telegram text/caption and NockCC body/subject fields take
+    precedence; a non-JSON frame body is a plain human turn. Non-channel text
+    is returned unchanged.
+    """
+    if not text.lstrip().startswith("<channel "):
+        return text
+    match = _CHANNEL_FRAME_RE.fullmatch(text.strip())
+    if match is None:
+        return None
+    channel = _CHANNEL_NAME_RE.search(match.group("opening_tag"))
+    if channel is not None and channel.group("channel") == "engine":
+        return None
+    body = match.group("body").strip()
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return body or None
+    if isinstance(payload, str):
+        return payload.strip() or None
+    if isinstance(payload, list):
+        return None
+    if not isinstance(payload, dict):
+        return body
+    for path in _CHANNEL_TEXT_PATHS:
+        human_text = _nested_text(payload, path)
+        if human_text is not None:
+            return human_text
+    return None
 
 
 def _matches_any(value: str, patterns: list[str]) -> bool:
@@ -196,6 +262,12 @@ def line_events(
             part_type = part.get("type", "text")
             if part_type == "text":
                 text = json_text(part.get("text", ""))
+                if line_type == "user" and actor == "user" and text.lstrip().startswith("<channel "):
+                    text = unwrap_channel_user_text(text)
+                    if text is None:
+                        stats["channel_wrappers_dropped"] += 1
+                        continue
+                    stats["channel_wrappers_unwrapped"] += 1
                 if text:
                     events.append(
                         make_event(path, line_number, raw, actor, "text", "message", text, stats=stats)
