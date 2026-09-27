@@ -553,6 +553,48 @@ def test_insights_refresh_regenerates_and_never_blocks(rebuild_store, tmp_path, 
     assert "- Insights (derived view): regenerated 114" in summary
 
 
+def test_insights_refresh_retries_before_reporting_a_nonfatal_failure(rebuild_store, tmp_path,
+                                                                      monkeypatch):
+    store = tmp_path / "store"
+    store.mkdir()
+    attempts = []
+    sleeps = []
+
+    def flaky_run_cli(script, args):
+        attempts.append((script, args))
+        if len(attempts) < 3:
+            raise rebuild_store.RebuildError("temporary publish timeout")
+        Path(args[args.index("--output") + 1]).write_text(
+            json.dumps([{"id": "i1"}]), encoding="utf-8"
+        )
+
+    monkeypatch.setattr(rebuild_store, "_run_cli", flaky_run_cli)
+    monkeypatch.setattr(rebuild_store.time, "sleep", sleeps.append)
+
+    assert rebuild_store.refresh_insights(store) == "regenerated 1"
+    assert [delay for delay in sleeps] == [1, 2]
+    assert len(attempts) == 3
+
+
+def test_insights_refresh_exhausts_retries_without_blocking_the_rebuild(rebuild_store, tmp_path,
+                                                                         monkeypatch):
+    store = tmp_path / "store"
+    store.mkdir()
+    attempts = []
+    sleeps = []
+
+    def failed_run_cli(*_args):
+        attempts.append(True)
+        raise rebuild_store.RebuildError("persistent publish timeout")
+
+    monkeypatch.setattr(rebuild_store, "_run_cli", failed_run_cli)
+    monkeypatch.setattr(rebuild_store.time, "sleep", sleeps.append)
+
+    assert rebuild_store.refresh_insights(store).startswith("FAILED")
+    assert [delay for delay in sleeps] == [1, 2]
+    assert len(attempts) == 3
+
+
 def test_merge_facts_keeps_superseded_live_over_reextract(rebuild_store):
     """N10014: re-extraction mints status=current; merge must not un-supersede."""
     live = [{"id": "X", "status": "superseded", "content": "old claim"}]

@@ -64,6 +64,137 @@ def test_user_pasted_secret_is_scrubbed_without_path_or_tool_match(ingest_jsonl,
     assert result["stats"]["secrets_redacted"] == 1
 
 
+def test_channel_wrapped_telegram_caption_keeps_only_human_text(ingest_jsonl, tmp_path):
+    """A resident-channel Telegram envelope must not enter the event store."""
+    transcript = tmp_path / "session.jsonl"
+    human_text = "[DECISION] Publish the signed facts before rebuilding recall."
+    wrapper = (
+        '<channel source="resident-channel" transport="telegram">\n'
+        + json.dumps({
+            "message": {"message_id": 17, "caption": human_text},
+            "attestation": {"schema": "message-attestation/v1", "signature": "opaque"},
+        })
+        + "\n</channel>"
+    )
+    write_jsonl(transcript, [{
+        "type": "user",
+        "sessionId": "s1",
+        "timestamp": "2026-09-27T12:00:00Z",
+        "message": {"role": "user", "content": wrapper},
+    }])
+
+    result = ingest_jsonl.ingest_file(transcript)
+
+    assert [event["content"] for event in result["events"]] == [human_text]
+    assert "attestation" not in json.dumps(result["events"])
+    assert result["stats"]["channel_wrappers_unwrapped"] == 1
+    assert result["stats"]["channel_wrappers_dropped"] == 0
+
+
+def test_channel_wrapped_telegram_text_keeps_only_human_text(ingest_jsonl, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    human_text = "[DIRECTIVE] Keep the curated-memory timer user scoped."
+    wrapper = (
+        '<channel source="resident-channel" transport="telegram">\n'
+        + json.dumps({"message": {"message_id": 18, "text": human_text}})
+        + "\n</channel>"
+    )
+    write_jsonl(transcript, [{
+        "type": "user",
+        "sessionId": "s1",
+        "timestamp": "2026-09-27T12:00:00Z",
+        "message": {"role": "user", "content": wrapper},
+    }])
+
+    result = ingest_jsonl.ingest_file(transcript)
+
+    assert [event["content"] for event in result["events"]] == [human_text]
+
+
+def test_channel_wrapped_nockcc_envelope_uses_body_then_subject(ingest_jsonl, tmp_path):
+    """NockCC's attested envelope keeps its human body, never its receipt."""
+    transcript = tmp_path / "session.jsonl"
+    body = "[DIRECTIVE] Keep the distill store signed after every write."
+    wrapper = (
+        '<channel source="resident-channel" transport="nockcc">\n'
+        + json.dumps({
+            "attestation": {"envelope": {"body": body, "subject": "Task assigned"}},
+            "attestation_digest": "opaque",
+        })
+        + "\n</channel>"
+    )
+    write_jsonl(transcript, [{
+        "type": "user",
+        "sessionId": "s1",
+        "timestamp": "2026-09-27T12:00:00Z",
+        "message": {"role": "user", "content": wrapper},
+    }])
+
+    result = ingest_jsonl.ingest_file(transcript)
+
+    assert [event["content"] for event in result["events"]] == [body]
+    assert "Task assigned" not in json.dumps(result["events"])
+    assert result["stats"]["channel_wrappers_unwrapped"] == 1
+
+
+def test_channel_wrapped_nockcc_envelope_falls_back_to_subject(ingest_jsonl, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    subject = "[DIRECTIVE] Review the wrapper purge before applying it."
+    wrapper = (
+        '<channel source="resident-channel" transport="nockcc">\n'
+        + json.dumps({"body": " ", "subject": subject, "attestation": {"signature": "opaque"}})
+        + "\n</channel>"
+    )
+    write_jsonl(transcript, [{
+        "type": "user",
+        "sessionId": "s1",
+        "timestamp": "2026-09-27T12:00:00Z",
+        "message": {"role": "user", "content": wrapper},
+    }])
+
+    result = ingest_jsonl.ingest_file(transcript)
+
+    assert [event["content"] for event in result["events"]] == [subject]
+
+
+def test_channel_wrapper_without_human_content_is_dropped(ingest_jsonl, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    wrapper = (
+        '<channel source="resident-channel">\n'
+        '{"attestation":{"schema":"message-attestation/v1","signature":"opaque"}}\n'
+        "</channel>"
+    )
+    write_jsonl(transcript, [{
+        "type": "user",
+        "sessionId": "s1",
+        "timestamp": "2026-09-27T12:00:00Z",
+        "message": {"role": "user", "content": wrapper},
+    }])
+
+    result = ingest_jsonl.ingest_file(transcript)
+
+    assert result["events"] == []
+    assert result["stats"]["channel_wrappers_unwrapped"] == 0
+    assert result["stats"]["channel_wrappers_dropped"] == 1
+
+
+def test_plain_user_text_is_not_treated_as_a_channel_wrapper(ingest_jsonl, tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    human_text = "[DECISION] The channel adapter stays a read-only transport."
+    write_jsonl(transcript, [{
+        "type": "user",
+        "sessionId": "s1",
+        "timestamp": "2026-09-27T12:00:00Z",
+        "message": {"role": "user", "content": human_text},
+    }])
+
+    result = ingest_jsonl.ingest_file(transcript)
+
+    assert [event["content"] for event in result["events"]] == [human_text]
+    assert result["stats"]["channel_wrappers_unwrapped"] == 0
+    assert result["stats"]["channel_wrappers_dropped"] == 0
+
+
 def test_telegram_bot_token_embedded_in_url_is_scrubbed(ingest_jsonl, tmp_path):
     transcript = tmp_path / "session.jsonl"
     token = "8913101123:" + "AAExampleTelegramBotTokenSecret"

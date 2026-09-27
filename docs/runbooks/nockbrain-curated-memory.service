@@ -1,0 +1,7 @@
+[Unit]
+Description=Ingest curated NockBrain memory
+ConditionPathExists=%h/Dev/mira-brain/bin/ingest-curated-memory.py
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env python3 %h/Dev/mira-brain/bin/ingest-curated-memory.py

@@ -188,14 +188,14 @@ def test_insight_lead_cap_applies_only_when_semantic(br, semantic_env,
 
     on = br.budget_recall(QUERY, fp, budget=4000, semantic=True,
                           insights_file=ip)
-    assert on.count("pricing insight number") == 5, (
-        "semantic mode caps the insight lead at 5 by default"
+    assert on.count("pricing insight number") == 2, (
+        "semantic mode caps the insight lead at 2 by default"
     )
 
-    monkeypatch.setenv("NOCKBRAIN_INSIGHT_LEAD", "2")
+    monkeypatch.setenv("NOCKBRAIN_INSIGHT_LEAD", "5")
     on2 = br.budget_recall(QUERY, fp, budget=4000, semantic=True,
                            insights_file=ip)
-    assert on2.count("pricing insight number") == 2
+    assert on2.count("pricing insight number") == 5
 
 
 def test_nonfinite_sidecar_rows_never_outrank_real_hits(br, embed_mod,
