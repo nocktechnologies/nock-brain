@@ -29,6 +29,8 @@ DECISION_PATTERNS = [
 ]
 
 ENTITY_PATTERNS = [
+    # Short identity lookups ("who is Kit", "who's on the review legs").
+    r"\bwho(?:'s| is| was| are)\b",
     r"\bPR\s*#\d+\b.{0,20}\b(?:did|said|status|about)\b",
     r"\b(?:agent|worker|builder)\b.{0,20}\b(?:did|said|built|shipped|delivered|status)\b",
 ]
@@ -70,7 +72,7 @@ def classify(prompt: str) -> tuple[bool, str, list[str]]:
         if re.match(skip, prompt_lower, re.IGNORECASE):
             return False, "skip_pattern", []
 
-    if len(prompt_lower) < 10:
+    if len(prompt_lower) < 6:
         return False, "too_short", []
 
     matched = []
@@ -94,7 +96,9 @@ def run_tests():
         ("is the pricing plan still current", True),
         ("status of the demo", True),
         ("last time we deployed what broke", True),
+        ("who is Kit", True),
         ("yes", False),
+        ("hi", False),
         ("merge PR 223", False),
         ("dispatch the agent on the audit", False),
         ("write a test for the heartbeat function", False),

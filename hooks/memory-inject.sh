@@ -41,7 +41,9 @@ except:
     print('')
 " 2>/dev/null)
 
-if [[ -z "$PROMPT" ]] || [[ "${#PROMPT}" -lt 15 ]]; then
+# Only reject empty here. The length floor lives in recall-classifier
+# (too_short), so short lookups like "who is Kit" are not pre-empted.
+if [[ -z "$PROMPT" ]]; then
     echo '{}'
     exit 0
 fi
