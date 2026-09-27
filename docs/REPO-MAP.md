@@ -319,7 +319,8 @@ and records applied only after verification.
 
 ## 6. The recall path, in exact order
 
-`hooks/memory-inject.sh` (UserPromptSubmit): parses prompt (≥15 chars),
+`hooks/memory-inject.sh` (UserPromptSubmit): parses a non-empty prompt (the
+length floor is the classifier's `too_short`, <6 chars),
 prefers `~/.nock-brain/venv/bin/python3`, exports `NOCKBRAIN_SEMANTIC=1` iff
 the `semantic-on` marker exists, runs the classifier, then
 `budget-recall --budget 800 --facts … -- "$PROMPT"` (note `--` — option-
