@@ -436,6 +436,128 @@ def test_purge_removes_vault_fact_mirrors_by_frontmatter_id(tmp_path):
     assert "2 vault mirror file(s)" in applied.stdout
 
 
+def test_purge_missing_vault_mirror_still_purges_insights_and_graph(
+        tmp_path, monkeypatch, capsys):
+    """A mirror disappearing after discovery is already successfully purged."""
+    purge_fact = _load("purge-fact")
+    facts = tmp_path / "facts.json"
+    vault = tmp_path / "vault"
+    mirrors = vault / "facts"
+    mirrors.mkdir(parents=True)
+    insights = tmp_path / "insights.json"
+    graph = tmp_path / "graph.json"
+    facts.write_text(json.dumps([
+        {"id": "removed", "kind": "decision", "status": "current",
+         "confidence": 0.9, "content": "secret-to-remove",
+         "source_date": "2026-09-27", "evidence": []},
+        {"id": "keep", "kind": "decision", "status": "current",
+         "confidence": 0.9, "content": "safe memory",
+         "source_date": "2026-09-27", "evidence": []},
+    ]))
+    vanished_mirror = mirrors / "a-removed.md"
+    vanished_mirror.write_text("---\nid: removed\n---\n\nsecret-to-remove\n")
+    remaining_mirror = mirrors / "b-removed.md"
+    remaining_mirror.write_text("---\nid: removed\n---\n\nsecret-to-remove\n")
+    insights.write_text(json.dumps([
+        {"id": "removed-insight", "source_ids": ["removed"], "content": "secret"},
+        {"id": "keep-insight", "source_ids": ["keep"], "content": "safe"},
+    ]))
+    graph.write_text(json.dumps({
+        "nodes": [{"id": "fact:removed"}, {"id": "fact:keep"}],
+        "edges": [{"id": "removed-edge", "source": "fact:removed", "target": "fact:keep"}],
+    }))
+
+    original_unlink = Path.unlink
+    attempted: list[Path] = []
+
+    def disappear_before_unlink(path, *args, **kwargs):
+        if path == vanished_mirror:
+            attempted.append(path)
+            original_unlink(path)
+            return original_unlink(path, *args, **kwargs)
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", disappear_before_unlink)
+
+    result = purge_fact.run([
+        "--pattern", "secret-to-remove", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(tmp_path / "sessions"), "--vault", str(vault),
+        "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+    ])
+    output = capsys.readouterr().out
+
+    assert result == 0
+    assert attempted == [vanished_mirror]
+    assert "2 vault mirror file(s)" in output
+    assert not vanished_mirror.exists()
+    assert not remaining_mirror.exists()
+    assert [item["id"] for item in json.loads(insights.read_text())] == ["keep-insight"]
+    assert [node["id"] for node in json.loads(graph.read_text())["nodes"]] == ["fact:keep"]
+    assert json.loads(graph.read_text())["edges"] == []
+
+
+def test_purge_vault_mirror_unlink_failure_finishes_authoritative_writes(
+        tmp_path, monkeypatch, capsys):
+    """One inaccessible mirror does not stop the remaining purge work."""
+    purge_fact = _load("purge-fact")
+    facts = tmp_path / "facts.json"
+    vault = tmp_path / "vault"
+    mirrors = vault / "facts"
+    mirrors.mkdir(parents=True)
+    insights = tmp_path / "insights.json"
+    graph = tmp_path / "graph.json"
+    facts.write_text(json.dumps([
+        {"id": "removed", "kind": "decision", "status": "current",
+         "confidence": 0.9, "content": "secret-to-remove",
+         "source_date": "2026-09-27", "evidence": []},
+        {"id": "keep", "kind": "decision", "status": "current",
+         "confidence": 0.9, "content": "safe memory",
+         "source_date": "2026-09-27", "evidence": []},
+    ]))
+    blocked_mirror = mirrors / "a-removed.md"
+    blocked_mirror.write_text("---\nid: removed\n---\n\nsecret-to-remove\n")
+    deleted_mirror = mirrors / "b-removed.md"
+    deleted_mirror.write_text("---\nid: removed\n---\n\nsecret-to-remove\n")
+    insights.write_text(json.dumps([
+        {"id": "removed-insight", "source_ids": ["removed"], "content": "secret"},
+        {"id": "keep-insight", "source_ids": ["keep"], "content": "safe"},
+    ]))
+    graph.write_text(json.dumps({
+        "nodes": [{"id": "fact:removed"}, {"id": "fact:keep"}],
+        "edges": [{"id": "removed-edge", "source": "fact:removed", "target": "fact:keep"}],
+    }))
+
+    original_unlink = Path.unlink
+    attempted: list[Path] = []
+
+    def deny_one_unlink(path, *args, **kwargs):
+        if path in {blocked_mirror, deleted_mirror}:
+            attempted.append(path)
+        if path == blocked_mirror:
+            raise PermissionError("mirror is not removable")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", deny_one_unlink)
+
+    result = purge_fact.run([
+        "--pattern", "secret-to-remove", "--facts", str(facts),
+        "--events", str(tmp_path / "events.jsonl"),
+        "--notes-dir", str(tmp_path / "sessions"), "--vault", str(vault),
+        "--sidecar", str(tmp_path / "embeddings.npz"), "--apply",
+    ])
+    output = capsys.readouterr().out
+
+    assert result == 1
+    assert set(attempted) == {blocked_mirror, deleted_mirror}
+    assert blocked_mirror.exists()
+    assert not deleted_mirror.exists()
+    assert str(blocked_mirror) in output
+    assert [item["id"] for item in json.loads(insights.read_text())] == ["keep-insight"]
+    assert [node["id"] for node in json.loads(graph.read_text())["nodes"]] == ["fact:keep"]
+    assert json.loads(graph.read_text())["edges"] == []
+
+
 def test_purge_content_prefix_removes_complete_single_line_note_wrapper(tmp_path):
     facts = tmp_path / "facts.json"
     notes = tmp_path / "sessions"

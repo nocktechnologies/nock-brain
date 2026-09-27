@@ -538,6 +538,7 @@ def run(argv: list[str] | None = None) -> int:
 
     cache_path = cache_path_for(store.freshness_path)
     cache_note = ""
+    mirror_unlink_failures: list[tuple[Path, OSError]] = []
     if args.apply:
         # Rewrite the store first so a concurrent recall that loaded the old
         # facts.json cannot save() the sidecar back: save() re-stats and skips
@@ -562,12 +563,15 @@ def run(argv: list[str] | None = None) -> int:
             secure_write_text(args.events, kept_events, encoding="utf-8")
         for path, text in {**note_rewrites, **vault_rewrites}.items():
             secure_write_text(path, text, encoding="utf-8")
-        for path in vault_mirror_files:
-            path.unlink()
         if kept_insights is not None and removed_insights:
             secure_write_json(insights_path, kept_insights, indent=2, default=str)
         if kept_graph is not None and removed_graph:
             secure_write_json(graph_path, kept_graph, indent=2, default=str)
+        for path in sorted(vault_mirror_files):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                mirror_unlink_failures.append((path, exc))
     elif removed_facts and cache_path.exists():
         cache_note = f"would delete verification cache {cache_path}"
 
@@ -575,7 +579,7 @@ def run(argv: list[str] | None = None) -> int:
         f"{'would remove' if not args.apply else 'removed'} "
         f"{removed_facts} fact(s), {removed_events} event(s), "
         f"{removed_note_blocks} note block(s), {removed_vault_blocks} vault block(s), "
-        f"{len(vault_mirror_files)} vault mirror file(s), "
+        f"{len(vault_mirror_files) - len(mirror_unlink_failures)} vault mirror file(s), "
         f"{sum(unmatched_openers.values())} unmatched opener(s), "
         f"{removed_session_fact_bullets} session fact bullet(s), "
         f"{removed_note_lines} note line(s), {removed_vault_lines} vault line(s), "
@@ -584,11 +588,13 @@ def run(argv: list[str] | None = None) -> int:
     )
     for path, count in sorted(unmatched_openers.items()):
         print(f"{count} unmatched opener(s): {path}")
+    for path, error in mirror_unlink_failures:
+        print(f"failed to delete vault mirror {path}: {error}")
     if sidecar_note:
         print(sidecar_note, file=sys.stderr)
     if cache_note:
         print(cache_note, file=sys.stderr)
-    return 0
+    return 1 if mirror_unlink_failures else 0
 
 
 def main() -> int:
