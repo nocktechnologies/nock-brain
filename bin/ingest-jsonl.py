@@ -128,8 +128,10 @@ def unwrap_channel_user_text(text: str) -> tuple[str, str] | None:
     text. The resident-channel frame's matching marker ID binds its body to the
     envelope. Known Telegram text/caption and NockCC body/subject fields take
     precedence; a non-JSON frame body is a plain human turn. NockCC
-    ``from_agent`` values stamp the actor, with ``kevin`` mapped to ``user``;
-    other channel turns keep the existing ``user`` actor.
+    ``from_agent`` values stamp the actor, with ``kevin`` mapped to ``user``.
+    A NockCC turn without a non-empty string ``from_agent`` (including scalar
+    and non-JSON bodies) gets the non-authority ``nockcc:unknown`` actor; other
+    channel turns keep the existing ``user`` default.
     """
     if not text.lstrip().startswith("<channel "):
         return text, "user"
@@ -137,22 +139,25 @@ def unwrap_channel_user_text(text: str) -> tuple[str, str] | None:
     if match is None:
         return None
     channel = _CHANNEL_NAME_RE.search(match.group("opening_tag"))
-    if channel is not None and channel.group("channel") == "engine":
+    channel_name = channel.group("channel") if channel is not None else "channel"
+    if channel_name == "engine":
         return None
+    unknown_actor = f"{channel_name}:unknown"
+    default_actor = unknown_actor if channel_name == "nockcc" else "user"
     body = match.group("body").strip()
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
-        return (body, "user") if body else None
+        return (body, default_actor) if body else None
     if isinstance(payload, str):
         human_text = payload.strip()
-        return (human_text, "user") if human_text else None
+        return (human_text, default_actor) if human_text else None
     if isinstance(payload, list):
         return None
     if not isinstance(payload, dict):
-        return body, "user"
-    sender = payload.get("from_agent", "user")
-    actor = sender if isinstance(sender, str) else ""
+        return body, default_actor
+    sender = payload.get("from_agent", default_actor)
+    actor = sender.strip() if isinstance(sender, str) and sender.strip() else unknown_actor
     if actor == "kevin":
         actor = "user"
     for path in _CHANNEL_TEXT_PATHS:

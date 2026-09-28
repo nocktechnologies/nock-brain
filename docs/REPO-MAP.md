@@ -48,8 +48,9 @@ and truncation), preserving transcript history and near-matches. Review and
 vault outputs are regenerated from the cleaned sources.
 Contract updates 2026-09-28: NockCC channel events inherit `from_agent` as
 their actor (`kevin` becomes `user`); other senders remain agent actors and
-cannot mint authority facts through the existing actor gate. Telegram turns
-remain `user`.
+cannot mint authority facts through the existing actor gate. A NockCC turn
+with no non-empty string `from_agent` (including scalar/non-JSON bodies) fails
+closed to the non-authority `nockcc:unknown` actor. Telegram turns remain `user`.
 
 ---
 
@@ -237,7 +238,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 **Ingest / extract**
 | Script | Notes |
 |---|---|
-| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame: `channel="engine"` is always dropped, JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. For NockCC payloads with `from_agent`, the event actor is that sender (`kevin` maps to `user`); other NockCC senders keep their names and are refused authority facts by `extract-facts.authority_fact_allowed`. Telegram channel turns remain `user`. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result` |
+| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame: `channel="engine"` is always dropped, JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. For NockCC payloads with `from_agent`, the event actor is that sender (`kevin` maps to `user`); other NockCC senders keep their names and are refused authority facts by `extract-facts.authority_fact_allowed`; a NockCC turn with a missing/blank/non-string sender or a scalar/non-JSON body gets `nockcc:unknown` (fail-closed). Telegram channel turns remain `user`. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result` |
 | `refine-sessions.py` | events → v1-compatible facts + session notes. 1,500-char content cap; `tool_use.input`/`tool_result.content` can never mint facts; reuses extract-facts' classification rules |
 | `extract-facts.py` | Markdown transcripts → facts. Tagged (0.9 conf) + inferred (0.7–0.85) patterns; fleet-activity kinds dropped at classification (#76); `machine_tag()` enforces a **closed machine enum, MINT-ONLY** (`KNOWN_MACHINES` = `mac-kevin`, `kevins-linux`; `fleet-02` retired at the 2026-08-27 seat migration and now raises). Retiring a name blocks new stamps only — facts already carrying a retired `machine` stay readable, verifiable and recallable, because `machine` is in neither attestation payload and no read path consults the enum. Never make it a read filter. **Writes the live store directly** — `propose-facts.py` is the gated twin |
 | `propose-facts.py` / `approve-proposals.py` | Same extraction into `proposed-facts.json`; approve releases to store (no re-sign), reject drops. Live store untouched until approval |
