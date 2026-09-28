@@ -391,7 +391,6 @@ def line_events(
                             command_tokens = list(lexer)
                         except ValueError:
                             command_tokens = []
-                    runs_transcribe = False
                     if len(command_tokens) == 3:
                         interpreter, script, audio = command_tokens
                         script_path = Path(script)
@@ -427,7 +426,7 @@ def line_events(
                         )
                         audio_name = Path(audio).name
                         # residentd relocates voice files; Telegram file_id is the correlation key.
-                        runs_transcribe = (
+                        if (
                             trusted_interpreter
                             and trusted_transcriber_path
                             and not any(
@@ -436,14 +435,13 @@ def line_events(
                                 for char in token
                             )
                             and audio_name in voice_filenames
-                        )
-                        if runs_transcribe:
+                        ):
                             # One envelope authorizes exactly one promotion; a
                             # replayed file_id against a second invocation must
                             # not mint a second authoritative message.
                             voice_filenames.discard(audio_name)
-                        if runs_transcribe and tool_use_id and transcribe_tool_use_ids is not None:
-                            transcribe_tool_use_ids[tool_use_id] = session_id
+                            if tool_use_id and transcribe_tool_use_ids is not None:
+                                transcribe_tool_use_ids[tool_use_id] = session_id
                 events.append(
                     make_event(
                         path,
