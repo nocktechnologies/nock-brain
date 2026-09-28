@@ -46,12 +46,16 @@ Contract updates 2026-09-27: purge removes a session-note fact only when its
 complete rendered bullet exactly matches a removed fact (including its anchor
 and truncation), preserving transcript history and near-matches. Review and
 vault outputs are regenerated from the cleaned sources.
-Contract updates 2026-09-28: JSONL ingest promotes only the paired result of a
-single Bash invocation of the absolute `mira-home*/scripts/transcribe.py` path
-to a user message after removing transcriber diagnostics. Other scripts named
-`transcribe.py`, compound, substitution-based, newline-separated, or ambiguous
-commands remain non-authoritative. This preserves voice directives while
-every other `tool_result` remains non-authoritative.
+Contract updates 2026-09-28: JSONL ingest promotes a transcriber result only
+when its audio argument basename matches `message.voice.file_id` from a
+preceding resident Telegram envelope in the same session, and its numeric
+sender ID equals configured `ALLOWED_USER`. Missing/invalid allowlist, NockCC,
+other senders, unrelated audio, forged script/interpreter paths, and ambiguous
+commands leave the result as `tool_result`. The invocation must be a single
+Bash command using the resolved `$MIRA_HOME/scripts/transcribe.py` path
+(`$HOME/Dev/mira-home` by default) and bare `python`/`python3` or a Python
+executable directly under `/usr/bin`, `/usr/local/bin`, or
+`$MIRA_HOME/.venv/bin`.
 
 ---
 
@@ -239,7 +243,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 **Ingest / extract**
 | Script | Notes |
 |---|---|
-| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame: `channel="engine"` is always dropped, JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result`. One exception: a paired result from a single Bash invocation of an absolute `mira-home*/scripts/transcribe.py` path becomes a `surface="text"`, `kind="message"`, `actor="user"` event after known transcriber diagnostic lines are removed. Other scripts named `transcribe.py`, compound, substitution-based, newline-separated, or ambiguous commands are refused. The script prints only the transcript body to stdout; diagnostic output is not user speech. `transcribe_results_promoted` / `transcribe_results_dropped` expose this path. |
+| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame: `channel="engine"` is always dropped, JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result`. A transcribe result becomes a `surface="text"`, `kind="message"`, `actor="user"` event only when one simple Bash invocation uses the resolved `$MIRA_HOME/scripts/transcribe.py` path (default `$HOME/Dev/mira-home`), an allowed Python interpreter, and an audio basename equal to `message.voice.file_id` from a preceding same-session resident Telegram envelope whose numeric sender ID equals configured `ALLOWED_USER`. Missing/invalid allowlist, NockCC, other senders, unmatched audio, forged paths, and ambiguous commands leave the result as `tool_result`. Known transcriber diagnostics are removed; `transcribe_results_promoted` / `transcribe_results_dropped` expose the result path. |
 | `refine-sessions.py` | events → v1-compatible facts + session notes. 1,500-char content cap; raw `tool_use.input` and `tool_result.content` cannot mint facts. The ingest-only trusted-path transcriber exception is converted to a user message before refinement, so it uses the existing user authority gate; all other tool results stay non-authoritative. Reuses extract-facts' classification rules |
 | `extract-facts.py` | Markdown transcripts → facts. Tagged (0.9 conf) + inferred (0.7–0.85) patterns; fleet-activity kinds dropped at classification (#76); `machine_tag()` enforces a **closed machine enum, MINT-ONLY** (`KNOWN_MACHINES` = `mac-kevin`, `kevins-linux`; `fleet-02` retired at the 2026-08-27 seat migration and now raises). Retiring a name blocks new stamps only — facts already carrying a retired `machine` stay readable, verifiable and recallable, because `machine` is in neither attestation payload and no read path consults the enum. Never make it a read filter. **Writes the live store directly** — `propose-facts.py` is the gated twin |
 | `propose-facts.py` / `approve-proposals.py` | Same extraction into `proposed-facts.json`; approve releases to store (no re-sign), reject drops. Live store untouched until approval |

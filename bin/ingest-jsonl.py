@@ -4,9 +4,9 @@
 This is the v2 entry point before fact extraction. It preserves source anchors
 and treats tool_use inputs as first-class evidence, while denying private paths,
 private tools/endpoints, and scrubbing secrets before events are returned or
-written. A paired Bash transcribe.py result is the one tool-result exception:
-its transcript body becomes a user message event after transcriber diagnostics
-are removed.
+written. A paired Bash transcribe.py result becomes a user message only when
+its audio filename matches a preceding allowlisted Telegram voice envelope in
+the same session and the configured transcriber invocation passes path checks.
 
 Usage:
     python3 bin/ingest-jsonl.py ~/.claude/projects/.../session.jsonl
@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import re
 import shlex
 import sys
@@ -70,6 +71,11 @@ TRANSCRIBE_DIAGNOSTIC_RE = re.compile(
 # Shell substitutions or command separators can mix unrelated output into a result.
 TRANSCRIBE_UNSAFE_COMMAND_RE = re.compile(r"\$\(|`|[<>]\(|[\r\n]")
 TRANSCRIBE_UNSAFE_WORD_CHARS = frozenset("$`*?{}[]~\\")
+MIRA_HOME = Path(
+    os.environ.get("MIRA_HOME") or Path.home() / "Dev" / "mira-home"
+).expanduser().resolve()
+TRANSCRIBE_SCRIPT_PATH = (MIRA_HOME / "scripts" / "transcribe.py").resolve()
+RESIDENCE_VENV_BIN = (MIRA_HOME / ".venv" / "bin").resolve()
 
 
 def new_stats() -> dict[str, int]:
@@ -107,6 +113,12 @@ def json_text(value: Any) -> str:
 
 _CHANNEL_FRAME_RE = CHANNEL_FRAME_RE
 _CHANNEL_NAME_RE = re.compile(r"\bchannel=(?P<quote>[\"'])(?P<channel>[^\"']*)(?P=quote)")
+_CHANNEL_SOURCE_RE = re.compile(r"\bsource=(?P<quote>[\"'])(?P<source>[^\"']*)(?P=quote)")
+_CHANNEL_KIND_RE = re.compile(r"\bkind=(?P<quote>[\"'])(?P<kind>[^\"']*)(?P=quote)")
+_CHANNEL_BEGIN_RE = re.compile(
+    r"\[BEGIN UNTRUSTED CHANNEL CONTENT #[0-9a-f]{12}(?P<metadata>[^\]]*)\]"
+)
+_TELEGRAM_SENDER_RE = re.compile(r"\bsender telegram:(?P<sender>[0-9]+)\b")
 _CHANNEL_TEXT_PATHS = (
     ("message", "text"),
     ("message", "caption"),
@@ -166,6 +178,63 @@ def unwrap_channel_user_text(text: str) -> str | None:
         if human_text is not None:
             return human_text
     return None
+
+
+def allowed_telegram_voice_filename(text: str) -> str | None:
+    """Return an allowed Telegram user's voice file_id used by the transcriber."""
+    match = _CHANNEL_FRAME_RE.fullmatch(text.strip())
+    if match is None:
+        return None
+    opening_tag = match.group("opening_tag")
+    channel = _CHANNEL_NAME_RE.search(opening_tag)
+    source = _CHANNEL_SOURCE_RE.search(opening_tag)
+    kind = _CHANNEL_KIND_RE.search(opening_tag)
+    if (
+        channel is None
+        or channel.group("channel") != "telegram"
+        or source is None
+        or source.group("source") != "plugin:resident-channel:resident-channel"
+        or kind is None
+        or kind.group("kind") != "message"
+    ):
+        return None
+    try:
+        envelope = json.loads(match.group("body").strip())
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(envelope, dict):
+        return None
+    message = envelope.get("message")
+    if not isinstance(message, dict):
+        return None
+    sender = message.get("from")
+    voice = message.get("voice")
+    chat = message.get("chat")
+    if not isinstance(sender, dict) or not isinstance(voice, dict) or not isinstance(chat, dict):
+        return None
+    sender_id = sender.get("id")
+    begin_marker = _CHANNEL_BEGIN_RE.search(match.group(0))
+    sender_marker = (
+        _TELEGRAM_SENDER_RE.search(begin_marker.group("metadata"))
+        if begin_marker is not None
+        else None
+    )
+    if (
+        type(sender_id) is not int
+        or sender_marker is None
+        or sender_marker.group("sender") != str(sender_id)
+        or sender.get("is_bot") is not False
+        or chat.get("type") != "private"
+        or chat.get("id") != sender_id
+    ):
+        return None
+    allowed_user_id = os.environ.get("ALLOWED_USER", "").strip()
+    if not re.fullmatch(r"[0-9]+", allowed_user_id) or sender_id != int(allowed_user_id):
+        return None
+    file_id = voice.get("file_id")
+    if not isinstance(file_id, str) or not file_id or Path(file_id).name != file_id:
+        return None
+    return file_id
 
 
 def _matches_any(value: str, patterns: list[str]) -> bool:
@@ -259,7 +328,8 @@ def line_events(
     stats: dict[str, int],
     include_sidechain: bool = False,
     denied_tool_use_ids: set[str] | None = None,
-    transcribe_tool_use_ids: set[str] | None = None,
+    transcribe_tool_use_ids: dict[str, str] | None = None,
+    voice_media_by_session: dict[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
     if raw.get("isSidechain") and not include_sidechain:
         stats["sidechain_excluded"] += 1
@@ -276,6 +346,11 @@ def line_events(
             if part_type == "text":
                 text = json_text(part.get("text", ""))
                 if line_type == "user" and actor == "user" and text.lstrip().startswith("<channel "):
+                    session_id = raw.get("sessionId")
+                    if isinstance(session_id, str) and session_id and voice_media_by_session is not None:
+                        filename = allowed_telegram_voice_filename(text)
+                        if filename is not None:
+                            voice_media_by_session.setdefault(session_id, set()).add(filename)
                     text = unwrap_channel_user_text(text)
                     if text is None:
                         stats["channel_wrappers_dropped"] += 1
@@ -316,31 +391,53 @@ def line_events(
                             command_tokens = list(lexer)
                         except ValueError:
                             command_tokens = []
-                    script_path = Path(command_tokens[1]) if len(command_tokens) > 1 else Path()
-                    trusted_transcriber_path = (
-                        script_path.is_absolute()
-                        and ".." not in script_path.parts
-                        and script_path.name == "transcribe.py"
-                        and script_path.parent.name == "scripts"
-                        and (
-                            script_path.parent.parent.name == "mira-home"
-                            or script_path.parent.parent.name.startswith("mira-home-")
+                    runs_transcribe = False
+                    if len(command_tokens) == 3:
+                        interpreter, script, audio = command_tokens
+                        script_path = Path(script)
+                        try:
+                            trusted_transcriber_path = (
+                                script_path.is_absolute()
+                                and ".." not in script_path.parts
+                                and script_path.resolve() == TRANSCRIBE_SCRIPT_PATH
+                            )
+                        except (OSError, RuntimeError):
+                            trusted_transcriber_path = False
+                        interpreter_path = Path(interpreter)
+                        interpreter_name_is_python = bool(
+                            re.fullmatch(r"python(?:3(?:\.\d+)?)?", interpreter_path.name)
                         )
-                    )
-                    runs_transcribe = (
-                        len(command_tokens) == 3
-                        and re.fullmatch(
-                            r"python(?:\d+(?:\.\d+)*)?",
-                            Path(command_tokens[0]).name,
-                            re.IGNORECASE,
+                        # Bare names are allowed by contract; runtime PATH picks the executable.
+                        trusted_interpreter = interpreter in {"python", "python3"} or (
+                            interpreter_path.is_absolute()
+                            and ".." not in interpreter_path.parts
+                            and interpreter_name_is_python
+                            and interpreter_path.parent in (
+                                Path("/usr/bin"),
+                                Path("/usr/local/bin"),
+                                RESIDENCE_VENV_BIN,
+                            )
                         )
-                        and trusted_transcriber_path
-                        and not command_tokens[1].startswith("-")
-                        and not any(char in TRANSCRIBE_UNSAFE_WORD_CHARS for char in command_tokens[0])
-                        and not any(char in TRANSCRIBE_UNSAFE_WORD_CHARS for char in command_tokens[1])
-                    )
-                    if runs_transcribe and tool_use_id and transcribe_tool_use_ids is not None:
-                        transcribe_tool_use_ids.add(tool_use_id)
+                        session_id = raw.get("sessionId")
+                        voice_filenames = (
+                            voice_media_by_session.get(session_id, set())
+                            if voice_media_by_session is not None
+                            and isinstance(session_id, str)
+                            else set()
+                        )
+                        # residentd relocates voice files; Telegram file_id is the correlation key.
+                        runs_transcribe = (
+                            trusted_interpreter
+                            and trusted_transcriber_path
+                            and not any(
+                                char in TRANSCRIBE_UNSAFE_WORD_CHARS
+                                for token in command_tokens
+                                for char in token
+                            )
+                            and Path(audio).name in voice_filenames
+                        )
+                        if runs_transcribe and tool_use_id and transcribe_tool_use_ids is not None:
+                            transcribe_tool_use_ids[tool_use_id] = session_id
                 events.append(
                     make_event(
                         path,
@@ -363,12 +460,16 @@ def line_events(
                 if denied_tool_use_ids is not None and tool_use_id in denied_tool_use_ids:
                     stats["denied_results"] += 1
                     continue
+                transcribe_session = (
+                    transcribe_tool_use_ids.pop(tool_use_id, None)
+                    if transcribe_tool_use_ids is not None
+                    else None
+                )
                 is_transcribe_result = (
-                    transcribe_tool_use_ids is not None
-                    and tool_use_id in transcribe_tool_use_ids
+                    transcribe_session is not None
+                    and transcribe_session == raw.get("sessionId")
                 )
                 if is_transcribe_result:
-                    transcribe_tool_use_ids.remove(tool_use_id)
                     if part.get("is_error"):
                         stats["transcribe_results_dropped"] += 1
                         continue
@@ -466,7 +567,8 @@ def ingest_file(path: Path | str, include_sidechain: bool = False) -> dict[str, 
     stats = new_stats()
     events: list[dict[str, Any]] = []
     denied_tool_use_ids: set[str] = set()
-    transcribe_tool_use_ids: set[str] = set()
+    transcribe_tool_use_ids: dict[str, str] = {}
+    voice_media_by_session: dict[str, set[str]] = {}
     with transcript.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
@@ -486,6 +588,7 @@ def ingest_file(path: Path | str, include_sidechain: bool = False) -> dict[str, 
                     include_sidechain,
                     denied_tool_use_ids,
                     transcribe_tool_use_ids,
+                    voice_media_by_session,
                 )
             )
     stats["events_written"] = len(events)
