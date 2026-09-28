@@ -443,11 +443,14 @@ def promote(build: dict[str, Any], store_dir: Path) -> dict[str, Any]:
 def refresh_insights(store_dir: Path) -> str:
     """Post-promote insight regeneration (synthesize.py --sign, heuristic,
     dependency-free). Insights are a DERIVED VIEW of the fact store — when the
-    store changes and this doesn't run, the view goes stale and keeps injecting
+    store changes and this doesn't run, the view goes stale and keeps serving
     what the store no longer says (insights.json froze 2026-06-23 and served
-    pre-cleanup event chatter into recall for two months; recall ranks insights
-    FIRST, so a stale view outshouts a clean store). Never gates the rebuild;
-    failure surfaces in the summary and recall falls back to raw facts.
+    pre-cleanup event chatter for two months). With no --llm synthesizer this
+    always produces synthesized_by == "heuristic" insights, which per-prompt
+    recall excludes outright (N10935, budget-recall.py); this refresh keeps
+    the store's own view current for boot-time and other non-per-prompt
+    readers, not for injected recall. Never gates the rebuild; failure
+    surfaces in the summary and recall falls back to raw facts.
     """
     try:
         _run_cli("synthesize.py", [

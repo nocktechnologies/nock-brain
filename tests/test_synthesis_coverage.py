@@ -10,7 +10,20 @@ def signed_fixture(synthesize, sign_lib, tmp_path, monkeypatch):
     rows = [dict(id=f'f{i}', kind='correction', content=f'pricing tier release {i} approved',
                  source_date=f'2026-06-0{i+1}', status='current', confidence=0.9,
                  evidence=[{'event_id': f'event{i}'}]) for i in range(2)]
-    insight = synthesize.synthesize(rows)[0]
+    # N10935: per-prompt recall excludes synthesized_by == "heuristic"
+    # insights outright, so this file's coverage/suppression contract needs
+    # a fixture insight that actually rides recall. Build it through the
+    # real LLM-enrichment path (the synthesizer-stub pattern in
+    # test_synthesize.py) rather than hand-flipping the field on
+    # synthesize()'s unenriched output — synthesize() only ever stamps
+    # "llm" when a synthesizer argument produced the content. The stub
+    # echoes the latest source verbatim, same as the heuristic template's
+    # own "Most recent:" clause, so covered_source_ids still comes out
+    # ['f1'].
+    def stub(cluster, heuristic_content):
+        return f"Confirmed and tracked: {rows[1]['content']}."
+    insight = synthesize.synthesize(rows, synthesizer=stub)[0]
+    assert insight['synthesized_by'] == 'llm'
     ff, inf = tmp_path / 'facts.json', tmp_path / 'insights.json'
     ff.write_text(json.dumps(sign_lib.sign_facts(rows, key)))
     return rows, insight, ff, inf, key

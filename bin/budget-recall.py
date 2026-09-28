@@ -788,6 +788,31 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
     return "\n\n".join(output_lines)
 
 
+# --- Per-prompt heuristic-synthesis insight exclusion (N10935) --------------
+# synthesize.py stamps every insight's provenance: "heuristic" is the literal
+# "Recurring <kind> (N distinct events; M sampled inputs, ...): <theme>. Most
+# recent: <excerpt>" template (no synthesizer, or the synthesizer failed/was
+# rejected); "llm" is a real judged sentence. The heuristic template is a
+# keyword bag, not a fact — any query sharing just 1-2 common words (e.g.
+# "crm", "mira") clears search()'s generic min_matched_terms floor, and
+# because insight_results is unconditionally placed ahead of fact_results
+# below, a handful of these can occupy the whole per-prompt token budget
+# before a genuinely on-topic fact is ever considered (observed live: the
+# same 4-5 rows won on almost every prompt regardless of topic). A
+# keyword-bag template has no stable definition of "on-topic" to floor a
+# term-overlap ratio against, so per-prompt recall excludes the whole
+# provenance instead. Heuristic insights stay in the store, available to any
+# other reader (e.g. boot-time context assembly) — only per-prompt recall
+# here excludes them. LLM-enriched insights and pre-N10935 stores lacking the
+# field are unaffected.
+HEURISTIC_SYNTHESIS = "heuristic"
+
+
+def _exclude_heuristic_synthesis(insights: list[dict]) -> list[dict]:
+    return [insight for insight in insights
+            if insight.get("synthesized_by") != HEURISTIC_SYNTHESIS]
+
+
 # Default cap on how many synthesized insights may lead a SEMANTIC recall
 # result. Measured in the Phase 0 spike: 20 insights prepended on one query
 # consumed most of the 800-token budget before any fused fact. Applies only
@@ -948,18 +973,20 @@ def select_recall(query: str, facts_file: "Path | None",
         )
     else:
         fact_results = []
-    insight_results = (
-        search(
-            _scope_facts(
-                _load(insights_file, verify_key=verify_key,
-                      strict_verify=strict_verify),
-                agent_scope,
+    if insights_file:
+        insight_results = search(
+            _exclude_heuristic_synthesis(
+                _scope_facts(
+                    _load(insights_file, verify_key=verify_key,
+                          strict_verify=strict_verify),
+                    agent_scope,
+                ),
             ),
             query, include_superseded,
             now=ref_now, min_matched_terms=min_matches,
         )
-        if insights_file else []
-    )
+    else:
+        insight_results = []
     if semantic:
         lead_cap = _resolve_insight_lead_cap()
         if lead_cap > 0:

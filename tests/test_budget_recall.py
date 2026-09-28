@@ -272,6 +272,88 @@ def test_recall_works_with_insights_but_no_facts(budget_recall, tmp_path):
     assert "Recurring decision" in out
 
 
+# --- N10935: heuristic-synthesis insights never ride per-prompt recall ----
+
+def test_exclude_heuristic_synthesis_drops_heuristic_keeps_others(budget_recall):
+    heuristic = {"id": "h1", "kind": "insight", "synthesized_by": "heuristic",
+                 "content": "Recurring bug (3 distinct events): a, b, c"}
+    llm = {"id": "l1", "kind": "insight", "synthesized_by": "llm",
+           "content": "Ship the fix behind a flag and roll back on regression."}
+    legacy = {"id": "leg1", "kind": "insight",
+              "content": "Recurring decision: use Postgres"}  # no field (pre-N10935)
+    kept = budget_recall._exclude_heuristic_synthesis([heuristic, llm, legacy])
+    assert [i["id"] for i in kept] == ["l1", "leg1"]
+
+
+def test_heuristic_synthesis_insight_never_beats_matching_fact(budget_recall, tmp_path):
+    # End-to-end through budget_recall(): a "Recurring <kind> (...)"
+    # keyword-bag insight is excluded outright, so an on-topic raw fact
+    # leads recall instead of being crowded out.
+    on_topic_fact = fact(
+        "gate crm-mira PR 1064: CI failure traced to a stale runner cache",
+        kind="decision",
+    )
+    on_topic_fact["id"] = "f1"
+    heuristic_insight = dict(
+        fact(
+            "Recurring bug (3 distinct events; 3 sampled inputs, "
+            "2026-05-19): bug, cleanup, crm, mira, port. Most recent: "
+            "unrelated port-cleanup note",
+            kind="insight", source_date="2026-05-19",
+        ),
+        id="ins1", synthesized_by="heuristic",
+    )
+    ff = tmp_path / "facts.json"
+    ff.write_text(json.dumps([on_topic_fact]))
+    inf = tmp_path / "insights.json"
+    inf.write_text(json.dumps([heuristic_insight]))
+
+    out = budget_recall.budget_recall(
+        "gate crm-mira PR 1064 CI failure", ff, budget=1000, insights_file=inf,
+    )
+    assert "stale runner cache" in out
+    assert "Recurring bug" not in out
+
+
+def test_heuristic_insight_excluded_even_when_query_matches_verbatim(budget_recall, tmp_path):
+    # The exclusion is unconditional on provenance, not content: even a
+    # heuristic insight whose text is an exact copy of the query — including
+    # the "ingest events pipeline" phrasing that defeated the round-1 ratio
+    # floor via plural/singular scaffolding drift — never rides per-prompt
+    # recall.
+    heuristic_insight = dict(
+        fact(
+            "Recurring bug: ingest events pipeline stalled",
+            kind="insight", source_date="2026-05-19",
+        ),
+        id="ins1", synthesized_by="heuristic",
+    )
+    inf = tmp_path / "insights.json"
+    inf.write_text(json.dumps([heuristic_insight]))
+    out = budget_recall.budget_recall(
+        "ingest events pipeline stalled", tmp_path / "nofacts.json", insights_file=inf,
+    )
+    assert out == ""
+
+
+def test_llm_synthesized_insight_still_surfaces(budget_recall, tmp_path):
+    # The exclusion targets the heuristic template only — a real judged
+    # summary (synthesized_by == "llm") stays eligible, same text included.
+    llm_insight = dict(
+        fact(
+            "Recurring bug: ingest events pipeline stalled",
+            kind="insight", source_date="2026-05-19",
+        ),
+        id="ins1", synthesized_by="llm",
+    )
+    inf = tmp_path / "insights.json"
+    inf.write_text(json.dumps([llm_insight]))
+    out = budget_recall.budget_recall(
+        "ingest events pipeline stalled", tmp_path / "nofacts.json", insights_file=inf,
+    )
+    assert "Recurring bug" in out
+
+
 # --- N8069: recency- and supersession-aware ranking ------------------------
 
 def test_recency_newer_fact_ranks_higher(budget_recall):

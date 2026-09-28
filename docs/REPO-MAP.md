@@ -71,6 +71,13 @@ frames namespace every string sender as `nockcc:<sender>` and missing,
 blank, or non-string sender values as `nockcc:unknown`. Other non-engine
 channels use `<channel>:unknown`. No NockCC sender can collide with the
 first-party actors used by authority extraction.
+Contract updates 2026-09-28 (N10935): per-prompt recall's insight tier now
+excludes every heuristic-synthesized insight (`synthesized_by ==
+"heuristic"`) outright, unconditionally on every call, not only when
+semantic — see `bin/budget-recall.py`'s `_exclude_heuristic_synthesis`.
+Heuristic insights stay in the store, available to any other reader; only
+per-prompt recall excludes them. LLM-enriched insights and legacy insights
+without the field are unaffected.
 
 ---
 
@@ -397,10 +404,28 @@ Inside `budget-recall.select_recall()`:
 3. **Graph expansion** (`--graph`): expands the *fused* list (order is
    specified: dense first) with concept/session neighbors, always below the
    weakest seed. Off-path returns the identical list object.
-4. **Insights lead**: insights searched with the same `search()` and capped
-   at 5 when semantic. Full lineage never suppresses raw facts. Only signed
-   `covered_source_ids` from a completely included insight can deduplicate
-   unchanged, verbatim source detail; reserved dense sources remain included.
+4. **Insights lead**: on every call, semantic or not, every
+   heuristic-synthesized insight (`synthesized_by == "heuristic"`, the
+   auto-generated "Recurring \<kind\> (N distinct events...)" keyword-bag
+   template — see synthesize.py §"Synthesis evidence contract") is excluded
+   outright *before* `search()` runs (N10935: the template term-matches
+   almost any query on 1-2 generic words, and unconditionally leading
+   `fact_results` let a handful of them occupy the whole per-prompt budget
+   ahead of genuinely on-topic facts; excluding before scoring also keeps
+   their boilerplate terms out of `search()`'s corpus statistics). The
+   surviving insights are then searched with the same `search()` as facts.
+   LLM-enriched insights (`synthesized_by == "llm"`) and legacy insights
+   missing the field are unaffected — only per-prompt recall excludes
+   heuristic ones; the store itself, and any other reader of it, is
+   untouched. Since a heuristic insight's coverage claim typically rests on
+   its "Most recent: \<verbatim excerpt\>" clause, per-prompt coverage
+   suppression (below) now in practice only fires for LLM prose that happens
+   to quote a source verbatim. Separately, and only when semantic, the whole
+   (already-filtered) insight list is further capped at 5. Full lineage
+   never suppresses raw facts. Only signed `covered_source_ids` from a
+   completely included
+   insight can deduplicate unchanged, verbatim source detail; reserved dense
+   sources remain included.
 5. **Date-diversity cap**: max 4 per `source_date`, independently within the
    insight and raw queues; overflow deferred to each queue's tail, never
    dropped; reserved raw ids exempt. Omitted insights spend no raw date slots.
