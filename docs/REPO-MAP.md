@@ -46,6 +46,12 @@ Contract updates 2026-09-27: purge removes a session-note fact only when its
 complete rendered bullet exactly matches a removed fact (including its anchor
 and truncation), preserving transcript history and near-matches. Review and
 vault outputs are regenerated from the cleaned sources.
+Contract updates 2026-09-28: JSONL ingest promotes only the paired result of a
+single Bash invocation of the absolute `mira-home*/scripts/transcribe.py` path
+to a user message after removing transcriber diagnostics. Other scripts named
+`transcribe.py`, compound, substitution-based, newline-separated, or ambiguous
+commands remain non-authoritative. This preserves voice directives while
+every other `tool_result` remains non-authoritative.
 
 ---
 
@@ -233,8 +239,8 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 **Ingest / extract**
 | Script | Notes |
 |---|---|
-| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame: `channel="engine"` is always dropped, JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result` |
-| `refine-sessions.py` | events → v1-compatible facts + session notes. 1,500-char content cap; `tool_use.input`/`tool_result.content` can never mint facts; reuses extract-facts' classification rules |
+| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame: `channel="engine"` is always dropped, JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result`. One exception: a paired result from a single Bash invocation of an absolute `mira-home*/scripts/transcribe.py` path becomes a `surface="text"`, `kind="message"`, `actor="user"` event after known transcriber diagnostic lines are removed. Other scripts named `transcribe.py`, compound, substitution-based, newline-separated, or ambiguous commands are refused. The script prints only the transcript body to stdout; diagnostic output is not user speech. `transcribe_results_promoted` / `transcribe_results_dropped` expose this path. |
+| `refine-sessions.py` | events → v1-compatible facts + session notes. 1,500-char content cap; raw `tool_use.input` and `tool_result.content` cannot mint facts. The ingest-only trusted-path transcriber exception is converted to a user message before refinement, so it uses the existing user authority gate; all other tool results stay non-authoritative. Reuses extract-facts' classification rules |
 | `extract-facts.py` | Markdown transcripts → facts. Tagged (0.9 conf) + inferred (0.7–0.85) patterns; fleet-activity kinds dropped at classification (#76); `machine_tag()` enforces a **closed machine enum, MINT-ONLY** (`KNOWN_MACHINES` = `mac-kevin`, `kevins-linux`; `fleet-02` retired at the 2026-08-27 seat migration and now raises). Retiring a name blocks new stamps only — facts already carrying a retired `machine` stay readable, verifiable and recallable, because `machine` is in neither attestation payload and no read path consults the enum. Never make it a read filter. **Writes the live store directly** — `propose-facts.py` is the gated twin |
 | `propose-facts.py` / `approve-proposals.py` | Same extraction into `proposed-facts.json`; approve releases to store (no re-sign), reject drops. Live store untouched until approval |
 | `ingest-curated-memory.py` | Dir of curated markdown → signed high-confidence facts; idempotent (drops+reingests `curated-*` slice). Bypasses the propose gate by design |

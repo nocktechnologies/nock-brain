@@ -4,7 +4,9 @@
 This is the v2 entry point before fact extraction. It preserves source anchors
 and treats tool_use inputs as first-class evidence, while denying private paths,
 private tools/endpoints, and scrubbing secrets before events are returned or
-written.
+written. A paired Bash transcribe.py result is the one tool-result exception:
+its transcript body becomes a user message event after transcriber diagnostics
+are removed.
 
 Usage:
     python3 bin/ingest-jsonl.py ~/.claude/projects/.../session.jsonl
@@ -19,6 +21,7 @@ import argparse
 import fnmatch
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -61,6 +64,13 @@ DEFAULT_ENDPOINT_DENYLIST = [
     "*/api/brain/diary/*",
     "*/api/brain/private/*",
 ]
+TRANSCRIBE_DIAGNOSTIC_RE = re.compile(
+    r"^(?:\[transcribe\] (?:DEEPGRAM_API_KEY not set|(?:file )?error:)|Usage: transcribe\.py(?:\s|$))"
+)
+# Shell substitutions or command separators can mix unrelated output into a result.
+TRANSCRIBE_UNSAFE_COMMAND_RE = re.compile(r"\$\(|`|[<>]\(|[\r\n]")
+TRANSCRIBE_UNSAFE_WORD_CHARS = frozenset("$`*?{}[]~\\")
+
 
 def new_stats() -> dict[str, int]:
     return {
@@ -77,6 +87,8 @@ def new_stats() -> dict[str, int]:
         "malformed_lines": 0,
         "channel_wrappers_unwrapped": 0,
         "channel_wrappers_dropped": 0,
+        "transcribe_results_promoted": 0,
+        "transcribe_results_dropped": 0,
     }
 
 
@@ -247,6 +259,7 @@ def line_events(
     stats: dict[str, int],
     include_sidechain: bool = False,
     denied_tool_use_ids: set[str] | None = None,
+    transcribe_tool_use_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     if raw.get("isSidechain") and not include_sidechain:
         stats["sidechain_excluded"] += 1
@@ -291,6 +304,43 @@ def line_events(
                     if tool_use_id and denied_tool_use_ids is not None:
                         denied_tool_use_ids.add(tool_use_id)
                     continue
+                command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+                if tool_name == "Bash" and isinstance(command, str):
+                    if TRANSCRIBE_UNSAFE_COMMAND_RE.search(command):
+                        command_tokens = []
+                    else:
+                        try:
+                            lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&")
+                            lexer.whitespace_split = True
+                            lexer.commenters = ""
+                            command_tokens = list(lexer)
+                        except ValueError:
+                            command_tokens = []
+                    script_path = Path(command_tokens[1]) if len(command_tokens) > 1 else Path()
+                    trusted_transcriber_path = (
+                        script_path.is_absolute()
+                        and ".." not in script_path.parts
+                        and script_path.name == "transcribe.py"
+                        and script_path.parent.name == "scripts"
+                        and (
+                            script_path.parent.parent.name == "mira-home"
+                            or script_path.parent.parent.name.startswith("mira-home-")
+                        )
+                    )
+                    runs_transcribe = (
+                        len(command_tokens) == 3
+                        and re.fullmatch(
+                            r"python(?:\d+(?:\.\d+)*)?",
+                            Path(command_tokens[0]).name,
+                            re.IGNORECASE,
+                        )
+                        and trusted_transcriber_path
+                        and not command_tokens[1].startswith("-")
+                        and not any(char in TRANSCRIBE_UNSAFE_WORD_CHARS for char in command_tokens[0])
+                        and not any(char in TRANSCRIBE_UNSAFE_WORD_CHARS for char in command_tokens[1])
+                    )
+                    if runs_transcribe and tool_use_id and transcribe_tool_use_ids is not None:
+                        transcribe_tool_use_ids.add(tool_use_id)
                 events.append(
                     make_event(
                         path,
@@ -313,7 +363,38 @@ def line_events(
                 if denied_tool_use_ids is not None and tool_use_id in denied_tool_use_ids:
                     stats["denied_results"] += 1
                     continue
-                content = json_text(part.get("content", ""))
+                is_transcribe_result = (
+                    transcribe_tool_use_ids is not None
+                    and tool_use_id in transcribe_tool_use_ids
+                )
+                if is_transcribe_result:
+                    transcribe_tool_use_ids.remove(tool_use_id)
+                    if part.get("is_error"):
+                        stats["transcribe_results_dropped"] += 1
+                        continue
+                    result_content = part.get("content", "")
+                    if isinstance(result_content, str):
+                        content = result_content
+                    elif isinstance(result_content, list):
+                        content = "\n".join(
+                            item["text"]
+                            for item in result_content
+                            if isinstance(item, dict)
+                            and item.get("type") == "text"
+                            and isinstance(item.get("text"), str)
+                        )
+                    else:
+                        content = ""
+                    content = "\n".join(
+                        line
+                        for line in content.splitlines()
+                        if not TRANSCRIBE_DIAGNOSTIC_RE.match(line.lstrip())
+                    ).strip()
+                    if not content:
+                        stats["transcribe_results_dropped"] += 1
+                        continue
+                else:
+                    content = json_text(part.get("content", ""))
                 denied_result = False
                 if denied_by_path(content):
                     stats["denied_result_paths"] += 1
@@ -323,23 +404,30 @@ def line_events(
                     denied_result = True
                 if denied_result:
                     stats["denied_results"] += 1
+                    if is_transcribe_result:
+                        stats["transcribe_results_dropped"] += 1
                     continue
+                metadata = {
+                    "tool_use_id": part.get("tool_use_id", ""),
+                    "is_sidechain": bool(raw.get("isSidechain")),
+                }
+                if is_transcribe_result:
+                    metadata.update({"tool_name": "Bash", "transcription_script": "transcribe.py"})
                 events.append(
                     make_event(
                         path,
                         line_number,
                         raw,
-                        "tool",
-                        "tool_result.content",
-                        "tool_result",
+                        "user" if is_transcribe_result else "tool",
+                        "text" if is_transcribe_result else "tool_result.content",
+                        "message" if is_transcribe_result else "tool_result",
                         content,
-                        metadata={
-                            "tool_use_id": part.get("tool_use_id", ""),
-                            "is_sidechain": bool(raw.get("isSidechain")),
-                        },
+                        metadata=metadata,
                         stats=stats,
                     )
                 )
+                if is_transcribe_result:
+                    stats["transcribe_results_promoted"] += 1
 
     elif line_type == "system" and raw.get("compactMetadata"):
         events.append(
@@ -378,6 +466,7 @@ def ingest_file(path: Path | str, include_sidechain: bool = False) -> dict[str, 
     stats = new_stats()
     events: list[dict[str, Any]] = []
     denied_tool_use_ids: set[str] = set()
+    transcribe_tool_use_ids: set[str] = set()
     with transcript.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
@@ -396,6 +485,7 @@ def ingest_file(path: Path | str, include_sidechain: bool = False) -> dict[str, 
                     stats,
                     include_sidechain,
                     denied_tool_use_ids,
+                    transcribe_tool_use_ids,
                 )
             )
     stats["events_written"] = len(events)
