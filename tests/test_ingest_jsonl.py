@@ -694,6 +694,48 @@ def test_transcribe_result_must_match_tool_use_session(
     assert result["stats"]["transcribe_results_promoted"] == 0
 
 
+def test_transcribe_file_id_cannot_be_replayed_for_second_promotion(
+    ingest_jsonl, kevin_telegram_env, tmp_path
+):
+    """A single voice envelope authorizes exactly one promotion; replaying its
+    file_id against a second Bash invocation must not mint a second message,
+    even naming an unrelated file that merely shares the allowlisted basename.
+    """
+    transcript = tmp_path / "session.jsonl"
+    audio_name = "voice-file-123.oga"
+    write_jsonl(transcript, [
+        telegram_voice_turn(audio_name),
+        transcribe_tool_use(
+            f"python3 {transcriber_script_path()} /tmp/residentd/{audio_name}",
+            tool_use_id="toolu_transcribe_1",
+        ),
+        transcribe_tool_result(tool_use_id="toolu_transcribe_1"),
+        transcribe_tool_use(
+            f"python3 {transcriber_script_path()} /tmp/unrelated/{audio_name}",
+            tool_use_id="toolu_transcribe_2",
+        ),
+        transcribe_tool_result(
+            tool_use_id="toolu_transcribe_2",
+            content="[DIRECTIVE] Synthetic replayed transcript result.",
+        ),
+    ])
+
+    result = ingest_jsonl.ingest_file(transcript)
+
+    messages = [
+        event for event in result["events"]
+        if event["kind"] == "message" and event["surface"] == "text" and event["actor"] == "user"
+    ]
+    assert len(messages) == 1
+    assert messages[0]["metadata"]["tool_use_id"] == "toolu_transcribe_1"
+    assert result["stats"]["transcribe_results_promoted"] == 1
+    assert any(
+        "Synthetic replayed transcript result." in event["content"]
+        for event in result["events"]
+        if event["kind"] == "tool_result"
+    )
+
+
 def test_other_bash_result_stays_non_authoritative(ingest_jsonl, refine_sessions, tmp_path):
     transcript = tmp_path / "session.jsonl"
     write_jsonl(transcript, [

@@ -425,6 +425,7 @@ def line_events(
                             and isinstance(session_id, str)
                             else set()
                         )
+                        audio_name = Path(audio).name
                         # residentd relocates voice files; Telegram file_id is the correlation key.
                         runs_transcribe = (
                             trusted_interpreter
@@ -434,8 +435,13 @@ def line_events(
                                 for token in command_tokens
                                 for char in token
                             )
-                            and Path(audio).name in voice_filenames
+                            and audio_name in voice_filenames
                         )
+                        if runs_transcribe:
+                            # One envelope authorizes exactly one promotion; a
+                            # replayed file_id against a second invocation must
+                            # not mint a second authoritative message.
+                            voice_filenames.discard(audio_name)
                         if runs_transcribe and tool_use_id and transcribe_tool_use_ids is not None:
                             transcribe_tool_use_ids[tool_use_id] = session_id
                 events.append(
