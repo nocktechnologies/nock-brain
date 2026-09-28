@@ -121,17 +121,18 @@ def _nested_text(value: object, path: tuple[str, ...]) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def unwrap_channel_user_text(text: str) -> str | None:
-    """Extract a human turn from a resident-channel envelope.
+def unwrap_channel_user_text(text: str) -> tuple[str, str] | None:
+    """Extract a human turn and actor from a resident-channel envelope.
 
     Channel transport receipts are untrusted structural data, not conversation
     text. The resident-channel frame's matching marker ID binds its body to the
     envelope. Known Telegram text/caption and NockCC body/subject fields take
-    precedence; a non-JSON frame body is a plain human turn. Non-channel text
-    is returned unchanged.
+    precedence; a non-JSON frame body is a plain human turn. NockCC
+    ``from_agent`` values stamp the actor, with ``kevin`` mapped to ``user``;
+    other channel turns keep the existing ``user`` actor.
     """
     if not text.lstrip().startswith("<channel "):
-        return text
+        return text, "user"
     match = _CHANNEL_FRAME_RE.fullmatch(text.strip())
     if match is None:
         return None
@@ -142,17 +143,22 @@ def unwrap_channel_user_text(text: str) -> str | None:
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
-        return body or None
+        return (body, "user") if body else None
     if isinstance(payload, str):
-        return payload.strip() or None
+        human_text = payload.strip()
+        return (human_text, "user") if human_text else None
     if isinstance(payload, list):
         return None
     if not isinstance(payload, dict):
-        return body
+        return body, "user"
+    sender = payload.get("from_agent", "user")
+    actor = sender if isinstance(sender, str) else ""
+    if actor == "kevin":
+        actor = "user"
     for path in _CHANNEL_TEXT_PATHS:
         human_text = _nested_text(payload, path)
         if human_text is not None:
-            return human_text
+            return human_text, actor
     return None
 
 
@@ -262,15 +268,17 @@ def line_events(
             part_type = part.get("type", "text")
             if part_type == "text":
                 text = json_text(part.get("text", ""))
+                event_actor = actor
                 if line_type == "user" and actor == "user" and text.lstrip().startswith("<channel "):
-                    text = unwrap_channel_user_text(text)
-                    if text is None:
+                    unwrapped = unwrap_channel_user_text(text)
+                    if unwrapped is None:
                         stats["channel_wrappers_dropped"] += 1
                         continue
+                    text, event_actor = unwrapped
                     stats["channel_wrappers_unwrapped"] += 1
                 if text:
                     events.append(
-                        make_event(path, line_number, raw, actor, "text", "message", text, stats=stats)
+                        make_event(path, line_number, raw, event_actor, "text", "message", text, stats=stats)
                     )
             elif part_type == "tool_use":
                 tool_name = part.get("name", "")
