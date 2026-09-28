@@ -133,7 +133,7 @@ def test_channel_wrapped_nockcc_envelope_keeps_envelope_body(ingest_jsonl, tmp_p
     result = ingest_jsonl.ingest_file(transcript)
 
     assert [event["content"] for event in result["events"]] == [body]
-    assert result["events"][0]["actor"] == "mira-nockos"
+    assert result["events"][0]["actor"] == "nockcc:mira-nockos"
     assert "Task assigned" not in json.dumps(result["events"])
     assert result["stats"]["channel_wrappers_unwrapped"] == 1
 
@@ -141,9 +141,13 @@ def test_channel_wrapped_nockcc_envelope_keeps_envelope_body(ingest_jsonl, tmp_p
 @pytest.mark.parametrize(
     ("sender", "expected_actor", "expected_fact_count"),
     [
-        ("pipeline-feedback-router", "pipeline-feedback-router", 0),
-        ("kevin", "kevin", 0),
-        ("user", "nockcc-user", 0),
+        ("pipeline-feedback-router", "nockcc:pipeline-feedback-router", 0),
+        ("kevin", "nockcc:kevin", 0),
+        ("assistant", "nockcc:assistant", 0),
+        ("system", "nockcc:system", 0),
+        ("User", "nockcc:User", 0),
+        ("nockcc-unknown", "nockcc:nockcc-unknown", 0),
+        ("user", "nockcc:user", 0),
     ],
 )
 def test_nockcc_sender_controls_authority_fact_minting(
@@ -221,7 +225,7 @@ def test_nockcc_without_string_sender_cannot_mint_authority_facts(
 
     events = ingest_jsonl.ingest_file(transcript)["events"]
     assert len(events) == 1
-    assert events[0]["actor"] == "nockcc-unknown"
+    assert events[0]["actor"] == "nockcc:unknown"
     assert events[0]["content"] == expected_text
     assert refine_sessions.facts_from_events(events) == []
 
@@ -248,6 +252,41 @@ def test_channel_wrapped_telegram_turn_remains_user_authority(
     assert len(refine_sessions.facts_from_events(events)) == 1
 
 
+@pytest.mark.parametrize(
+    ("channel", "expected_actor", "expected_fact_count"),
+    [
+        ("Telegram", "user", 1),
+        ("TELEGRAM", "user", 1),
+        ("NockCC", "nockcc:kevin", 0),
+        ("NOCKCC", "nockcc:kevin", 0),
+    ],
+)
+def test_channel_name_casefolds_before_actor_routing(
+    ingest_jsonl, refine_sessions, tmp_path, channel, expected_actor, expected_fact_count
+):
+    transcript = tmp_path / f"{channel}.jsonl"
+    directive = "[DIRECTIVE] Keep the synthetic sample retention at thirty days."
+    if channel.casefold() == "telegram":
+        payload = {"from_agent": "kevin", "telegram": {"message": {"text": directive}}}
+    else:
+        payload = {"from_agent": "kevin", "body": directive}
+    write_jsonl(transcript, [{
+        "type": "user",
+        "sessionId": "synthetic-session",
+        "timestamp": "2026-09-28T00:00:00Z",
+        "message": {
+            "role": "user",
+            "content": channel_frame(json.dumps(payload), channel=channel, kind="message"),
+        },
+    }])
+
+    events = ingest_jsonl.ingest_file(transcript)["events"]
+
+    assert len(events) == 1
+    assert events[0]["actor"] == expected_actor
+    assert len(refine_sessions.facts_from_events(events)) == expected_fact_count
+
+
 def test_other_channel_turn_cannot_mint_authority_facts(
     ingest_jsonl, refine_sessions, tmp_path
 ):
@@ -266,7 +305,7 @@ def test_other_channel_turn_cannot_mint_authority_facts(
 
     events = ingest_jsonl.ingest_file(transcript)["events"]
     assert len(events) == 1
-    assert events[0]["actor"] == "other-unknown"
+    assert events[0]["actor"] == "other:unknown"
     assert len(refine_sessions.facts_from_events(events)) == 0
 
 

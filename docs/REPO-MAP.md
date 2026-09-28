@@ -46,11 +46,12 @@ Contract updates 2026-09-27: purge removes a session-note fact only when its
 complete rendered bullet exactly matches a removed fact (including its anchor
 and truncation), preserving transcript history and near-matches. Review and
 vault outputs are regenerated from the cleaned sources.
-Contract updates 2026-09-28: actor identity is bound to the resident-channel
-frame. Only plain user turns and Telegram frames use actor `user`; NockCC
-frames retain a string `from_agent` (including `kevin`); missing and
-blank/non-string sender values become `nockcc-unknown`. NockCC frames never use actor
-`user`, and other non-engine channels use a non-user actor.
+Contract updates 2026-09-28: resident-channel names are casefolded before
+routing. Only plain user turns and Telegram frames use actor `user`; NockCC
+frames namespace every string sender as `nockcc:<sender>` and missing,
+blank, or non-string sender values as `nockcc:unknown`. Other non-engine
+channels use `<channel>:unknown`. No NockCC sender can collide with the
+first-party actors used by authority extraction.
 
 ---
 
@@ -238,7 +239,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 **Ingest / extract**
 | Script | Notes |
 |---|---|
-| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame: `channel="engine"` is always dropped, JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. Actor identity follows the frame channel: only plain user and Telegram turns use `user`; NockCC string `from_agent` values remain literal actors (including `kevin`), missing/blank/non-string senders become `nockcc-unknown`, and the reserved `from_agent="user"` becomes `nockcc-user`. Other non-engine channels use a non-user actor. Thus only Telegram/plain user turns can mint authority facts through `extract-facts.authority_fact_allowed`. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result` |
+| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame after casefolding the channel: `engine` is always dropped, Telegram maps to `user`, NockCC maps every non-blank string sender to `nockcc:<sender>` and absent/blank/non-string senders to `nockcc:unknown`, and other channels map to `<channel>:unknown`. JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. Since `extract-facts.authority_fact_allowed` accepts only exact actor `user`, NockCC actors cannot mint authority facts. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result` |
 | `refine-sessions.py` | events → v1-compatible facts + session notes. 1,500-char content cap; `tool_use.input`/`tool_result.content` can never mint facts; reuses extract-facts' classification rules |
 | `extract-facts.py` | Markdown transcripts → facts. Tagged (0.9 conf) + inferred (0.7–0.85) patterns; fleet-activity kinds dropped at classification (#76); `machine_tag()` enforces a **closed machine enum, MINT-ONLY** (`KNOWN_MACHINES` = `mac-kevin`, `kevins-linux`; `fleet-02` retired at the 2026-08-27 seat migration and now raises). Retiring a name blocks new stamps only — facts already carrying a retired `machine` stay readable, verifiable and recallable, because `machine` is in neither attestation payload and no read path consults the enum. Never make it a read filter. **Writes the live store directly** — `propose-facts.py` is the gated twin |
 | `propose-facts.py` / `approve-proposals.py` | Same extraction into `proposed-facts.json`; approve releases to store (no re-sign), reject drops. Live store untouched until approval |
