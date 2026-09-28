@@ -272,39 +272,23 @@ def test_recall_works_with_insights_but_no_facts(budget_recall, tmp_path):
     assert "Recurring decision" in out
 
 
-# --- N10935: heuristic-synthesis insights need a real relevance match -----
+# --- N10935: heuristic-synthesis insights never ride per-prompt recall ----
 
-def test_cap_heuristic_synthesis_drops_low_relevance_heuristic_only(budget_recall):
-    query_terms = {"pricing", "tier", "release"}
-    low_relevance = {"id": "h1", "kind": "insight", "synthesized_by": "heuristic",
-                     "content": "Recurring bug (3 distinct events): a, b, c"}
+def test_exclude_heuristic_synthesis_drops_heuristic_keeps_others(budget_recall):
+    heuristic = {"id": "h1", "kind": "insight", "synthesized_by": "heuristic",
+                 "content": "Recurring bug (3 distinct events): a, b, c"}
     llm = {"id": "l1", "kind": "insight", "synthesized_by": "llm",
            "content": "Ship the fix behind a flag and roll back on regression."}
     legacy = {"id": "leg1", "kind": "insight",
               "content": "Recurring decision: use Postgres"}  # no field (pre-N10935)
-    kept = budget_recall._cap_heuristic_synthesis(
-        [low_relevance, llm, legacy], query_terms)
+    kept = budget_recall._exclude_heuristic_synthesis([heuristic, llm, legacy])
     assert [i["id"] for i in kept] == ["l1", "leg1"]
 
 
-def test_cap_heuristic_synthesis_admits_one_high_relevance_row(budget_recall):
-    # A heuristic row that genuinely names most of the prompt's subject
-    # clears the bar; a second one — however relevant — is still capped at
-    # one (the ticket's "cap it at one row" fallback).
-    query_terms = {"pricing", "tier", "release", "approved"}
-    strong_one = {"id": "h1", "kind": "insight", "synthesized_by": "heuristic",
-                 "content": "Recurring correction: pricing tier release approved"}
-    strong_two = {"id": "h2", "kind": "insight", "synthesized_by": "heuristic",
-                 "content": "Recurring decision: pricing tier release approved again"}
-    kept = budget_recall._cap_heuristic_synthesis(
-        [strong_one, strong_two], query_terms)
-    assert [i["id"] for i in kept] == ["h1"]
-
-
 def test_heuristic_synthesis_insight_never_beats_matching_fact(budget_recall, tmp_path):
-    # N10935: a "Recurring <kind> (...)" keyword-bag insight that shares only
-    # generic terms with the prompt must not crowd out a raw fact that
-    # actually matches more of the prompt's own terms.
+    # End-to-end through budget_recall(): a "Recurring <kind> (...)"
+    # keyword-bag insight is excluded outright, so an on-topic raw fact
+    # leads recall instead of being crowded out.
     on_topic_fact = fact(
         "gate crm-mira PR 1064: CI failure traced to a stale runner cache",
         kind="decision",
@@ -331,12 +315,33 @@ def test_heuristic_synthesis_insight_never_beats_matching_fact(budget_recall, tm
     assert "Recurring bug" not in out
 
 
+def test_heuristic_insight_excluded_even_when_query_matches_verbatim(budget_recall, tmp_path):
+    # The exclusion is unconditional on provenance, not content: even a
+    # heuristic insight whose text is an exact copy of the query — including
+    # the "ingest events pipeline" phrasing that defeated the round-1 ratio
+    # floor via plural/singular scaffolding drift — never rides per-prompt
+    # recall.
+    heuristic_insight = dict(
+        fact(
+            "Recurring bug: ingest events pipeline stalled",
+            kind="insight", source_date="2026-05-19",
+        ),
+        id="ins1", synthesized_by="heuristic",
+    )
+    inf = tmp_path / "insights.json"
+    inf.write_text(json.dumps([heuristic_insight]))
+    out = budget_recall.budget_recall(
+        "ingest events pipeline stalled", tmp_path / "nofacts.json", insights_file=inf,
+    )
+    assert out == ""
+
+
 def test_llm_synthesized_insight_still_surfaces(budget_recall, tmp_path):
     # The exclusion targets the heuristic template only — a real judged
-    # summary (synthesized_by == "llm") stays eligible.
+    # summary (synthesized_by == "llm") stays eligible, same text included.
     llm_insight = dict(
         fact(
-            "Deploy lifecycle hooks with recall classifiers within a strict token budget.",
+            "Recurring bug: ingest events pipeline stalled",
             kind="insight", source_date="2026-05-19",
         ),
         id="ins1", synthesized_by="llm",
@@ -344,72 +349,9 @@ def test_llm_synthesized_insight_still_surfaces(budget_recall, tmp_path):
     inf = tmp_path / "insights.json"
     inf.write_text(json.dumps([llm_insight]))
     out = budget_recall.budget_recall(
-        "recall classifiers token budget", tmp_path / "nofacts.json", insights_file=inf,
+        "ingest events pipeline stalled", tmp_path / "nofacts.json", insights_file=inf,
     )
-    assert "Deploy lifecycle hooks" in out
-
-
-def test_cap_heuristic_synthesis_ignores_template_scaffolding_words(budget_recall):
-    # A query that only echoes the template's own fixed scaffolding ("most",
-    # "recent", the kind name) must not look on-topic just because every
-    # heuristic insight carries that shape regardless of subject.
-    query_terms = {"most", "recent", "decision"}
-    scaffolding_only = {"id": "h1", "kind": "insight", "synthesized_by": "heuristic",
-                        "content": "Recurring decision (2 distinct events): "
-                                   "unrelated, terms, here. Most recent: something else"}
-    kept = budget_recall._cap_heuristic_synthesis([scaffolding_only], query_terms)
-    assert kept == []
-
-
-def test_cap_heuristic_synthesis_min_ratio_env_override(budget_recall, monkeypatch):
-    # NOCKBRAIN_HEURISTIC_INSIGHT_MIN_RATIO matches the env-tunable pattern of
-    # every other recall knob in this file (NOCKBRAIN_MAX_PER_DATE, etc.).
-    query_terms = {"pricing", "tier", "release", "approved"}
-    half_match = {"id": "h1", "kind": "insight", "synthesized_by": "heuristic",
-                 "content": "Recurring bug: pricing tier only"}
-    assert budget_recall._cap_heuristic_synthesis([half_match], query_terms) == []
-    monkeypatch.setenv("NOCKBRAIN_HEURISTIC_INSIGHT_MIN_RATIO", "0.4")
-    assert [i["id"] for i in
-            budget_recall._cap_heuristic_synthesis([half_match], query_terms)] == ["h1"]
-
-
-def test_heuristic_synthesis_insight_surfaces_when_genuinely_on_topic(budget_recall, tmp_path):
-    # N10935 is not a blanket exclusion: end-to-end through budget_recall()
-    # (real _query_terms()/_tokenize() normalization, not a hand-built set),
-    # a heuristic insight that actually names the prompt's subject still
-    # leads recall.
-    on_topic_insight = dict(
-        fact(
-            "Recurring correction: pricing tier release approved",
-            kind="insight", source_date="2026-06-05",
-        ),
-        id="ins1", synthesized_by="heuristic",
-    )
-    inf = tmp_path / "insights.json"
-    inf.write_text(json.dumps([on_topic_insight]))
-    out = budget_recall.budget_recall(
-        "pricing tier release approved", tmp_path / "nofacts.json", insights_file=inf,
-    )
-    assert "Recurring correction" in out
-
-
-def test_recall_empty_when_only_weak_heuristic_insight_matches(budget_recall, tmp_path):
-    # A store containing nothing but an off-topic heuristic insight must
-    # degrade to no recall, not inject the keyword bag as a weak breadcrumb —
-    # the hook treats {} and a real "no matches" the same way.
-    weak_insight = dict(
-        fact(
-            "Recurring bug (3 distinct events): crm, mira, port, cleanup, backlog",
-            kind="insight", source_date="2026-05-19",
-        ),
-        id="ins1", synthesized_by="heuristic",
-    )
-    inf = tmp_path / "insights.json"
-    inf.write_text(json.dumps([weak_insight]))
-    out = budget_recall.budget_recall(
-        "gate crm-mira PR 1064 CI failure", tmp_path / "nofacts.json", insights_file=inf,
-    )
-    assert out == ""
+    assert "Recurring bug" in out
 
 
 # --- N8069: recency- and supersession-aware ranking ------------------------

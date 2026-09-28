@@ -788,7 +788,7 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
     return "\n\n".join(output_lines)
 
 
-# --- Boot-synthesis insight relevance floor (N10935) ------------------------
+# --- Per-prompt heuristic-synthesis insight exclusion (N10935) --------------
 # synthesize.py stamps every insight's provenance: "heuristic" is the literal
 # "Recurring <kind> (N distinct events; M sampled inputs, ...): <theme>. Most
 # recent: <excerpt>" template (no synthesizer, or the synthesizer failed/was
@@ -798,57 +798,19 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
 # because insight_results is unconditionally placed ahead of fact_results
 # below, a handful of these can occupy the whole per-prompt token budget
 # before a genuinely on-topic fact is ever considered (observed live: the
-# same 4-5 rows won on almost every prompt regardless of topic). Raise the
-# bar specifically for this template: it may lead recall only when it names
-# most of the prompt's own terms, and at most one such row gets through
-# however many clear that bar. Two refinements over a naive term-overlap
-# ratio, both required by direct measurement against the live store:
-#   - The fixed scaffolding words every heuristic insight carries regardless
-#     of subject ("recurring", "distinct events", "sampled inputs", "most
-#     recent" — literally in every synthesize_cluster() template string,
-#     never informative about topic) are excluded from the match count, so a
-#     query that merely echoes the template shape doesn't look on-topic.
-#   - The bar is 2/3 of the query's terms, not half: half is only as strict
-#     as search()'s own baseline floor for queries of 3-4 terms (both round
-#     to "2 of N"), so it added no protection for short/medium prompts —
-#     exactly where a recurring incidental word (an author's own name, a
-#     frequently-mentioned repo) most easily clears "half".
-# A verified insight that genuinely covers its raw sources (the synthesis
-# coverage contract, §6) is unaffected as long as it clears the same bar —
-# this is not a blanket exclusion. LLM-enriched insights (real prose) and
-# pre-N10935 stores lacking the field are untouched. NOCKBRAIN_HEURISTIC_
-# INSIGHT_MIN_RATIO overrides the ratio (0 < x <= 1), matching every other
-# recall knob's env-tunable escape hatch.
+# same 4-5 rows won on almost every prompt regardless of topic). A
+# keyword-bag template has no stable definition of "on-topic" to floor a
+# term-overlap ratio against, so per-prompt recall excludes the whole
+# provenance instead. Heuristic insights stay in the store, available to any
+# other reader (e.g. boot-time context assembly) — only per-prompt recall
+# here excludes them. LLM-enriched insights and pre-N10935 stores lacking the
+# field are unaffected.
 HEURISTIC_SYNTHESIS = "heuristic"
-HEURISTIC_RELEVANCE_MIN_RATIO = 2.0 / 3.0
-_HEURISTIC_TEMPLATE_SCAFFOLDING = {
-    "recurring", "distinct", "events", "sampled", "inputs", "most", "recent",
-}
 
 
-def _resolve_heuristic_relevance_min_ratio() -> float:
-    return _env_factor("NOCKBRAIN_HEURISTIC_INSIGHT_MIN_RATIO",
-                       HEURISTIC_RELEVANCE_MIN_RATIO)
-
-
-def _cap_heuristic_synthesis(insight_results: list[dict],
-                             query_terms: "set[str]") -> list[dict]:
-    min_ratio = _resolve_heuristic_relevance_min_ratio()
-    kept: list[dict] = []
-    heuristic_admitted = False
-    for insight in insight_results:
-        if insight.get("synthesized_by") != HEURISTIC_SYNTHESIS:
-            kept.append(insight)
-            continue
-        if heuristic_admitted or not query_terms:
-            continue
-        content_terms = (set(_tokenize(insight.get("content", "")))
-                         - _HEURISTIC_TEMPLATE_SCAFFOLDING)
-        matched_ratio = len(query_terms & content_terms) / len(query_terms)
-        if matched_ratio >= min_ratio:
-            kept.append(insight)
-            heuristic_admitted = True
-    return kept
+def _exclude_heuristic_synthesis(insights: list[dict]) -> list[dict]:
+    return [insight for insight in insights
+            if insight.get("synthesized_by") != HEURISTIC_SYNTHESIS]
 
 
 # Default cap on how many synthesized insights may lead a SEMANTIC recall
@@ -1011,21 +973,20 @@ def select_recall(query: str, facts_file: "Path | None",
         )
     else:
         fact_results = []
-    insight_results = (
-        _cap_heuristic_synthesis(
-            search(
+    if insights_file:
+        insight_results = search(
+            _exclude_heuristic_synthesis(
                 _scope_facts(
                     _load(insights_file, verify_key=verify_key,
                           strict_verify=strict_verify),
                     agent_scope,
                 ),
-                query, include_superseded,
-                now=ref_now, min_matched_terms=min_matches,
             ),
-            query_terms,
+            query, include_superseded,
+            now=ref_now, min_matched_terms=min_matches,
         )
-        if insights_file else []
-    )
+    else:
+        insight_results = []
     if semantic:
         lead_cap = _resolve_insight_lead_cap()
         if lead_cap > 0:
