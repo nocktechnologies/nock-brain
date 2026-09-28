@@ -71,6 +71,14 @@ frames namespace every string sender as `nockcc:<sender>` and missing,
 blank, or non-string sender values as `nockcc:unknown`. Other non-engine
 channels use `<channel>:unknown`. No NockCC sender can collide with the
 first-party actors used by authority extraction.
+Contract updates 2026-09-28 (N10935): per-prompt recall's insight tier now
+requires a heuristic-synthesized insight (`synthesized_by == "heuristic"`),
+excluding the template's own fixed scaffolding words, to match at least 2/3
+of the query's distinct terms before it can lead recall, and admits at most
+one such row regardless of how many clear the bar (env-tunable via
+`NOCKBRAIN_HEURISTIC_INSIGHT_MIN_RATIO`), unconditionally on every call, not
+only when semantic. LLM-enriched insights and legacy insights without the
+field are unaffected.
 
 ---
 
@@ -397,10 +405,24 @@ Inside `budget-recall.select_recall()`:
 3. **Graph expansion** (`--graph`): expands the *fused* list (order is
    specified: dense first) with concept/session neighbors, always below the
    weakest seed. Off-path returns the identical list object.
-4. **Insights lead**: insights searched with the same `search()` and capped
-   at 5 when semantic. Full lineage never suppresses raw facts. Only signed
-   `covered_source_ids` from a completely included insight can deduplicate
-   unchanged, verbatim source detail; reserved dense sources remain included.
+4. **Insights lead**: insights searched with the same `search()`, then (on
+   every call, semantic or not) a heuristic-synthesized insight
+   (`synthesized_by == "heuristic"`, the auto-generated "Recurring \<kind\>
+   (N distinct events...)" keyword-bag template — see synthesize.py
+   §"Synthesis evidence contract") must match at least 2/3 of the query's
+   distinct terms, excluding the template's own fixed scaffolding words, to
+   lead recall at all; at most one such row is admitted however many clear
+   that bar (N10935: the template term-matches almost any query on 1-2
+   generic words, and unconditionally leading `fact_results` let a handful of
+   them occupy the whole per-prompt budget ahead of genuinely on-topic
+   facts; `NOCKBRAIN_HEURISTIC_INSIGHT_MIN_RATIO` overrides the 2/3 ratio).
+   LLM-enriched insights (`synthesized_by == "llm"`) and legacy insights
+   missing the field are unaffected by that floor. Separately, and only when
+   semantic, the whole (already-floored) insight list is further capped at
+   5. Full lineage never suppresses
+   raw facts. Only signed `covered_source_ids` from a completely included
+   insight can deduplicate unchanged, verbatim source detail; reserved dense
+   sources remain included.
 5. **Date-diversity cap**: max 4 per `source_date`, independently within the
    insight and raw queues; overflow deferred to each queue's tail, never
    dropped; reserved raw ids exempt. Omitted insights spend no raw date slots.
