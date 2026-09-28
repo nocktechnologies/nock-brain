@@ -145,38 +145,52 @@ def _nested_text(value: object, path: tuple[str, ...]) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def unwrap_channel_user_text(text: str) -> str | None:
-    """Extract a human turn from a resident-channel envelope.
+def unwrap_channel_user_text(text: str) -> tuple[str, str] | None:
+    """Extract a human turn and its channel-bound actor from an envelope.
 
     Channel transport receipts are untrusted structural data, not conversation
     text. The resident-channel frame's matching marker ID binds its body to the
     envelope. Known Telegram text/caption and NockCC body/subject fields take
-    precedence; a non-JSON frame body is a plain human turn. Non-channel text
-    is returned unchanged.
+    precedence; a non-JSON frame body is a plain human turn. The channel name
+    is casefolded before routing. Plain user turns and Telegram frames use
+    actor ``user``. NockCC frames always namespace string senders as
+    ``nockcc:<sender>``; missing, blank, or non-string senders use
+    ``nockcc:unknown``. Other channel frames use ``<channel>:unknown``.
     """
     if not text.lstrip().startswith("<channel "):
-        return text
+        return text, "user"
     match = _CHANNEL_FRAME_RE.fullmatch(text.strip())
     if match is None:
         return None
     channel = _CHANNEL_NAME_RE.search(match.group("opening_tag"))
-    if channel is not None and channel.group("channel") == "engine":
+    channel_name = channel.group("channel").casefold() if channel is not None else ""
+    if channel_name == "engine":
         return None
+    default_actor = f"{channel_name or 'channel'}:unknown"
+    if channel_name == "telegram":
+        default_actor = "user"
+    elif channel_name == "nockcc":
+        default_actor = "nockcc:unknown"
     body = match.group("body").strip()
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
-        return body or None
+        return (body, default_actor) if body else None
     if isinstance(payload, str):
-        return payload.strip() or None
+        human_text = payload.strip()
+        return (human_text, default_actor) if human_text else None
     if isinstance(payload, list):
         return None
     if not isinstance(payload, dict):
-        return body
+        return body, default_actor
+    actor = default_actor
+    if channel_name == "nockcc":
+        sender = _nested_text(payload, ("from_agent",))
+        actor = f"nockcc:{sender}" if sender is not None else "nockcc:unknown"
     for path in _CHANNEL_TEXT_PATHS:
         human_text = _nested_text(payload, path)
         if human_text is not None:
-            return human_text
+            return human_text, actor
     return None
 
 
@@ -328,7 +342,7 @@ def line_events(
     stats: dict[str, int],
     include_sidechain: bool = False,
     denied_tool_use_ids: set[str] | None = None,
-    transcribe_tool_use_ids: dict[str, str] | None = None,
+    transcribe_tool_use_ids: dict[str, tuple[str, str]] | None = None,
     voice_media_by_session: dict[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
     if raw.get("isSidechain") and not include_sidechain:
@@ -345,20 +359,22 @@ def line_events(
             part_type = part.get("type", "text")
             if part_type == "text":
                 text = json_text(part.get("text", ""))
+                event_actor = actor
                 if line_type == "user" and actor == "user" and text.lstrip().startswith("<channel "):
                     session_id = raw.get("sessionId")
                     if isinstance(session_id, str) and session_id and voice_media_by_session is not None:
                         filename = allowed_telegram_voice_filename(text)
                         if filename is not None:
                             voice_media_by_session.setdefault(session_id, set()).add(filename)
-                    text = unwrap_channel_user_text(text)
-                    if text is None:
+                    unwrapped = unwrap_channel_user_text(text)
+                    if unwrapped is None:
                         stats["channel_wrappers_dropped"] += 1
                         continue
+                    text, event_actor = unwrapped
                     stats["channel_wrappers_unwrapped"] += 1
                 if text:
                     events.append(
-                        make_event(path, line_number, raw, actor, "text", "message", text, stats=stats)
+                        make_event(path, line_number, raw, event_actor, "text", "message", text, stats=stats)
                     )
             elif part_type == "tool_use":
                 tool_name = part.get("name", "")
@@ -436,12 +452,8 @@ def line_events(
                             )
                             and audio_name in voice_filenames
                         ):
-                            # One envelope authorizes exactly one promotion; a
-                            # replayed file_id against a second invocation must
-                            # not mint a second authoritative message.
-                            voice_filenames.discard(audio_name)
                             if tool_use_id and transcribe_tool_use_ids is not None:
-                                transcribe_tool_use_ids[tool_use_id] = session_id
+                                transcribe_tool_use_ids[tool_use_id] = (session_id, audio_name)
                 events.append(
                     make_event(
                         path,
@@ -464,14 +476,16 @@ def line_events(
                 if denied_tool_use_ids is not None and tool_use_id in denied_tool_use_ids:
                     stats["denied_results"] += 1
                     continue
-                transcribe_session = (
+                transcribe_match = (
                     transcribe_tool_use_ids.pop(tool_use_id, None)
                     if transcribe_tool_use_ids is not None
                     else None
                 )
                 is_transcribe_result = (
-                    transcribe_session is not None
-                    and transcribe_session == raw.get("sessionId")
+                    transcribe_match is not None
+                    and transcribe_match[0] == raw.get("sessionId")
+                    and voice_media_by_session is not None
+                    and transcribe_match[1] in voice_media_by_session.get(transcribe_match[0], set())
                 )
                 if is_transcribe_result:
                     if part.get("is_error"):
@@ -532,6 +546,8 @@ def line_events(
                     )
                 )
                 if is_transcribe_result:
+                    # Consume only a successful promotion so failed attempts can retry.
+                    voice_media_by_session[transcribe_match[0]].discard(transcribe_match[1])
                     stats["transcribe_results_promoted"] += 1
 
     elif line_type == "system" and raw.get("compactMetadata"):
@@ -571,7 +587,7 @@ def ingest_file(path: Path | str, include_sidechain: bool = False) -> dict[str, 
     stats = new_stats()
     events: list[dict[str, Any]] = []
     denied_tool_use_ids: set[str] = set()
-    transcribe_tool_use_ids: dict[str, str] = {}
+    transcribe_tool_use_ids: dict[str, tuple[str, str]] = {}
     voice_media_by_session: dict[str, set[str]] = {}
     with transcript.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
