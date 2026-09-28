@@ -133,7 +133,7 @@ def test_channel_wrapped_nockcc_envelope_keeps_envelope_body(ingest_jsonl, tmp_p
     result = ingest_jsonl.ingest_file(transcript)
 
     assert [event["content"] for event in result["events"]] == [body]
-    assert result["events"][0]["actor"] == "nockcc:mira-nockos"
+    assert result["events"][0]["actor"] == "mira-nockos"
     assert "Task assigned" not in json.dumps(result["events"])
     assert result["stats"]["channel_wrappers_unwrapped"] == 1
 
@@ -141,10 +141,9 @@ def test_channel_wrapped_nockcc_envelope_keeps_envelope_body(ingest_jsonl, tmp_p
 @pytest.mark.parametrize(
     ("sender", "expected_actor", "expected_fact_count"),
     [
-        ("pipeline-feedback-router", "nockcc:pipeline-feedback-router", 0),
-        ("user", "nockcc:user", 0),
-        ("kevin", "user", 1),
-        ("Kevin", "user", 1),
+        ("pipeline-feedback-router", "pipeline-feedback-router", 0),
+        ("kevin", "kevin", 0),
+        ("user", "nockcc-user", 0),
     ],
 )
 def test_nockcc_sender_controls_authority_fact_minting(
@@ -175,18 +174,39 @@ def test_nockcc_sender_controls_authority_fact_minting(
 
 
 @pytest.mark.parametrize(
-    "body",
+    ("body", "expected_text"),
     [
-        json.dumps({"envelope": {"body": "[DIRECTIVE] Keep the synthetic sample retention at thirty days."}}),
-        json.dumps({"from_agent": " ", "body": "[DIRECTIVE] Keep the synthetic sample retention at thirty days."}),
-        json.dumps({"from_agent": 7, "body": "[DIRECTIVE] Keep the synthetic sample retention at thirty days."}),
-        json.dumps("[DIRECTIVE] Keep the synthetic sample retention at thirty days."),
-        "[DIRECTIVE] Keep the synthetic sample retention at thirty days.",
+        (
+            json.dumps({"envelope": {"body": "[DIRECTIVE] Keep the synthetic sample retention at thirty days."}}),
+            "[DIRECTIVE] Keep the synthetic sample retention at thirty days.",
+        ),
+        (
+            json.dumps({
+                "from_agent": 7,
+                "envelope": {"body": "[DIRECTIVE] Keep the synthetic sample retention at thirty days."},
+            }),
+            "[DIRECTIVE] Keep the synthetic sample retention at thirty days.",
+        ),
+        (
+            json.dumps({
+                "from_agent": " ",
+                "envelope": {"body": "[DIRECTIVE] Keep the synthetic sample retention at thirty days."},
+            }),
+            "[DIRECTIVE] Keep the synthetic sample retention at thirty days.",
+        ),
+        (
+            json.dumps("[DIRECTIVE] Keep the synthetic sample retention at thirty days."),
+            "[DIRECTIVE] Keep the synthetic sample retention at thirty days.",
+        ),
+        (
+            "[DIRECTIVE] Keep the synthetic sample retention at thirty days.",
+            "[DIRECTIVE] Keep the synthetic sample retention at thirty days.",
+        ),
     ],
-    ids=["missing-sender", "blank-sender", "non-string-sender", "json-string", "non-json"],
+    ids=["missing-from-agent", "non-string-from-agent", "blank-from-agent", "json-string", "non-json"],
 )
-def test_unidentified_nockcc_sender_cannot_mint_authority_facts(
-    ingest_jsonl, refine_sessions, tmp_path, body
+def test_nockcc_without_string_sender_cannot_mint_authority_facts(
+    ingest_jsonl, refine_sessions, tmp_path, body, expected_text
 ):
     transcript = tmp_path / "nockcc-unknown.jsonl"
     write_jsonl(transcript, [{
@@ -201,8 +221,8 @@ def test_unidentified_nockcc_sender_cannot_mint_authority_facts(
 
     events = ingest_jsonl.ingest_file(transcript)["events"]
     assert len(events) == 1
-    assert events[0]["actor"] == "nockcc:unknown"
-    assert events[0]["content"] == "[DIRECTIVE] Keep the synthetic sample retention at thirty days."
+    assert events[0]["actor"] == "nockcc-unknown"
+    assert events[0]["content"] == expected_text
     assert refine_sessions.facts_from_events(events) == []
 
 
@@ -211,7 +231,7 @@ def test_channel_wrapped_telegram_turn_remains_user_authority(
 ):
     transcript = tmp_path / "telegram.jsonl"
     directive = "[DIRECTIVE] Keep the synthetic sample retention at thirty days."
-    payload = {"from_agent": "router", "telegram": {"message": {"text": directive}}}
+    payload = {"from_agent": "kevin", "telegram": {"message": {"text": directive}}}
     write_jsonl(transcript, [{
         "type": "user",
         "sessionId": "synthetic-session",
@@ -228,28 +248,26 @@ def test_channel_wrapped_telegram_turn_remains_user_authority(
     assert len(refine_sessions.facts_from_events(events)) == 1
 
 
-@pytest.mark.parametrize(
-    ("opening_attr", "expected_actor"),
-    [("", "channel:unknown"), ('channel="chrome"', "chrome:unknown"), ('channel="NockCC"', "NockCC:unknown")],
-)
-def test_non_telegram_channel_defaults_to_non_authority_actor(
-    ingest_jsonl, refine_sessions, tmp_path, opening_attr, expected_actor
+def test_other_channel_turn_cannot_mint_authority_facts(
+    ingest_jsonl, refine_sessions, tmp_path
 ):
     transcript = tmp_path / "other-channel.jsonl"
     directive = "[DIRECTIVE] Keep the synthetic sample retention at thirty days."
-    wrapper = channel_frame(json.dumps({"from_agent": "kevin", "body": directive})).replace(
-        'channel="telegram"', opening_attr
-    )
+    payload = {"from_agent": "kevin", "body": directive}
     write_jsonl(transcript, [{
         "type": "user",
         "sessionId": "synthetic-session",
         "timestamp": "2026-09-28T00:00:00Z",
-        "message": {"role": "user", "content": wrapper},
+        "message": {
+            "role": "user",
+            "content": channel_frame(json.dumps(payload), channel="other", kind="message"),
+        },
     }])
 
     events = ingest_jsonl.ingest_file(transcript)["events"]
-    assert [event["actor"] for event in events] == [expected_actor]
-    assert refine_sessions.facts_from_events(events) == []
+    assert len(events) == 1
+    assert events[0]["actor"] == "other-unknown"
+    assert len(refine_sessions.facts_from_events(events)) == 0
 
 
 def test_channel_wrapped_nockcc_json_without_known_text_is_dropped(ingest_jsonl, tmp_path):

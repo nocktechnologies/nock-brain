@@ -46,13 +46,11 @@ Contract updates 2026-09-27: purge removes a session-note fact only when its
 complete rendered bullet exactly matches a removed fact (including its anchor
 and truncation), preserving transcript history and near-matches. Review and
 vault outputs are regenerated from the cleaned sources.
-Contract updates 2026-09-28: channel-turn actors fail closed. Only Telegram
-turns default to `user`. A NockCC `from_agent` of `kevin` (any case) becomes
-`user`; every other sender becomes `nockcc:<sender>` (so a sender named `user`
-cannot collide), and these actors cannot mint authority facts through the
-existing actor gate. A NockCC turn without a non-empty string `from_agent`,
-any other channel (e.g. `chrome`), or a frame with no channel name gets
-`<channel>:unknown`. `from_agent` is read only on NockCC frames.
+Contract updates 2026-09-28: actor identity is bound to the resident-channel
+frame. Only plain user turns and Telegram frames use actor `user`; NockCC
+frames retain a string `from_agent` (including `kevin`); missing and
+blank/non-string sender values become `nockcc-unknown`. NockCC frames never use actor
+`user`, and other non-engine channels use a non-user actor.
 
 ---
 
@@ -240,7 +238,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 **Ingest / extract**
 | Script | Notes |
 |---|---|
-| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame: `channel="engine"` is always dropped, JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. Actors fail closed: Telegram channel turns are `user`; a NockCC `from_agent` of `kevin` (casefolded) is `user` and any other sender is `nockcc:<sender>`, refused authority facts by `extract-facts.authority_fact_allowed`; a NockCC turn with a missing/blank/non-string sender or a scalar/non-JSON body, any other channel, or a frame with no channel name gets `<channel>:unknown`. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result` |
+| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame: `channel="engine"` is always dropped, JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. Actor identity follows the frame channel: only plain user and Telegram turns use `user`; NockCC string `from_agent` values remain literal actors (including `kevin`), missing/blank/non-string senders become `nockcc-unknown`, and the reserved `from_agent="user"` becomes `nockcc-user`. Other non-engine channels use a non-user actor. Thus only Telegram/plain user turns can mint authority facts through `extract-facts.authority_fact_allowed`. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result` |
 | `refine-sessions.py` | events → v1-compatible facts + session notes. 1,500-char content cap; `tool_use.input`/`tool_result.content` can never mint facts; reuses extract-facts' classification rules |
 | `extract-facts.py` | Markdown transcripts → facts. Tagged (0.9 conf) + inferred (0.7–0.85) patterns; fleet-activity kinds dropped at classification (#76); `machine_tag()` enforces a **closed machine enum, MINT-ONLY** (`KNOWN_MACHINES` = `mac-kevin`, `kevins-linux`; `fleet-02` retired at the 2026-08-27 seat migration and now raises). Retiring a name blocks new stamps only — facts already carrying a retired `machine` stay readable, verifiable and recallable, because `machine` is in neither attestation payload and no read path consults the enum. Never make it a read filter. **Writes the live store directly** — `propose-facts.py` is the gated twin |
 | `propose-facts.py` / `approve-proposals.py` | Same extraction into `proposed-facts.json`; approve releases to store (no re-sign), reject drops. Live store untouched until approval |
