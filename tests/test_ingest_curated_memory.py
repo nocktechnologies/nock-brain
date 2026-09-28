@@ -120,3 +120,19 @@ def test_ingest_preserves_non_curated_facts(ingest_curated_memory, memdir, key_p
     ids = {f["id"] for f in facts}
     assert "abc123" in ids  # pre-existing non-curated fact untouched
     assert any(i.startswith("curated-") for i in ids)
+
+
+def test_ingest_skips_feedback_notes_but_keeps_reference(ingest_curated_memory, memdir, key_paths, tmp_path):
+    # feedback notes are served by the hook's rules half; ingesting them double-injects.
+    (memdir / "feedback_terse.md").write_text(
+        CURATED.replace("project_widget", "feedback_terse").replace("type: project", "type: feedback"),
+        encoding="utf-8")
+    (memdir / "reference_dash.md").write_text(
+        CURATED.replace("project_widget", "reference_dash").replace("type: project", "type: reference"),
+        encoding="utf-8")
+    kp, pp = key_paths
+    store = _empty_store(tmp_path)
+    result = ingest_curated_memory.ingest(memdir, store, key_path=kp, pub_path=pp)
+    names = {f["curated_name"] for f in json.loads(store.read_text())}
+    assert names == {"project_widget", "reference_dash"}
+    assert result["ingested"] == 2

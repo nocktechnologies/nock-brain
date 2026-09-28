@@ -704,3 +704,46 @@ def test_legacy_lineage_is_not_a_coverage_claim(budget_recall, tmp_path):
     ff.write_text(json.dumps([source])); inf.write_text(json.dumps([insight]))
     selected = budget_recall.select_recall('pricing', ff, budget=400, insights_file=inf)
     assert {f['id'] for f in selected['included']} == {'ins1', 'f1'}
+
+
+def _curated_vs_session_store(tmp_path):
+    facts = []
+    for i in range(6):
+        f = fact(f"quokka deployment runbook note {i}: quokka deployment steps",
+                 confidence=0.95, kind="architecture", source_date=f"2026-06-{i + 1:02d}")
+        facts.append(dict(f, id=f"curated-{i}", source="curated-memory"))
+    for i in range(4):
+        f = fact(f"quokka deployment session {i} discussed rollout",
+                 confidence=0.9, kind="decision", source_date=f"2026-05-{i + 1:02d}")
+        facts.append(dict(f, id=f"sess-{i}", source="session"))
+    ff = tmp_path / "facts.json"
+    ff.write_text(json.dumps(facts))
+    return ff
+
+
+def test_select_recall_caps_curated_and_session_facts_fill_freed_slots(budget_recall, tmp_path):
+    ff = _curated_vs_session_store(tmp_path)
+    q = "quokka deployment"
+    ids = lambda sel: [f["id"] for f in sel["included"]]  # noqa: E731
+
+    uncapped = budget_recall.select_recall(q, ff, budget=2000, max_curated=-1)
+    assert sum(i.startswith("curated-") for i in ids(uncapped)) == 6  # premise: curated crowd
+
+    capped = budget_recall.select_recall(q, ff, budget=2000)
+    got = ids(capped)
+    assert sum(i.startswith("curated-") for i in got) == 2
+    assert sum(i.startswith("sess-") for i in got) == 4  # session facts fill the rest
+    # The two kept are the best-ranked curated ones, in their original order.
+    assert [i for i in got if i.startswith("curated-")] == \
+        [i for i in ids(uncapped) if i.startswith("curated-")][:2]
+
+
+def test_select_recall_max_curated_flag_overrides_default(budget_recall, tmp_path):
+    ff = _curated_vs_session_store(tmp_path)
+    sel = budget_recall.select_recall("quokka deployment", ff, budget=2000, max_curated=0)
+    assert not [f for f in sel["included"] if f["id"].startswith("curated-")]
+
+
+def test_curated_source_matches_ingest_constant(budget_recall, ingest_curated_memory):
+    # The cap keys on this string; drift would silently disable it.
+    assert budget_recall.CURATED_SOURCE == ingest_curated_memory.CURATED_SOURCE

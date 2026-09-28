@@ -13,7 +13,8 @@ env var. (Claude Code keeps such a dir under ``~/.claude/projects/<slug>/memory/
 
 Properties:
   * One fact per curated file (the ``MEMORY.md`` index is skipped — it is a
-    table of contents, not a fact).
+    table of contents, not a fact; ``type: feedback`` notes are skipped — the
+    hook already injects them as rules).
   * Each fact is signed with the SAME Ed25519/HMAC pipeline every other fact
     uses (``bin/_sign.py``), so claim-guard and ``verify-facts.py`` still pass.
   * Idempotent: re-running first drops every existing ``curated-*`` fact, then
@@ -81,15 +82,9 @@ CURATED_CONFIDENCE = 0.95  # >= 0.9 per A5: high-confidence canonical truth.
 # The index file is a table of contents, not a standalone fact.
 SKIP_FILES = {"MEMORY.md"}
 
-# Map the curated `type` (frontmatter metadata.type) to a nock-brain `kind`. We
-# pick DURABLE kinds (long half-life in budget-recall's RECENCY_HALF_LIFE_DAYS)
-# so canonical truths do not decay out of recall over months. The original type
-# is preserved on `curated_type` for traceability.
-TYPE_TO_KIND = {
-    "feedback": "correction",   # standing corrections/directives — 180d half-life
-    "project": "architecture",  # product/system canon — 180d half-life
-    "reference": "architecture",
-}
+# Every ingested curated type maps to a DURABLE kind (long half-life in
+# budget-recall's RECENCY_HALF_LIFE_DAYS) so canonical truths do not decay out of
+# recall over months. The original type is preserved on `curated_type`.
 DEFAULT_KIND = "architecture"
 
 
@@ -154,7 +149,7 @@ def build_fact(path: Path) -> dict[str, Any]:
     name = fm.get("name") or path.stem
     description = fm.get("description", "").strip()
     curated_type = fm.get("metadata.type", "").strip().lower()
-    kind = TYPE_TO_KIND.get(curated_type, DEFAULT_KIND)
+    kind = DEFAULT_KIND
 
     # Content leads with the name + description (the high-signal summary recall
     # excerpts from), then the full body for depth.
@@ -193,6 +188,9 @@ def collect_curated_facts(memory_dir: Path) -> list[dict[str, Any]]:
         if path.name in SKIP_FILES:
             continue
         fact = build_fact(path)
+        if fact["curated_type"] == "feedback":
+            # Already injected by the hook's RELEVANT FEEDBACK RULES half.
+            continue
         fid = fact["id"]
         if fid in seen_ids:
             # Two curated files resolving to the same id (duplicate `name:`):
