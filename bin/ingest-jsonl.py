@@ -4,7 +4,9 @@
 This is the v2 entry point before fact extraction. It preserves source anchors
 and treats tool_use inputs as first-class evidence, while denying private paths,
 private tools/endpoints, and scrubbing secrets before events are returned or
-written.
+written. A paired Bash transcribe.py result becomes a user message only when
+its --telegram-file-id matches a preceding allowlisted Telegram voice envelope in
+the same session and the configured transcriber invocation passes path checks.
 
 Usage:
     python3 bin/ingest-jsonl.py ~/.claude/projects/.../session.jsonl
@@ -18,7 +20,9 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -61,6 +65,18 @@ DEFAULT_ENDPOINT_DENYLIST = [
     "*/api/brain/diary/*",
     "*/api/brain/private/*",
 ]
+TRANSCRIBE_DIAGNOSTIC_RE = re.compile(
+    r"^(?:\[transcribe\] (?:DEEPGRAM_API_KEY not set|(?:file )?error:)|Usage: transcribe\.py(?:\s|$))"
+)
+# Shell substitutions or command separators can mix unrelated output into a result.
+TRANSCRIBE_UNSAFE_COMMAND_RE = re.compile(r"\$\(|`|[<>]\(|[\r\n]")
+TRANSCRIBE_UNSAFE_WORD_CHARS = frozenset("$`*?{}[]~\\")
+MIRA_HOME = Path(
+    os.environ.get("MIRA_HOME") or Path.home() / "Dev" / "mira-home"
+).expanduser().resolve()
+TRANSCRIBE_SCRIPT_PATH = (MIRA_HOME / "scripts" / "transcribe.py").resolve()
+RESIDENCE_VENV_BIN = (MIRA_HOME / ".venv" / "bin").resolve()
+
 
 def new_stats() -> dict[str, int]:
     return {
@@ -77,6 +93,9 @@ def new_stats() -> dict[str, int]:
         "malformed_lines": 0,
         "channel_wrappers_unwrapped": 0,
         "channel_wrappers_dropped": 0,
+        "voice_envelopes_seen_allowlist_unset": 0,
+        "transcribe_results_promoted": 0,
+        "transcribe_results_dropped": 0,
     }
 
 
@@ -95,6 +114,12 @@ def json_text(value: Any) -> str:
 
 _CHANNEL_FRAME_RE = CHANNEL_FRAME_RE
 _CHANNEL_NAME_RE = re.compile(r"\bchannel=(?P<quote>[\"'])(?P<channel>[^\"']*)(?P=quote)")
+_CHANNEL_SOURCE_RE = re.compile(r"\bsource=(?P<quote>[\"'])(?P<source>[^\"']*)(?P=quote)")
+_CHANNEL_KIND_RE = re.compile(r"\bkind=(?P<quote>[\"'])(?P<kind>[^\"']*)(?P=quote)")
+_CHANNEL_BEGIN_RE = re.compile(
+    r"\[BEGIN UNTRUSTED CHANNEL CONTENT #[0-9a-f]{12}(?P<metadata>[^\]]*)\]"
+)
+_TELEGRAM_SENDER_RE = re.compile(r"\bsender telegram:(?P<sender>[0-9]+)\b")
 _CHANNEL_TEXT_PATHS = (
     ("message", "text"),
     ("message", "caption"),
@@ -168,6 +193,67 @@ def unwrap_channel_user_text(text: str) -> tuple[str, str] | None:
         if human_text is not None:
             return human_text, actor
     return None
+
+
+def allowed_telegram_voice_file_id(text: str, stats: dict[str, int]) -> str | None:
+    """Return an allowed Telegram user's voice file_id used by the transcriber."""
+    match = _CHANNEL_FRAME_RE.fullmatch(text.strip())
+    if match is None:
+        return None
+    opening_tag = match.group("opening_tag")
+    channel = _CHANNEL_NAME_RE.search(opening_tag)
+    source = _CHANNEL_SOURCE_RE.search(opening_tag)
+    kind = _CHANNEL_KIND_RE.search(opening_tag)
+    if (
+        channel is None
+        or channel.group("channel") != "telegram"
+        or source is None
+        or source.group("source") != "plugin:resident-channel:resident-channel"
+        or kind is None
+        or kind.group("kind") != "message"
+    ):
+        return None
+    try:
+        envelope = json.loads(match.group("body").strip())
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(envelope, dict):
+        return None
+    message = envelope.get("message")
+    if not isinstance(message, dict):
+        return None
+    sender = message.get("from")
+    voice = message.get("voice")
+    chat = message.get("chat")
+    if not isinstance(sender, dict) or not isinstance(voice, dict) or not isinstance(chat, dict):
+        return None
+    allowed_user_id = os.environ.get("ALLOWED_USER", "").strip()
+    if not allowed_user_id:
+        stats["voice_envelopes_seen_allowlist_unset"] += 1
+        print("[ingest-jsonl] ALLOWED_USER is unset; voice transcription promotion disabled", file=sys.stderr)
+        return None
+    sender_id = sender.get("id")
+    begin_marker = _CHANNEL_BEGIN_RE.search(match.group(0))
+    sender_marker = (
+        _TELEGRAM_SENDER_RE.search(begin_marker.group("metadata"))
+        if begin_marker is not None
+        else None
+    )
+    if (
+        type(sender_id) is not int
+        or sender_marker is None
+        or sender_marker.group("sender") != str(sender_id)
+        or sender.get("is_bot") is not False
+        or chat.get("type") != "private"
+        or chat.get("id") != sender_id
+    ):
+        return None
+    if not re.fullmatch(r"[0-9]+", allowed_user_id) or sender_id != int(allowed_user_id):
+        return None
+    file_id = voice.get("file_id")
+    if not isinstance(file_id, str) or not file_id or Path(file_id).name != file_id:
+        return None
+    return file_id
 
 
 def _matches_any(value: str, patterns: list[str]) -> bool:
@@ -261,6 +347,8 @@ def line_events(
     stats: dict[str, int],
     include_sidechain: bool = False,
     denied_tool_use_ids: set[str] | None = None,
+    transcribe_tool_use_ids: dict[str, tuple[str, str]] | None = None,
+    voice_media_by_session: dict[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
     if raw.get("isSidechain") and not include_sidechain:
         stats["sidechain_excluded"] += 1
@@ -278,6 +366,11 @@ def line_events(
                 text = json_text(part.get("text", ""))
                 event_actor = actor
                 if line_type == "user" and actor == "user" and text.lstrip().startswith("<channel "):
+                    session_id = raw.get("sessionId")
+                    if isinstance(session_id, str) and session_id and voice_media_by_session is not None:
+                        file_id = allowed_telegram_voice_file_id(text, stats)
+                        if file_id is not None:
+                            voice_media_by_session.setdefault(session_id, set()).add(file_id)
                     unwrapped = unwrap_channel_user_text(text)
                     if unwrapped is None:
                         stats["channel_wrappers_dropped"] += 1
@@ -307,6 +400,64 @@ def line_events(
                     if tool_use_id and denied_tool_use_ids is not None:
                         denied_tool_use_ids.add(tool_use_id)
                     continue
+                command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+                if tool_name == "Bash" and isinstance(command, str):
+                    if TRANSCRIBE_UNSAFE_COMMAND_RE.search(command):
+                        command_tokens = []
+                    else:
+                        try:
+                            lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&")
+                            lexer.whitespace_split = True
+                            lexer.commenters = ""
+                            command_tokens = list(lexer)
+                        except ValueError:
+                            command_tokens = []
+                    if len(command_tokens) == 4:
+                        interpreter, script, option, file_id = command_tokens
+                        script_path = Path(script)
+                        try:
+                            trusted_transcriber_path = (
+                                script_path.is_absolute()
+                                and ".." not in script_path.parts
+                                and script_path.resolve() == TRANSCRIBE_SCRIPT_PATH
+                            )
+                        except (OSError, RuntimeError):
+                            trusted_transcriber_path = False
+                        interpreter_path = Path(interpreter)
+                        interpreter_name_is_python = bool(
+                            re.fullmatch(r"python(?:3(?:\.\d+)?)?", interpreter_path.name)
+                        )
+                        # Bare names are allowed by contract; runtime PATH picks the executable.
+                        trusted_interpreter = interpreter in {"python", "python3"} or (
+                            interpreter_path.is_absolute()
+                            and ".." not in interpreter_path.parts
+                            and interpreter_name_is_python
+                            and interpreter_path.parent in (
+                                Path("/usr/bin"),
+                                Path("/usr/local/bin"),
+                                RESIDENCE_VENV_BIN,
+                            )
+                        )
+                        session_id = raw.get("sessionId")
+                        voice_file_ids = (
+                            voice_media_by_session.get(session_id, set())
+                            if voice_media_by_session is not None
+                            and isinstance(session_id, str)
+                            else set()
+                        )
+                        if (
+                            trusted_interpreter
+                            and trusted_transcriber_path
+                            and not any(
+                                char in TRANSCRIBE_UNSAFE_WORD_CHARS
+                                for token in command_tokens
+                                for char in token
+                            )
+                            and option == "--telegram-file-id"
+                            and file_id in voice_file_ids
+                        ):
+                            if tool_use_id and transcribe_tool_use_ids is not None:
+                                transcribe_tool_use_ids[tool_use_id] = (session_id, file_id)
                 events.append(
                     make_event(
                         path,
@@ -329,7 +480,44 @@ def line_events(
                 if denied_tool_use_ids is not None and tool_use_id in denied_tool_use_ids:
                     stats["denied_results"] += 1
                     continue
-                content = json_text(part.get("content", ""))
+                transcribe_match = (
+                    transcribe_tool_use_ids.pop(tool_use_id, None)
+                    if transcribe_tool_use_ids is not None
+                    else None
+                )
+                is_transcribe_result = (
+                    transcribe_match is not None
+                    and transcribe_match[0] == raw.get("sessionId")
+                    and voice_media_by_session is not None
+                    and transcribe_match[1] in voice_media_by_session.get(transcribe_match[0], set())
+                )
+                if is_transcribe_result:
+                    if part.get("is_error"):
+                        stats["transcribe_results_dropped"] += 1
+                        continue
+                    result_content = part.get("content", "")
+                    if isinstance(result_content, str):
+                        content = result_content
+                    elif isinstance(result_content, list):
+                        content = "\n".join(
+                            item["text"]
+                            for item in result_content
+                            if isinstance(item, dict)
+                            and item.get("type") == "text"
+                            and isinstance(item.get("text"), str)
+                        )
+                    else:
+                        content = ""
+                    content = "\n".join(
+                        line
+                        for line in content.splitlines()
+                        if not TRANSCRIBE_DIAGNOSTIC_RE.match(line.lstrip())
+                    ).strip()
+                    if not content:
+                        stats["transcribe_results_dropped"] += 1
+                        continue
+                else:
+                    content = json_text(part.get("content", ""))
                 denied_result = False
                 if denied_by_path(content):
                     stats["denied_result_paths"] += 1
@@ -339,23 +527,32 @@ def line_events(
                     denied_result = True
                 if denied_result:
                     stats["denied_results"] += 1
+                    if is_transcribe_result:
+                        stats["transcribe_results_dropped"] += 1
                     continue
+                metadata = {
+                    "tool_use_id": part.get("tool_use_id", ""),
+                    "is_sidechain": bool(raw.get("isSidechain")),
+                }
+                if is_transcribe_result:
+                    metadata.update({"tool_name": "Bash", "transcription_script": "transcribe.py"})
                 events.append(
                     make_event(
                         path,
                         line_number,
                         raw,
-                        "tool",
-                        "tool_result.content",
-                        "tool_result",
+                        "user" if is_transcribe_result else "tool",
+                        "text" if is_transcribe_result else "tool_result.content",
+                        "message" if is_transcribe_result else "tool_result",
                         content,
-                        metadata={
-                            "tool_use_id": part.get("tool_use_id", ""),
-                            "is_sidechain": bool(raw.get("isSidechain")),
-                        },
+                        metadata=metadata,
                         stats=stats,
                     )
                 )
+                if is_transcribe_result:
+                    # Consume only a successful promotion so failed attempts can retry.
+                    voice_media_by_session[transcribe_match[0]].discard(transcribe_match[1])
+                    stats["transcribe_results_promoted"] += 1
 
     elif line_type == "system" and raw.get("compactMetadata"):
         events.append(
@@ -394,6 +591,8 @@ def ingest_file(path: Path | str, include_sidechain: bool = False) -> dict[str, 
     stats = new_stats()
     events: list[dict[str, Any]] = []
     denied_tool_use_ids: set[str] = set()
+    transcribe_tool_use_ids: dict[str, tuple[str, str]] = {}
+    voice_media_by_session: dict[str, set[str]] = {}
     with transcript.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
@@ -412,6 +611,8 @@ def ingest_file(path: Path | str, include_sidechain: bool = False) -> dict[str, 
                     stats,
                     include_sidechain,
                     denied_tool_use_ids,
+                    transcribe_tool_use_ids,
+                    voice_media_by_session,
                 )
             )
     stats["events_written"] = len(events)

@@ -46,6 +46,25 @@ Contract updates 2026-09-27: purge removes a session-note fact only when its
 complete rendered bullet exactly matches a removed fact (including its anchor
 and truncation), preserving transcript history and near-matches. Review and
 vault outputs are regenerated from the cleaned sources.
+Contract updates 2026-09-28: JSONL ingest promotes a transcriber result only
+when its `--telegram-file-id` argument matches `message.voice.file_id` from a
+preceding resident Telegram envelope in the same session, and its numeric
+sender ID equals configured `ALLOWED_USER`. Missing/invalid allowlist, NockCC,
+other senders, unrelated audio, forged script/interpreter paths, and ambiguous
+commands leave the result as `tool_result`. The invocation must be a single
+Bash command using the resolved `$MIRA_HOME/scripts/transcribe.py` path
+(`$HOME/Dev/mira-home` by default) and bare `python`/`python3` or a Python
+executable directly under `/usr/bin`, `/usr/local/bin`, or
+`$MIRA_HOME/.venv/bin`.
+The producer change is [mira-home #78](https://github.com/kkwills13/mira-home/pull/78),
+commit `ed5a5212808ffd13ef4a49c52fad6d2aa01079fc`: its transcriber accepts
+`--telegram-file-id`, performs getFile/download internally, and its
+`capabilities/wired-tools.md` specifies the absolute-path canonical command.
+Its offline downloader tests exercise that argument through transcription;
+[CI passed](https://github.com/kkwills13/mira-home/actions/runs/36451638839).
+Rollout order: deploy that producer and documented command, configure
+`ALLOWED_USER` in the nightly ingest environment, then deploy this consumer.
+The two PRs alone do not change the running residence or host environment.
 Contract updates 2026-09-28: resident-channel names are casefolded before
 routing. Only plain user turns and Telegram frames use actor `user`; NockCC
 frames namespace every string sender as `nockcc:<sender>` and missing,
@@ -239,8 +258,8 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 **Ingest / extract**
 | Script | Notes |
 |---|---|
-| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame after casefolding the channel: `engine` is always dropped, Telegram maps to `user`, NockCC maps every non-blank string sender to `nockcc:<sender>` and absent/blank/non-string senders to `nockcc:unknown`, and other channels map to `<channel>:unknown`. JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. Since `extract-facts.authority_fact_allowed` accepts only exact actor `user`, NockCC actors cannot mint authority facts. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result` |
-| `refine-sessions.py` | events → v1-compatible facts + session notes. 1,500-char content cap; `tool_use.input`/`tool_result.content` can never mint facts; reuses extract-facts' classification rules |
+| `ingest-jsonl.py` | Raw Claude JSONL → sanitized evidence events. User-turn resident-channel receipts are unwrapped only from a complete matching-ID BEGIN/END frame after casefolding the channel: `engine` is always dropped, Telegram maps to `user`, NockCC maps every non-blank string sender to `nockcc:<sender>` and absent/blank/non-string senders to `nockcc:unknown`, and other channels map to `<channel>:unknown`. JSON objects retain the first recognized text field, JSON arrays are dropped, and JSON scalars/non-JSON bodies retain stripped plain human text; malformed or unknown wrappers are dropped and counted. Since `extract-facts.authority_fact_allowed` accepts only exact actor `user`, NockCC actors cannot mint authority facts. Three privacy fences (path denylist, tool/endpoint denylist, scrubber); denied `tool_use` also denies its paired `tool_result`. A transcribe result becomes a `surface="text"`, `kind="message"`, `actor="user"` event only when one simple Bash invocation uses the resolved `$MIRA_HOME/scripts/transcribe.py` path (default `$HOME/Dev/mira-home`), an allowed Python interpreter, and exactly four tokens `[interpreter, script, --telegram-file-id, file_id]`, with the file ID equal to `message.voice.file_id` from a preceding same-session resident Telegram envelope whose numeric sender ID equals configured `ALLOWED_USER`. Each envelope's file_id authorizes at most one successful promotion: matching invocations retain the session and file ID until their result arrives. Failed, empty, diagnostic-only, or denied results leave the file ID available for retry; the first successful result consumes it, so even outstanding invocations cannot mint a second authoritative message. Missing/invalid allowlist, NockCC, other senders, unmatched or already-consumed audio, forged paths, and ambiguous commands leave the result as `tool_result`. The old three-token audio-path form and compound download commands are rejected. Missing `ALLOWED_USER` on a voice envelope increments `voice_envelopes_seen_allowlist_unset` and emits a stderr warning. Known transcriber diagnostics are removed; `transcribe_results_promoted` / `transcribe_results_dropped` expose the result path. |
+| `refine-sessions.py` | events → v1-compatible facts + session notes. 1,500-char content cap; raw `tool_use.input` and `tool_result.content` cannot mint facts. The ingest-only trusted-path transcriber exception is converted to a user message before refinement, so it uses the existing user authority gate; all other tool results stay non-authoritative. Reuses extract-facts' classification rules |
 | `extract-facts.py` | Markdown transcripts → facts. Tagged (0.9 conf) + inferred (0.7–0.85) patterns; fleet-activity kinds dropped at classification (#76); `machine_tag()` enforces a **closed machine enum, MINT-ONLY** (`KNOWN_MACHINES` = `mac-kevin`, `kevins-linux`; `fleet-02` retired at the 2026-08-27 seat migration and now raises). Retiring a name blocks new stamps only — facts already carrying a retired `machine` stay readable, verifiable and recallable, because `machine` is in neither attestation payload and no read path consults the enum. Never make it a read filter. **Writes the live store directly** — `propose-facts.py` is the gated twin |
 | `propose-facts.py` / `approve-proposals.py` | Same extraction into `proposed-facts.json`; approve releases to store (no re-sign), reject drops. Live store untouched until approval |
 | `ingest-curated-memory.py` | Dir of curated markdown → signed high-confidence facts; idempotent (drops+reingests `curated-*` slice). Bypasses the propose gate by design |
