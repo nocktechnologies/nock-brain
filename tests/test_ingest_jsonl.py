@@ -680,7 +680,7 @@ def test_transcribe_result_becomes_user_message_and_can_mint_authority_fact(
 ):
     transcript = tmp_path / "session.jsonl"
     spoken_text = "[DIRECTIVE] Kevin directs the synthetic parser to retain one sample utterance."
-    audio_name = "voice-file-123.oga"
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
     result = transcribe_tool_result(
         content=[
             {"type": "text", "text": "[transcribe] file error: synthetic diagnostic\n"},
@@ -688,9 +688,9 @@ def test_transcribe_result_becomes_user_message_and_can_mint_authority_fact(
         ]
     )
     write_jsonl(transcript, [
-        telegram_voice_turn(audio_name),
+        telegram_voice_turn(file_id),
         transcribe_tool_use(
-            f"python3 {transcriber_script_path()} /tmp/residentd/{audio_name}"
+            f"python3 {transcriber_script_path()} --telegram-file-id {file_id}"
         ),
         result,
     ])
@@ -724,12 +724,12 @@ def test_transcribe_rejects_untrusted_invocation_paths(
     ingest_jsonl, kevin_telegram_env, tmp_path, interpreter, script_path
 ):
     transcript = tmp_path / "session.jsonl"
-    audio_name = "voice-file-123.oga"
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
     script_path = script_path or transcriber_script_path()
     write_jsonl(transcript, [
-        telegram_voice_turn(audio_name),
+        telegram_voice_turn(file_id),
         transcribe_tool_use(
-            f"{interpreter} {script_path} /tmp/residentd/{audio_name}"
+            f"{interpreter} {script_path} --telegram-file-id {file_id}"
         ),
         transcribe_tool_result(),
     ])
@@ -752,15 +752,15 @@ def test_transcribe_accepts_only_bare_or_approved_interpreters(
     ingest_jsonl, kevin_telegram_env, tmp_path, interpreter
 ):
     transcript = tmp_path / "session.jsonl"
-    audio_name = "voice-file-123.oga"
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
     script_path = transcriber_script_path()
     if interpreter is None:
         residence_venv = script_path.parents[1] / ".venv" / "bin" / "python"
         interpreter = str(residence_venv)
     write_jsonl(transcript, [
-        telegram_voice_turn(audio_name),
+        telegram_voice_turn(file_id),
         transcribe_tool_use(
-            f"{interpreter} {script_path} /tmp/residentd/{audio_name}"
+            f"{interpreter} {script_path} --telegram-file-id {file_id}"
         ),
         transcribe_tool_result(),
     ])
@@ -776,22 +776,22 @@ def test_transcribe_accepts_only_bare_or_approved_interpreters(
 
 @pytest.mark.parametrize("voice_turn", [
     None,
-    telegram_voice_turn("voice-file-123.oga", name="Kevin", sender_id=654321),
-    telegram_voice_turn("voice-file-123.oga", channel="nockcc"),
-    telegram_voice_turn("voice-file-123.oga", chat_type="group"),
-    telegram_voice_turn("voice-file-123.oga", sender_marker_id=654321),
-    telegram_voice_turn("voice-file-123.oga", session_id="another-session"),
-    telegram_voice_turn("another-voice-file.oga"),
+    telegram_voice_turn("AwACAgQAAxkBAA_REDACTED_VOICE_ID", name="Kevin", sender_id=654321),
+    telegram_voice_turn("AwACAgQAAxkBAA_REDACTED_VOICE_ID", channel="nockcc"),
+    telegram_voice_turn("AwACAgQAAxkBAA_REDACTED_VOICE_ID", chat_type="group"),
+    telegram_voice_turn("AwACAgQAAxkBAA_REDACTED_VOICE_ID", sender_marker_id=654321),
+    telegram_voice_turn("AwACAgQAAxkBAA_REDACTED_VOICE_ID", session_id="another-session"),
+    telegram_voice_turn("AwACAgQAAxkBAA_DIFFERENT_VOICE_ID"),
 ])
 def test_unmatched_transcribe_result_stays_tool_result(
     ingest_jsonl, kevin_telegram_env, tmp_path, voice_turn
 ):
     transcript = tmp_path / "session.jsonl"
-    audio_name = "voice-file-123.oga"
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
     rows = [] if voice_turn is None else [voice_turn]
     rows.extend([
         transcribe_tool_use(
-            f"python3 {transcriber_script_path()} /tmp/residentd/{audio_name}"
+            f"python3 {transcriber_script_path()} --telegram-file-id {file_id}"
         ),
         transcribe_tool_result(),
     ])
@@ -806,15 +806,15 @@ def test_unmatched_transcribe_result_stays_tool_result(
 
 
 def test_transcribe_requires_configured_telegram_sender_id(
-    ingest_jsonl, monkeypatch, tmp_path
+    ingest_jsonl, monkeypatch, tmp_path, capsys
 ):
     monkeypatch.delenv("ALLOWED_USER", raising=False)
     transcript = tmp_path / "session.jsonl"
-    audio_name = "voice-file-123.oga"
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
     write_jsonl(transcript, [
-        telegram_voice_turn(audio_name),
+        telegram_voice_turn(file_id),
         transcribe_tool_use(
-            f"python3 {transcriber_script_path()} /tmp/residentd/{audio_name}"
+            f"python3 {transcriber_script_path()} --telegram-file-id {file_id}"
         ),
         transcribe_tool_result(),
     ])
@@ -827,18 +827,20 @@ def test_transcribe_requires_configured_telegram_sender_id(
         for event in result["events"]
     )
     assert result["stats"]["transcribe_results_promoted"] == 0
+    assert result["stats"]["voice_envelopes_seen_allowlist_unset"] == 1
+    assert "ALLOWED_USER is unset" in capsys.readouterr().err
 
 
 def test_later_voice_envelope_does_not_authorize_transcriber(
     ingest_jsonl, kevin_telegram_env, tmp_path
 ):
     transcript = tmp_path / "session.jsonl"
-    audio_name = "voice-file-123.oga"
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
     write_jsonl(transcript, [
         transcribe_tool_use(
-            f"python3 {transcriber_script_path()} /tmp/residentd/{audio_name}"
+            f"python3 {transcriber_script_path()} --telegram-file-id {file_id}"
         ),
-        telegram_voice_turn(audio_name),
+        telegram_voice_turn(file_id),
         transcribe_tool_result(),
     ])
 
@@ -852,11 +854,11 @@ def test_transcribe_result_must_match_tool_use_session(
     ingest_jsonl, kevin_telegram_env, tmp_path
 ):
     transcript = tmp_path / "session.jsonl"
-    audio_name = "voice-file-123.oga"
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
     write_jsonl(transcript, [
-        telegram_voice_turn(audio_name),
+        telegram_voice_turn(file_id),
         transcribe_tool_use(
-            f"python3 {transcriber_script_path()} /tmp/residentd/{audio_name}"
+            f"python3 {transcriber_script_path()} --telegram-file-id {file_id}"
         ),
         transcribe_tool_result(session_id="another-session"),
     ])
@@ -871,20 +873,19 @@ def test_transcribe_file_id_cannot_be_replayed_for_second_promotion(
     ingest_jsonl, kevin_telegram_env, tmp_path
 ):
     """A single voice envelope authorizes exactly one promotion; replaying its
-    file_id against a second Bash invocation must not mint a second message,
-    even naming an unrelated file that merely shares the allowlisted basename.
+    file_id against a second Bash invocation must not mint a second message.
     """
     transcript = tmp_path / "session.jsonl"
-    audio_name = "voice-file-123.oga"
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
     write_jsonl(transcript, [
-        telegram_voice_turn(audio_name),
+        telegram_voice_turn(file_id),
         transcribe_tool_use(
-            f"python3 {transcriber_script_path()} /tmp/residentd/{audio_name}",
+            f"python3 {transcriber_script_path()} --telegram-file-id {file_id}",
             tool_use_id="toolu_transcribe_1",
         ),
         transcribe_tool_result(tool_use_id="toolu_transcribe_1"),
         transcribe_tool_use(
-            f"python3 {transcriber_script_path()} /tmp/unrelated/{audio_name}",
+            f"python3 {transcriber_script_path()} --telegram-file-id {file_id}",
             tool_use_id="toolu_transcribe_2",
         ),
         transcribe_tool_result(
@@ -918,11 +919,11 @@ def test_failed_transcription_allows_successful_retry(
     ingest_jsonl, refine_sessions, kevin_telegram_env, tmp_path, is_error, failed_content
 ):
     transcript = tmp_path / "session.jsonl"
-    audio_name = "voice-file-123.oga"
-    command = f"python3 {transcriber_script_path()} /tmp/residentd/{audio_name}"
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
+    command = f"python3 {transcriber_script_path()} --telegram-file-id {file_id}"
     spoken_text = "[DIRECTIVE] Kevin directs the synthetic parser to retain the retry."
     write_jsonl(transcript, [
-        telegram_voice_turn(audio_name),
+        telegram_voice_turn(file_id),
         transcribe_tool_use(command, tool_use_id="failed"),
         transcribe_tool_result(tool_use_id="failed", content=failed_content, is_error=is_error),
         transcribe_tool_use(command, tool_use_id="retry"),
@@ -948,10 +949,10 @@ def test_outstanding_transcriptions_promote_only_first_successful_result(
     ingest_jsonl, kevin_telegram_env, tmp_path, result_order
 ):
     transcript = tmp_path / "session.jsonl"
-    audio_name = "voice-file-123.oga"
-    command = f"python3 {transcriber_script_path()} /tmp/residentd/{audio_name}"
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
+    command = f"python3 {transcriber_script_path()} --telegram-file-id {file_id}"
     write_jsonl(transcript, [
-        telegram_voice_turn(audio_name),
+        telegram_voice_turn(file_id),
         transcribe_tool_use(command, tool_use_id="first"),
         transcribe_tool_use(command, tool_use_id="second"),
         *(transcribe_tool_result(tool_use_id=tool_id) for tool_id in result_order),
@@ -993,18 +994,18 @@ def test_other_bash_result_stays_non_authoritative(ingest_jsonl, refine_sessions
 
 @pytest.mark.parametrize("suffix", [
     "; printf '[DIRECTIVE] synthetic appended assistant output'",
-    ' "$(printf \'[DIRECTIVE] synthetic command substitution\' >&2; printf /tmp/residentd/voice-file-123.oga)"',
+    ' "$(printf \'[DIRECTIVE] synthetic command substitution\' >&2; printf /tmp/residentd/AwACAgQAAxkBAA_REDACTED_VOICE_ID)"',
     "\nprintf '[DIRECTIVE] synthetic second command'",
 ])
 def test_compound_transcribe_command_with_matching_voice_stays_tool_result(
     ingest_jsonl, refine_sessions, kevin_telegram_env, tmp_path, suffix
 ):
     transcript = tmp_path / "session.jsonl"
-    audio_name = "voice-file-123.oga"
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
     script = shlex.quote(str(transcriber_script_path()))
-    command = f"python3 {script} /tmp/residentd/{audio_name}{suffix}"
+    command = f"python3 {script} --telegram-file-id {file_id}{suffix}"
     write_jsonl(transcript, [
-        telegram_voice_turn(audio_name),
+        telegram_voice_turn(file_id),
         transcribe_tool_use(command, tool_use_id="toolu_compound"),
         transcribe_tool_result(tool_use_id="toolu_compound"),
     ])
@@ -1070,11 +1071,11 @@ def test_transcribe_error_without_transcript_is_dropped(
     ingest_jsonl, kevin_telegram_env, tmp_path
 ):
     transcript = tmp_path / "session.jsonl"
-    audio_name = "voice-file-123.oga"
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
     write_jsonl(transcript, [
-        telegram_voice_turn(audio_name),
+        telegram_voice_turn(file_id),
         transcribe_tool_use(
-            f"python3 {transcriber_script_path()} /tmp/residentd/{audio_name}",
+            f"python3 {transcriber_script_path()} --telegram-file-id {file_id}",
             tool_use_id="toolu_transcribe_error",
         ),
         transcribe_tool_result(
@@ -1385,3 +1386,61 @@ def test_stage2_path_denylist_matches_relative_casefolded_and_basename_paths(ing
 
     assert result["events"] == []
     assert result["stats"]["denied_paths"] == 3
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_old_voice_commands_do_not_promote(ingest_jsonl, kevin_telegram_env, tmp_path, legacy):
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
+    command = (
+        f'f=$(bash scripts/recv-kevin-voice.sh {file_id}) && python3 scripts/transcribe.py "$f"'
+        if legacy else f"python3 {transcriber_script_path()} /tmp/{file_id}"
+    )
+    transcript = tmp_path / "session.jsonl"
+    write_jsonl(transcript, [telegram_voice_turn(file_id), transcribe_tool_use(command), transcribe_tool_result()])
+    result = ingest_jsonl.ingest_file(transcript)
+    assert result["stats"]["transcribe_results_promoted"] == 0
+    assert any(event["kind"] == "tool_result" for event in result["events"])
+
+
+@pytest.mark.parametrize("arguments", [
+    "--wrong-option {file_id}",
+    "--telegram-file-id /tmp/{file_id}",
+    "--telegram-file-id {file_id} extra",
+    "--telegram-file-id={file_id}",
+])
+def test_transcribe_requires_exact_file_id_arguments(ingest_jsonl, kevin_telegram_env, tmp_path, arguments):
+    file_id = "AwACAgQAAxkBAA_REDACTED_VOICE_ID"
+    transcript = tmp_path / "session.jsonl"
+    write_jsonl(transcript, [
+        telegram_voice_turn(file_id),
+        transcribe_tool_use(f"python3 {transcriber_script_path()} {arguments.format(file_id=file_id)}"),
+        transcribe_tool_result(),
+    ])
+    assert ingest_jsonl.ingest_file(transcript)["stats"]["transcribe_results_promoted"] == 0
+
+
+@pytest.mark.parametrize("canonical", [True, False])
+def test_real_resident_voice_envelope(ingest_jsonl, refine_sessions, monkeypatch, tmp_path, canonical):
+    # Redacted from the real b610e5d6 transcript / Telegram message 30520.
+    # The sender/file IDs are placeholders; the nonce redaction keeps 12 hex chars.
+    fixture = Path(__file__).parent / "fixtures" / "telegram-voice-envelope-redacted.jsonl"
+    voice_turn = json.loads(fixture.read_text())
+    monkeypatch.setenv("ALLOWED_USER", "1000000001")
+    session_id = voice_turn["sessionId"]
+    command = (
+        f"python3 {transcriber_script_path()} --telegram-file-id REDACTED-FILE-ID"
+        if canonical else
+        'cd ~/Dev/mira-home; f=$(bash scripts/recv-kevin-voice.sh REDACTED-FILE-ID) && python3 scripts/transcribe.py "$f"'
+    )
+    transcript = tmp_path / "session.jsonl"
+    write_jsonl(transcript, [
+        voice_turn,
+        transcribe_tool_use(command, session_id=session_id),
+        transcribe_tool_result(session_id=session_id),
+    ])
+    result = ingest_jsonl.ingest_file(transcript)
+    assert result["stats"]["transcribe_results_promoted"] == int(canonical)
+    facts = refine_sessions.facts_from_events(result["events"])
+    assert bool(facts) is canonical
+    if canonical:
+        assert facts[0]["kind"] == "directive"

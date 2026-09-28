@@ -93,6 +93,7 @@ def new_stats() -> dict[str, int]:
         "malformed_lines": 0,
         "channel_wrappers_unwrapped": 0,
         "channel_wrappers_dropped": 0,
+        "voice_envelopes_seen_allowlist_unset": 0,
         "transcribe_results_promoted": 0,
         "transcribe_results_dropped": 0,
     }
@@ -194,7 +195,7 @@ def unwrap_channel_user_text(text: str) -> tuple[str, str] | None:
     return None
 
 
-def allowed_telegram_voice_filename(text: str) -> str | None:
+def allowed_telegram_voice_file_id(text: str, stats: dict[str, int]) -> str | None:
     """Return an allowed Telegram user's voice file_id used by the transcriber."""
     match = _CHANNEL_FRAME_RE.fullmatch(text.strip())
     if match is None:
@@ -226,6 +227,11 @@ def allowed_telegram_voice_filename(text: str) -> str | None:
     chat = message.get("chat")
     if not isinstance(sender, dict) or not isinstance(voice, dict) or not isinstance(chat, dict):
         return None
+    allowed_user_id = os.environ.get("ALLOWED_USER", "").strip()
+    if not allowed_user_id:
+        stats["voice_envelopes_seen_allowlist_unset"] += 1
+        print("[ingest-jsonl] ALLOWED_USER is unset; voice transcription promotion disabled", file=sys.stderr)
+        return None
     sender_id = sender.get("id")
     begin_marker = _CHANNEL_BEGIN_RE.search(match.group(0))
     sender_marker = (
@@ -242,7 +248,6 @@ def allowed_telegram_voice_filename(text: str) -> str | None:
         or chat.get("id") != sender_id
     ):
         return None
-    allowed_user_id = os.environ.get("ALLOWED_USER", "").strip()
     if not re.fullmatch(r"[0-9]+", allowed_user_id) or sender_id != int(allowed_user_id):
         return None
     file_id = voice.get("file_id")
@@ -363,9 +368,9 @@ def line_events(
                 if line_type == "user" and actor == "user" and text.lstrip().startswith("<channel "):
                     session_id = raw.get("sessionId")
                     if isinstance(session_id, str) and session_id and voice_media_by_session is not None:
-                        filename = allowed_telegram_voice_filename(text)
-                        if filename is not None:
-                            voice_media_by_session.setdefault(session_id, set()).add(filename)
+                        file_id = allowed_telegram_voice_file_id(text, stats)
+                        if file_id is not None:
+                            voice_media_by_session.setdefault(session_id, set()).add(file_id)
                     unwrapped = unwrap_channel_user_text(text)
                     if unwrapped is None:
                         stats["channel_wrappers_dropped"] += 1
@@ -407,8 +412,8 @@ def line_events(
                             command_tokens = list(lexer)
                         except ValueError:
                             command_tokens = []
-                    if len(command_tokens) == 3:
-                        interpreter, script, audio = command_tokens
+                    if len(command_tokens) == 4:
+                        interpreter, script, option, file_id = command_tokens
                         script_path = Path(script)
                         try:
                             trusted_transcriber_path = (
@@ -434,14 +439,12 @@ def line_events(
                             )
                         )
                         session_id = raw.get("sessionId")
-                        voice_filenames = (
+                        voice_file_ids = (
                             voice_media_by_session.get(session_id, set())
                             if voice_media_by_session is not None
                             and isinstance(session_id, str)
                             else set()
                         )
-                        audio_name = Path(audio).name
-                        # residentd relocates voice files; Telegram file_id is the correlation key.
                         if (
                             trusted_interpreter
                             and trusted_transcriber_path
@@ -450,10 +453,11 @@ def line_events(
                                 for token in command_tokens
                                 for char in token
                             )
-                            and audio_name in voice_filenames
+                            and option == "--telegram-file-id"
+                            and file_id in voice_file_ids
                         ):
                             if tool_use_id and transcribe_tool_use_ids is not None:
-                                transcribe_tool_use_ids[tool_use_id] = (session_id, audio_name)
+                                transcribe_tool_use_ids[tool_use_id] = (session_id, file_id)
                 events.append(
                     make_event(
                         path,
