@@ -5,7 +5,7 @@ This is the v2 entry point before fact extraction. It preserves source anchors
 and treats tool_use inputs as first-class evidence, while denying private paths,
 private tools/endpoints, and scrubbing secrets before events are returned or
 written. A paired Bash transcribe.py result becomes a user message only when
-its audio filename matches a preceding allowlisted Telegram voice envelope in
+its --telegram-file-id matches a preceding allowlisted Telegram voice envelope in
 the same session and the configured transcriber invocation passes path checks.
 
 Usage:

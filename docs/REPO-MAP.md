@@ -56,6 +56,15 @@ Bash command using the resolved `$MIRA_HOME/scripts/transcribe.py` path
 (`$HOME/Dev/mira-home` by default) and bare `python`/`python3` or a Python
 executable directly under `/usr/bin`, `/usr/local/bin`, or
 `$MIRA_HOME/.venv/bin`.
+The producer change is [mira-home #78](https://github.com/kkwills13/mira-home/pull/78),
+commit `ed5a5212808ffd13ef4a49c52fad6d2aa01079fc`: its transcriber accepts
+`--telegram-file-id`, performs getFile/download internally, and its
+`capabilities/wired-tools.md` specifies the absolute-path canonical command.
+Its offline downloader tests exercise that argument through transcription;
+[CI passed](https://github.com/kkwills13/mira-home/actions/runs/36451638839).
+Rollout order: deploy that producer and documented command, configure
+`ALLOWED_USER` in the nightly ingest environment, then deploy this consumer.
+The two PRs alone do not change the running residence or host environment.
 Contract updates 2026-09-28: resident-channel names are casefolded before
 routing. Only plain user turns and Telegram frames use actor `user`; NockCC
 frames namespace every string sender as `nockcc:<sender>` and missing,
