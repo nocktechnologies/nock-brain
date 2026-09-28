@@ -139,11 +139,10 @@ def unwrap_channel_user_text(text: str) -> tuple[str, str] | None:
     if match is None:
         return None
     channel = _CHANNEL_NAME_RE.search(match.group("opening_tag"))
-    channel_name = channel.group("channel") if channel is not None else "channel"
+    channel_name = channel.group("channel") if channel is not None else None
     if channel_name == "engine":
         return None
-    unknown_actor = f"{channel_name}:unknown"
-    default_actor = unknown_actor if channel_name == "nockcc" else "user"
+    default_actor = "nockcc:unknown" if channel_name == "nockcc" else "user"
     body = match.group("body").strip()
     try:
         payload = json.loads(body)
@@ -156,8 +155,7 @@ def unwrap_channel_user_text(text: str) -> tuple[str, str] | None:
         return None
     if not isinstance(payload, dict):
         return body, default_actor
-    sender = payload.get("from_agent", default_actor)
-    actor = sender.strip() if isinstance(sender, str) and sender.strip() else unknown_actor
+    actor = _nested_text(payload, ("from_agent",)) or default_actor
     if actor == "kevin":
         actor = "user"
     for path in _CHANNEL_TEXT_PATHS:
