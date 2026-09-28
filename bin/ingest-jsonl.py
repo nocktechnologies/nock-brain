@@ -127,11 +127,12 @@ def unwrap_channel_user_text(text: str) -> tuple[str, str] | None:
     Channel transport receipts are untrusted structural data, not conversation
     text. The resident-channel frame's matching marker ID binds its body to the
     envelope. Known Telegram text/caption and NockCC body/subject fields take
-    precedence; a non-JSON frame body is a plain human turn. NockCC
-    ``from_agent`` values stamp the actor, with ``kevin`` mapped to ``user``.
-    A NockCC turn without a non-empty string ``from_agent`` (including scalar
-    and non-JSON bodies) gets the non-authority ``nockcc:unknown`` actor; other
-    channel turns keep the existing ``user`` default.
+    precedence; a non-JSON frame body is a plain human turn. Only Telegram
+    turns default to the ``user`` actor. A NockCC ``from_agent`` of ``kevin``
+    (any case) maps to ``user``; other senders become ``nockcc:<sender>``, so
+    no sender name can collide with ``user``. Every other turn, including one
+    without a NockCC sender or channel name, gets ``<channel>:unknown`` and
+    cannot mint authority facts.
     """
     if not text.lstrip().startswith("<channel "):
         return text, "user"
@@ -142,7 +143,7 @@ def unwrap_channel_user_text(text: str) -> tuple[str, str] | None:
     channel_name = channel.group("channel") if channel is not None else None
     if channel_name == "engine":
         return None
-    default_actor = "nockcc:unknown" if channel_name == "nockcc" else "user"
+    default_actor = "user" if channel_name == "telegram" else f"{channel_name or 'channel'}:unknown"
     body = match.group("body").strip()
     try:
         payload = json.loads(body)
@@ -155,9 +156,10 @@ def unwrap_channel_user_text(text: str) -> tuple[str, str] | None:
         return None
     if not isinstance(payload, dict):
         return body, default_actor
-    actor = _nested_text(payload, ("from_agent",)) or default_actor
-    if actor == "kevin":
-        actor = "user"
+    actor = default_actor
+    sender = _nested_text(payload, ("from_agent",)) if channel_name == "nockcc" else None
+    if sender is not None:
+        actor = "user" if sender.casefold() == "kevin" else f"nockcc:{sender}"
     for path in _CHANNEL_TEXT_PATHS:
         human_text = _nested_text(payload, path)
         if human_text is not None:
