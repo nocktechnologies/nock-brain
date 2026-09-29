@@ -85,13 +85,11 @@ CURATED_CONFIDENCE = 0.95  # >= 0.9 per A5: high-confidence canonical truth.
 # The index file is a table of contents, not a standalone fact.
 SKIP_FILES = {"MEMORY.md"}
 
-# The rules half injects ONLY feedback_*.md files linked from MEMORY.md. This
-# regex must stay identical to LINK_RE in the LIVE rules half,
-# /home/kevinlinux/Dev/mira-home/agents/mira/scripts/feedback-rule-recall.py (the
-# seat runs it via CRM_ROOT=mira-home; it reads the memory dir from
-# CLAUDE_CONFIG_DIR, the same dir the nightly ingest reads), so the skip set
-# equals the set that half injects (a note skipped here but not injected there
-# reaches no path). crm-mira's agents/mira/scripts/ copy is a second copy.
+# The memory hook's rules half injects ONLY feedback_*.md files linked from
+# MEMORY.md, using this same regex. Keep the two identical so the skip set equals
+# the injected set (a note skipped here but not injected there reaches no path).
+# The nightly ingest must read the same memory dir the hook reads: pass it via
+# NOCKBRAIN_CURATED_DIR or --memory-dir.
 FEEDBACK_LINK_RE = re.compile(r"\[([^\]]+)\]\((feedback_[^)\s]+\.md)\)")
 
 # Every ingested curated type maps to a DURABLE kind (long half-life in
