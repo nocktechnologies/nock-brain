@@ -130,6 +130,10 @@ def test_ingest_skips_feedback_notes_but_keeps_reference(ingest_curated_memory, 
     (memdir / "reference_dash.md").write_text(
         CURATED.replace("project_widget", "reference_dash").replace("type: project", "type: reference"),
         encoding="utf-8")
+    # The rules half selects by feedback_*.md filename, so an untyped one is skipped too.
+    (memdir / "feedback_untyped.md").write_text(
+        CURATED.replace("project_widget", "feedback_untyped").replace("  type: project\n", ""),
+        encoding="utf-8")
     kp, pp = key_paths
     store = _empty_store(tmp_path)
     result = ingest_curated_memory.ingest(memdir, store, key_path=kp, pub_path=pp)

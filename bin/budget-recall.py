@@ -989,6 +989,8 @@ def select_recall(query: str, facts_file: "Path | None",
                         continue
                 capped.append(f)
             fact_results = capped
+            kept_ids = {f.get("id") for f in capped}
+            reserved_ids = frozenset(i for i in reserved_ids if i in kept_ids)
     else:
         fact_results = []
     if insights_file:

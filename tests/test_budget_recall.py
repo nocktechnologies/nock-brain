@@ -747,3 +747,19 @@ def test_select_recall_max_curated_flag_overrides_default(budget_recall, tmp_pat
 def test_curated_source_matches_ingest_constant(budget_recall, ingest_curated_memory):
     # The cap keys on this string; drift would silently disable it.
     assert budget_recall.CURATED_SOURCE == ingest_curated_memory.CURATED_SOURCE
+
+
+def test_capped_out_curated_ids_are_pruned_from_reserved(budget_recall, tmp_path, monkeypatch):
+    ff = _curated_vs_session_store(tmp_path)
+    ranked = [f["id"] for f in budget_recall.select_recall(
+        "quokka deployment", ff, budget=2000, max_curated=-1)["included"]
+        if f["id"].startswith("curated-")]
+    first, dropped = ranked[0], ranked[-1]
+    monkeypatch.setattr(
+        budget_recall, "_maybe_dense_fuse",
+        lambda all_facts, results, *a: (results, frozenset({first, dropped, "sess-0"})),
+    )
+    sel = budget_recall.select_recall("quokka deployment", ff, budget=2000)
+    got = {f["id"] for f in sel["included"]}
+    assert dropped not in got  # beyond the cap
+    assert sel["reserved_ids"] == {first, "sess-0"}  # capped-out id pruned

@@ -188,8 +188,9 @@ def collect_curated_facts(memory_dir: Path) -> list[dict[str, Any]]:
         if path.name in SKIP_FILES:
             continue
         fact = build_fact(path)
-        if fact["curated_type"] == "feedback":
-            # Already injected by the hook's RELEVANT FEEDBACK RULES half.
+        if fact["curated_type"] == "feedback" or path.name.startswith("feedback_"):
+            # Already injected by the hook's RELEVANT FEEDBACK RULES half, which
+            # selects by feedback_*.md filename, so either key marks a served note.
             continue
         fid = fact["id"]
         if fid in seen_ids:
