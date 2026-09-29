@@ -269,7 +269,7 @@ Default store for everything: `~/.nock-brain/facts.json` (override `--facts`).
 | `refine-sessions.py` | events → v1-compatible facts + session notes. 1,500-char content cap; raw `tool_use.input` and `tool_result.content` cannot mint facts. The ingest-only trusted-path transcriber exception is converted to a user message before refinement, so it uses the existing user authority gate; all other tool results stay non-authoritative. Reuses extract-facts' classification rules |
 | `extract-facts.py` | Markdown transcripts → facts. Tagged (0.9 conf) + inferred (0.7–0.85) patterns; fleet-activity kinds dropped at classification (#76); `machine_tag()` enforces a **closed machine enum, MINT-ONLY** (`KNOWN_MACHINES` = `mac-kevin`, `kevins-linux`; `fleet-02` retired at the 2026-08-27 seat migration and now raises). Retiring a name blocks new stamps only — facts already carrying a retired `machine` stay readable, verifiable and recallable, because `machine` is in neither attestation payload and no read path consults the enum. Never make it a read filter. **Writes the live store directly** — `propose-facts.py` is the gated twin |
 | `propose-facts.py` / `approve-proposals.py` | Same extraction into `proposed-facts.json`; approve releases to store (no re-sign), reject drops. Live store untouched until approval |
-| `ingest-curated-memory.py` | Dir of curated markdown → signed high-confidence facts; idempotent (drops+reingests `curated-*` slice). Bypasses the propose gate by design |
+| `ingest-curated-memory.py` | Dir of curated markdown → signed high-confidence facts; idempotent (drops+reingests `curated-*` slice). Skips only `feedback_*.md` files linked from `<memory-dir>/MEMORY.md` (`FEEDBACK_LINK_RE`, mirroring `LINK_RE` in `feedback-rule-recall.py`: the files the hook's rules half injects); unlinked `feedback_*`, unprefixed `type: feedback`, and hyphenated notes are ingested (typed feedback gets kind `correction`). Bypasses the propose gate by design |
 
 **Signing / integrity**
 | Script | Notes |
@@ -404,6 +404,12 @@ Inside `budget-recall.select_recall()`:
 3. **Graph expansion** (`--graph`): expands the *fused* list (order is
    specified: dense first) with concept/session neighbors, always below the
    weakest seed. Off-path returns the identical list object.
+3b. **Curated cap** (`--max-curated`, default 2; 0 excludes, negative
+   disables): on the final raw-fact list, facts with `source == "curated-memory"`
+   beyond the first 2 in list order are dropped, so the next-best non-curated facts take
+   the freed slots (N10944). Pure filter, no re-score; insights unaffected. Unlike
+   the date cap it does NOT exempt reserved dense ids (the ≤2 bound is hard);
+   capped-out ids are pruned from `reserved_ids`.
 4. **Insights lead**: on every call, semantic or not, every
    heuristic-synthesized insight (`synthesized_by == "heuristic"`, the
    auto-generated "Recurring \<kind\> (N distinct events...)" keyword-bag

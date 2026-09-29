@@ -120,3 +120,46 @@ def test_ingest_preserves_non_curated_facts(ingest_curated_memory, memdir, key_p
     ids = {f["id"] for f in facts}
     assert "abc123" in ids  # pre-existing non-curated fact untouched
     assert any(i.startswith("curated-") for i in ids)
+
+
+def _note(memdir, name, typ):
+    body = CURATED.replace("project_widget", name).replace("type: project", f"type: {typ}")
+    (memdir / f"{name}.md").write_text(body, encoding="utf-8")
+
+
+def _ingest_facts(mod, memdir, key_paths, tmp_path):
+    kp, pp = key_paths
+    store = _empty_store(tmp_path)
+    mod.ingest(memdir, store, key_path=kp, pub_path=pp)
+    return {f["curated_name"]: f for f in json.loads(store.read_text())}
+
+
+def test_ingest_skips_only_feedback_files_linked_from_index(ingest_curated_memory, memdir, key_paths, tmp_path):
+    # The rules half injects only feedback_*.md linked from MEMORY.md; skip exactly those.
+    _note(memdir, "feedback_a", "feedback")  # linked -> served as a rule -> skipped
+    _note(memdir, "feedback_b", "feedback")  # not linked -> no other path -> ingested
+    _note(memdir, "feedback-hyphen", "feedback")  # not the rules-half prefix -> ingested
+    _note(memdir, "reference_dash", "reference")
+    (memdir / "MEMORY.md").write_text(
+        INDEX + "- [A](feedback_a.md) — rule a\n- [gone](feedback_missing.md) — no file\n"
+        "- [hy](feedback-hyphen.md) — not matched by the rules-half regex\n",
+        encoding="utf-8")
+    assert ingest_curated_memory._linked_feedback_files(memdir) == {"feedback_a.md", "feedback_missing.md"}
+    facts = _ingest_facts(ingest_curated_memory, memdir, key_paths, tmp_path)
+    assert set(facts) == {"project_widget", "feedback_b", "feedback-hyphen", "reference_dash"}
+    assert facts["reference_dash"]["kind"] == "architecture"
+
+
+def test_ingest_unprefixed_typed_feedback_is_ingested_as_correction(ingest_curated_memory, memdir, key_paths, tmp_path):
+    _note(memdir, "kevin-voice-mode-always", "feedback")
+    facts = _ingest_facts(ingest_curated_memory, memdir, key_paths, tmp_path)
+    fact = facts["kevin-voice-mode-always"]
+    assert fact["curated_type"] == "feedback"
+    assert fact["kind"] == "correction"
+
+
+def test_ingest_without_index_skips_nothing(ingest_curated_memory, memdir, key_paths, tmp_path):
+    (memdir / "MEMORY.md").unlink()
+    _note(memdir, "feedback_a", "feedback")
+    facts = _ingest_facts(ingest_curated_memory, memdir, key_paths, tmp_path)
+    assert set(facts) == {"project_widget", "feedback_a"}

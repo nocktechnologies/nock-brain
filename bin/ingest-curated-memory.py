@@ -2,7 +2,7 @@
 """Ingest a hand-curated Markdown memory dir into the NockBrain fact store.
 
 Point this at a directory of hand-curated, canonical Markdown notes — one file
-per durable fact (e.g. ``feedback_*.md``, ``project_*.md``, ``reference_*.md``),
+per durable fact (e.g. ``project_*.md``, ``reference_*.md``),
 plus an optional ``MEMORY.md`` index — and it extracts each file as ONE
 high-confidence, SIGNED fact and writes it into the store, so per-prompt recall
 (``budget-recall.py`` over ``~/.nock-brain/facts.json``) can surface your
@@ -13,7 +13,10 @@ env var. (Claude Code keeps such a dir under ``~/.claude/projects/<slug>/memory/
 
 Properties:
   * One fact per curated file (the ``MEMORY.md`` index is skipped — it is a
-    table of contents, not a fact).
+    table of contents, not a fact; ``feedback_*.md`` files LINKED from
+    ``MEMORY.md`` are skipped — the hook already injects exactly those as rules;
+    unlinked ``feedback_*`` files and other notes are ingested; typed feedback
+    gets kind ``correction``).
   * Each fact is signed with the SAME Ed25519/HMAC pipeline every other fact
     uses (``bin/_sign.py``), so claim-guard and ``verify-facts.py`` still pass.
   * Idempotent: re-running first drops every existing ``curated-*`` fact, then
@@ -34,6 +37,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -81,15 +85,18 @@ CURATED_CONFIDENCE = 0.95  # >= 0.9 per A5: high-confidence canonical truth.
 # The index file is a table of contents, not a standalone fact.
 SKIP_FILES = {"MEMORY.md"}
 
-# Map the curated `type` (frontmatter metadata.type) to a nock-brain `kind`. We
-# pick DURABLE kinds (long half-life in budget-recall's RECENCY_HALF_LIFE_DAYS)
-# so canonical truths do not decay out of recall over months. The original type
-# is preserved on `curated_type` for traceability.
-TYPE_TO_KIND = {
-    "feedback": "correction",   # standing corrections/directives — 180d half-life
-    "project": "architecture",  # product/system canon — 180d half-life
-    "reference": "architecture",
-}
+# The memory hook's rules half injects ONLY feedback_*.md files linked from
+# MEMORY.md, using this same regex. Keep the two identical so the skip set equals
+# the injected set (a note skipped here but not injected there reaches no path).
+# The nightly ingest must read the same memory dir the hook reads: pass it via
+# NOCKBRAIN_CURATED_DIR or --memory-dir.
+FEEDBACK_LINK_RE = re.compile(r"\[([^\]]+)\]\((feedback_[^)\s]+\.md)\)")
+
+# Every ingested curated type maps to a DURABLE kind (long half-life in
+# budget-recall's RECENCY_HALF_LIFE_DAYS) so canonical truths do not decay out of
+# recall over months. Typed feedback stays "correction" (consolidate-facts never
+# touches it). The original type is preserved on `curated_type`.
+TYPE_TO_KIND = {"feedback": "correction"}
 DEFAULT_KIND = "architecture"
 
 
@@ -186,11 +193,24 @@ def build_fact(path: Path) -> dict[str, Any]:
     }
 
 
+def _linked_feedback_files(memory_dir: Path) -> set[str]:
+    index = memory_dir / "MEMORY.md"
+    if not index.exists():
+        return set()
+    text = index.read_text(encoding="utf-8", errors="ignore")
+    return {m.group(2) for line in text.splitlines() for m in FEEDBACK_LINK_RE.finditer(line)}
+
+
 def collect_curated_facts(memory_dir: Path) -> list[dict[str, Any]]:
+    linked_feedback = _linked_feedback_files(memory_dir)
     facts: list[dict[str, Any]] = []
     seen_ids: dict[str, str] = {}
     for path in sorted(memory_dir.glob("*.md")):
         if path.name in SKIP_FILES:
+            continue
+        if path.name in linked_feedback:
+            # Already injected by the hook's RELEVANT FEEDBACK RULES half, which
+            # selects only feedback_*.md files linked from MEMORY.md.
             continue
         fact = build_fact(path)
         fid = fact["id"]

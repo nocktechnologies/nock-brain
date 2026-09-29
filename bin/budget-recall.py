@@ -60,6 +60,12 @@ QUERY_STOPWORDS = {
 # value <= 0) disables the cap entirely (legacy/unbounded behavior).
 DEFAULT_MAX_PER_DATE = 4
 
+# Per-prompt ceiling on curated-memory facts (bin/ingest-curated-memory.py). The
+# curated slice is ~590 high-confidence facts that otherwise crowd session facts
+# out of recall (N10944); the freed slots go to the next-best non-curated facts.
+CURATED_SOURCE = "curated-memory"
+DEFAULT_MAX_CURATED = 2
+
 # BM25 parameters (Okapi defaults). k1 controls term-frequency saturation; b
 # controls how strongly document length is normalized.
 BM25_K1 = 1.5
@@ -766,12 +772,13 @@ def budget_recall(query: str, facts_file: Path, budget: int = DEFAULT_BUDGET,
                   now: datetime | None = None, graph_expand: bool = False,
                   max_per_date: "int | None" = None,
                   strict_verify: bool = False, semantic: bool = False,
-                  agent_scope: "str | None" = None) -> str:
+                  agent_scope: "str | None" = None,
+                  max_curated: int = DEFAULT_MAX_CURATED) -> str:
     selection = select_recall(
         query, facts_file, budget, include_superseded,
         insights_file=insights_file, now=now, graph_expand=graph_expand,
         max_per_date=max_per_date, strict_verify=strict_verify,
-        semantic=semantic, agent_scope=agent_scope,
+        semantic=semantic, agent_scope=agent_scope, max_curated=max_curated,
     )
     if selection is None:
         return ""
@@ -929,7 +936,8 @@ def select_recall(query: str, facts_file: "Path | None",
                   max_per_date: "int | None" = None,
                   strict_verify: bool = False,
                   semantic: bool = False,
-                  agent_scope: "str | None" = None) -> "dict | None":
+                  agent_scope: "str | None" = None,
+                  max_curated: int = DEFAULT_MAX_CURATED) -> "dict | None":
     """Run the full selection pipeline and return the facts that would be
     injected, as dicts: {results, included, tokens_used, truncated,
     query_terms, reserved_ids}. budget_recall() renders this; the offline
@@ -971,6 +979,18 @@ def select_recall(query: str, facts_file: "Path | None",
         fact_results = _maybe_graph_expand(
             all_facts, fact_results, query, include_superseded, ref_now, graph_expand
         )
+        if max_curated >= 0:  # negative disables the cap
+            n_curated = 0
+            capped = []
+            for f in fact_results:
+                if f.get("source") == CURATED_SOURCE:
+                    n_curated += 1
+                    if n_curated > max_curated:
+                        continue
+                capped.append(f)
+            fact_results = capped
+            kept_ids = {f.get("id") for f in capped}
+            reserved_ids = frozenset(i for i in reserved_ids if i in kept_ids)
     else:
         fact_results = []
     if insights_file:
@@ -1095,6 +1115,9 @@ def main():
                         help="Cap facts sharing one source_date in the result "
                              "(default 4; 0 disables; also via "
                              "NOCKBRAIN_MAX_PER_DATE)")
+    parser.add_argument("--max-curated", type=int, default=DEFAULT_MAX_CURATED,
+                        help="Cap curated-memory facts per prompt (default 2; "
+                             "0 excludes them; negative disables the cap)")
     parser.add_argument("--strict-verify", action="store_true",
                         help="Fail closed: recall only facts whose attestation "
                              "verifies as valid; an unusable key yields empty "
@@ -1117,7 +1140,7 @@ def main():
                            insights_file=args.insights, graph_expand=graph_expand,
                            max_per_date=args.max_per_date,
                            strict_verify=strict_verify, semantic=semantic,
-                           agent_scope=agent_scope)
+                           agent_scope=agent_scope, max_curated=args.max_curated)
 
     if result:
         print(result)
