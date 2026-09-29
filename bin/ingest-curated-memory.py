@@ -13,8 +13,10 @@ env var. (Claude Code keeps such a dir under ``~/.claude/projects/<slug>/memory/
 
 Properties:
   * One fact per curated file (the ``MEMORY.md`` index is skipped — it is a
-    table of contents, not a fact; ``feedback_*.md`` files are skipped — the
-    hook already injects them as rules).
+    table of contents, not a fact; ``feedback_*.md`` files LINKED from
+    ``MEMORY.md`` are skipped — the hook already injects exactly those as rules;
+    unlinked ``feedback_*`` files and other notes are ingested; typed feedback
+    gets kind ``correction``).
   * Each fact is signed with the SAME Ed25519/HMAC pipeline every other fact
     uses (``bin/_sign.py``), so claim-guard and ``verify-facts.py`` still pass.
   * Idempotent: re-running first drops every existing ``curated-*`` fact, then
@@ -35,6 +37,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,9 +85,17 @@ CURATED_CONFIDENCE = 0.95  # >= 0.9 per A5: high-confidence canonical truth.
 # The index file is a table of contents, not a standalone fact.
 SKIP_FILES = {"MEMORY.md"}
 
+# The rules half injects ONLY feedback_*.md files linked from MEMORY.md. This
+# regex must stay identical to LINK_RE in crm-mira
+# agents/mira/scripts/feedback-rule-recall.py, so the skip set equals the set
+# that half injects (a note skipped here but not injected there reaches no path).
+FEEDBACK_LINK_RE = re.compile(r"\[([^\]]+)\]\((feedback_[^)\s]+\.md)\)")
+
 # Every ingested curated type maps to a DURABLE kind (long half-life in
 # budget-recall's RECENCY_HALF_LIFE_DAYS) so canonical truths do not decay out of
-# recall over months. The original type is preserved on `curated_type`.
+# recall over months. Typed feedback stays "correction" (consolidate-facts never
+# touches it). The original type is preserved on `curated_type`.
+TYPE_TO_KIND = {"feedback": "correction"}
 DEFAULT_KIND = "architecture"
 
 
@@ -149,7 +160,7 @@ def build_fact(path: Path) -> dict[str, Any]:
     name = fm.get("name") or path.stem
     description = fm.get("description", "").strip()
     curated_type = fm.get("metadata.type", "").strip().lower()
-    kind = DEFAULT_KIND
+    kind = TYPE_TO_KIND.get(curated_type, DEFAULT_KIND)
 
     # Content leads with the name + description (the high-signal summary recall
     # excerpts from), then the full body for depth.
@@ -181,16 +192,24 @@ def build_fact(path: Path) -> dict[str, Any]:
     }
 
 
+def _linked_feedback_files(memory_dir: Path) -> set[str]:
+    index = memory_dir / "MEMORY.md"
+    if not index.exists():
+        return set()
+    text = index.read_text(encoding="utf-8", errors="ignore")
+    return {m.group(2) for line in text.splitlines() for m in FEEDBACK_LINK_RE.finditer(line)}
+
+
 def collect_curated_facts(memory_dir: Path) -> list[dict[str, Any]]:
+    linked_feedback = _linked_feedback_files(memory_dir)
     facts: list[dict[str, Any]] = []
     seen_ids: dict[str, str] = {}
     for path in sorted(memory_dir.glob("*.md")):
         if path.name in SKIP_FILES:
             continue
-        if path.name.startswith("feedback_"):
+        if path.name in linked_feedback:
             # Already injected by the hook's RELEVANT FEEDBACK RULES half, which
-            # selects ONLY feedback_*.md filenames. Never key on `type: feedback`:
-            # typed notes without the prefix reach no other injection path.
+            # selects only feedback_*.md files linked from MEMORY.md.
             continue
         fact = build_fact(path)
         fid = fact["id"]
