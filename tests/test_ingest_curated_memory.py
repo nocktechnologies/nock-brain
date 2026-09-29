@@ -122,15 +122,16 @@ def test_ingest_preserves_non_curated_facts(ingest_curated_memory, memdir, key_p
     assert any(i.startswith("curated-") for i in ids)
 
 
-def test_ingest_skips_feedback_notes_but_keeps_reference(ingest_curated_memory, memdir, key_paths, tmp_path):
-    # feedback notes are served by the hook's rules half; ingesting them double-injects.
-    (memdir / "feedback_terse.md").write_text(
-        CURATED.replace("project_widget", "feedback_terse").replace("type: project", "type: feedback"),
-        encoding="utf-8")
-    (memdir / "reference_dash.md").write_text(
-        CURATED.replace("project_widget", "reference_dash").replace("type: project", "type: reference"),
-        encoding="utf-8")
-    # The rules half selects by feedback_*.md filename, so an untyped one is skipped too.
+def test_ingest_skips_feedback_prefixed_files_only(ingest_curated_memory, memdir, key_paths, tmp_path):
+    # The rules half injects only feedback_*.md filenames; ingest must skip exactly those.
+    def note(name, typ):
+        body = CURATED.replace("project_widget", name).replace("type: project", f"type: {typ}")
+        (memdir / f"{name}.md").write_text(body, encoding="utf-8")
+
+    note("feedback_x", "feedback")  # prefixed + typed: served as a rule -> skipped
+    note("nocklock-is-mira-lane", "feedback")  # typed, no prefix: no other path -> ingested
+    note("feedback-hyphen", "feedback")  # hyphen is not the rules-half prefix -> ingested
+    note("reference_dash", "reference")
     (memdir / "feedback_untyped.md").write_text(
         CURATED.replace("project_widget", "feedback_untyped").replace("  type: project\n", ""),
         encoding="utf-8")
@@ -138,5 +139,16 @@ def test_ingest_skips_feedback_notes_but_keeps_reference(ingest_curated_memory, 
     store = _empty_store(tmp_path)
     result = ingest_curated_memory.ingest(memdir, store, key_path=kp, pub_path=pp)
     names = {f["curated_name"] for f in json.loads(store.read_text())}
-    assert names == {"project_widget", "reference_dash"}
-    assert result["ingested"] == 2
+    assert names == {"project_widget", "nocklock-is-mira-lane", "feedback-hyphen", "reference_dash"}
+    assert result["ingested"] == 4
+
+
+def test_ingest_unprefixed_typed_feedback_is_ingested(ingest_curated_memory, memdir, key_paths, tmp_path):
+    (memdir / "kevin-voice-mode-always.md").write_text(
+        CURATED.replace("project_widget", "kevin-voice-mode-always").replace("type: project", "type: feedback"),
+        encoding="utf-8")
+    kp, pp = key_paths
+    store = _empty_store(tmp_path)
+    ingest_curated_memory.ingest(memdir, store, key_path=kp, pub_path=pp)
+    facts = {f["curated_name"]: f for f in json.loads(store.read_text())}
+    assert facts["kevin-voice-mode-always"]["curated_type"] == "feedback"

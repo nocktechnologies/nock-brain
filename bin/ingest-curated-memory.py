@@ -2,7 +2,7 @@
 """Ingest a hand-curated Markdown memory dir into the NockBrain fact store.
 
 Point this at a directory of hand-curated, canonical Markdown notes — one file
-per durable fact (e.g. ``feedback_*.md``, ``project_*.md``, ``reference_*.md``),
+per durable fact (e.g. ``project_*.md``, ``reference_*.md``),
 plus an optional ``MEMORY.md`` index — and it extracts each file as ONE
 high-confidence, SIGNED fact and writes it into the store, so per-prompt recall
 (``budget-recall.py`` over ``~/.nock-brain/facts.json``) can surface your
@@ -13,7 +13,7 @@ env var. (Claude Code keeps such a dir under ``~/.claude/projects/<slug>/memory/
 
 Properties:
   * One fact per curated file (the ``MEMORY.md`` index is skipped — it is a
-    table of contents, not a fact; ``type: feedback`` notes are skipped — the
+    table of contents, not a fact; ``feedback_*.md`` files are skipped — the
     hook already injects them as rules).
   * Each fact is signed with the SAME Ed25519/HMAC pipeline every other fact
     uses (``bin/_sign.py``), so claim-guard and ``verify-facts.py`` still pass.
@@ -187,11 +187,12 @@ def collect_curated_facts(memory_dir: Path) -> list[dict[str, Any]]:
     for path in sorted(memory_dir.glob("*.md")):
         if path.name in SKIP_FILES:
             continue
-        fact = build_fact(path)
-        if fact["curated_type"] == "feedback" or path.name.startswith("feedback_"):
+        if path.name.startswith("feedback_"):
             # Already injected by the hook's RELEVANT FEEDBACK RULES half, which
-            # selects by feedback_*.md filename, so either key marks a served note.
+            # selects ONLY feedback_*.md filenames. Never key on `type: feedback`:
+            # typed notes without the prefix reach no other injection path.
             continue
+        fact = build_fact(path)
         fid = fact["id"]
         if fid in seen_ids:
             # Two curated files resolving to the same id (duplicate `name:`):
