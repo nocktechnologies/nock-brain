@@ -199,7 +199,7 @@ never overwritten by a re-extracted `current` copy.
 | `_store.py` | Filesystem permission discipline (0700/0600) | `secure_mkdir/write_text/write_json/copyfile`; `secure_write_json` **is** atomic (`secure_write_json_atomic`: mkstemp + chmod 0600 + os.replace); `secure_replace_text` / `secure_replace_bytes` (optional `before_replace` skip); `secure_write_text` stays non-atomic |
 | `_channel_frame.py` | Resident-channel envelope grammar shared by ingest and purge | `CHANNEL_FRAME_RE` (12-hex id-bound BEGIN/END frame; unanchored callers use `finditer`, ingest uses `fullmatch`) |
 | `_facts.py` | The v1 fact-record contract, defensive loading, bi-temporal validity, agent ownership | `REQUIRED_FACT_FIELDS`, `RECALL_ITEM_FIELDS`, `load_facts` (`on_unreadable` callback on I/O/parse failure), `fill_source_date` (v2 `source_time` → operational `source_date`), `fact_currently_valid` (v1 `valid_at`/`invalid_at` **and** v2 `valid_from`/`valid_to`), `fact_source` (default `"mira"`), `content_tokens`, `jaccard`, `malformed_fact_reason`, `load_jsonl_ids` / `TOMBSTONES_FILENAME` |
-| `_scrub.py` | Secret redaction + structural-noise discrimination, shared by EVERY extraction path | `scrub_secrets`, `is_structural_noise` (prefix rules + ONE substring exception: `JUDGE_PROMPT_MARKERS`, checked before the [TAG] escape — N10052), `SECRET_PATTERNS` |
+| `_scrub.py` | Secret redaction + structural-noise discrimination, shared by EVERY extraction path | `scrub_secrets`, `is_structural_noise` (order: `JUDGE_PROMPT_MARKERS` substring exception — N10052; then the exact structural prefixes, incl. `<channel ` and `[BEGIN UNTRUSTED`; then the [TAG] escape; then the dump patterns), `SECRET_PATTERNS` |
 | `_sign.py` (977 L) | Both attestation contracts, keys, canonicalization, the verification state machine | `sign_facts` (per-fact routing), `sign_fact`, `sign_claim_fact_v2` (also fills `source_date` from `source_time`), `is_v2_claim_fact`, `verify_fact` → `VALID/TAMPERED/UNSIGNED/PARENT_SUSPECT`, `verify_facts(..., verified_cache=None)` (caching is a property of verification; the offline auditor passes None), `load_or_create_key`, `resolve_key_paths` / `resolve_signing_key` / `resolve_verify_key` (shared env-aware resolver: CLI > `NOCKBRAIN_SIGNING_KEY`/`_PUB` > store_dir/`~/.nock-brain`), `SigningKey.cache_key_material()` (Ed25519 private bytes or `None` if pub-only), verifier receipts |
 | `_revoke.py` | Attested supersession (S1): signed append-only revocation events; resurrection detection | `sign_revocation`, `record_supersessions`, `audit`, `resurrected_ids` (recall's fail-open wrapper), `blocking_findings` (single source of truth for exit status), `resolve_signing_key` (re-export of `_sign.resolve_signing_key`) |
 | `_storeback.py` | Store-backend contract: `JsonStore` (default) / `SqliteStore` (`brain.db`, WAL); degradation logging | `resolve_store` (env `NOCKBRAIN_STORE`; `json` = kill switch; sqlite only if marker **and** db exist; **honors basename** — non-`facts.json`/`brain.db` paths stay `JsonStore` so insights/graph never key onto `brain.db`), `load_facts`, `replace_all`, `snapshot`, `export_facts_json` |
@@ -227,9 +227,11 @@ Per-module invariants worth memorizing:
   `source_time` so they pass `RECALL_ITEM_FIELDS`.
 - `_scrub`: matching is prefix/pattern only — with ONE substring exception,
   `JUDGE_PROMPT_MARKERS` (N10052), which outranks everything: a judge-template
-  sentence anywhere in the text is always noise, even `[TAG]`ged. Otherwise a
-  leading `[UPPER TAG]` is an escape hatch checked first, so genuine tagged
-  facts survive every noise rule. Bare-32-hex pattern is aggressive — it
+  sentence anywhere in the text is always noise, even `[TAG]`ged. The exact
+  structural prefixes come next and also outrank the tag escape (#113), so a
+  transport fence such as `[BEGIN UNTRUSTED` cannot pass as a tag. A leading
+  `[UPPER TAG]` then spares genuine tagged facts from the remaining dump
+  patterns (`===` headers, `cat -n` dumps) only. Bare-32-hex pattern is aggressive — it
   redacts git SHAs in legitimate content.
 - `_storeback`: a SQLite read must never create an empty `brain.db`
   (`exists()` checked first). Broken db **or** unreadable `facts.json` → `[]`
@@ -502,7 +504,11 @@ CI runs 3.11/3.12, but the hook runs on stock macOS `python3` = **3.9**.
 closure (`_dense_recall, _embed, _facts, _graph_recall, _projection, _revoke,
 _sign, _store, _storeback, _verify_cache, budget-recall, export-graph,
 recall-classifier`) and requires `from __future__ import annotations`
-everywhere. **Never add an import edge into the hook path without updating
+everywhere. A second, separately pinned closure covers the opt-in customer
+hook (`consumer-hook.py`): the fleet 13 plus `_channel_frame`, `_consumer_hooks`,
+`_consumer_import`, `_consumer_store`, `_scrub`, `consumer-hook`,
+`extract-facts` and `ingest-jsonl`. Ingest-side changes land in that closure
+and must stay 3.9-safe too; they must never enlarge the fleet list. **Never add an import edge into the hook path without updating
 that list and confirming 3.9 compatibility** — 3.10-only syntax has killed
 recall in production twice.
 
